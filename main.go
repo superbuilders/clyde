@@ -286,30 +286,50 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 			var err error
 			var displayMessage string
 
+			// Debug: log tool inputs
+			fmt.Fprintf(os.Stderr, "[DEBUG] Tool: %s, Inputs: %+v\n", toolBlock.Name, toolBlock.Input)
+
 			switch toolBlock.Name {
 			case "github_query":
-				command := toolBlock.Input["command"].(string)
-				displayMessage = "→ Running GitHub query..."
-				output, err = executeGitHubCommand(command)
+				command, ok := toolBlock.Input["command"].(string)
+				if !ok || command == "" {
+					err = fmt.Errorf("github_query requires non-empty 'command' parameter")
+				} else {
+					displayMessage = "→ Running GitHub query..."
+					output, err = executeGitHubCommand(command)
+				}
 
 			case "list_files":
 				path := ""
-				if pathVal, ok := toolBlock.Input["path"]; ok {
-					path = pathVal.(string)
+				if pathVal, ok := toolBlock.Input["path"]; ok && pathVal != nil {
+					path, _ = pathVal.(string)
 				}
 				displayMessage = "→ Listing files..."
 				output, err = executeListFiles(path)
 
 			case "read_file":
-				path := toolBlock.Input["path"].(string)
-				displayMessage = "→ Reading file..."
-				output, err = executeReadFile(path)
+				path, ok := toolBlock.Input["path"].(string)
+				if !ok || path == "" {
+					err = fmt.Errorf("read_file requires non-empty 'path' parameter")
+				} else {
+					displayMessage = "→ Reading file..."
+					output, err = executeReadFile(path)
+				}
 
 			case "edit_file":
-				path := toolBlock.Input["path"].(string)
-				content := toolBlock.Input["content"].(string)
-				displayMessage = "→ Editing file..."
-				output, err = executeEditFile(path, content)
+				path, pathOk := toolBlock.Input["path"].(string)
+				content, contentOk := toolBlock.Input["content"].(string)
+
+				if !pathOk || path == "" {
+					err = fmt.Errorf("edit_file requires non-empty 'path' parameter")
+				} else if !contentOk {
+					err = fmt.Errorf("edit_file requires 'content' parameter (content was: %+v)", toolBlock.Input["content"])
+				} else {
+					// Allow empty content only if explicitly provided as empty string
+					displayMessage = "→ Editing file..."
+					fmt.Fprintf(os.Stderr, "[DEBUG] Writing %d bytes to %s\n", len(content), path)
+					output, err = executeEditFile(path, content)
+				}
 
 			default:
 				err = fmt.Errorf("unknown tool: %s", toolBlock.Name)
