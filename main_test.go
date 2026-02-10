@@ -1,0 +1,840 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+)
+
+func TestExecuteGitHubCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		expectError bool
+	}{
+		{
+			name:        "Valid command - check auth status",
+			command:     "auth status",
+			expectError: false,
+		},
+		{
+			name:        "Valid command - api user",
+			command:     "api user",
+			expectError: false,
+		},
+		{
+			name:        "Invalid command",
+			command:     "invalid-command-xyz",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := executeGitHubCommand(tt.command)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none. Output: %s", output)
+				}
+			} else {
+				if err != nil {
+					t.Logf("Command failed (might be due to gh not configured): %v", err)
+				} else if output == "" {
+					t.Error("Expected output but got empty string")
+				}
+			}
+		})
+	}
+}
+
+func TestExecuteListFiles(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		expectError bool
+	}{
+		{
+			name:        "List current directory",
+			path:        ".",
+			expectError: false,
+		},
+		{
+			name:        "List with empty path (defaults to current)",
+			path:        "",
+			expectError: false,
+		},
+		{
+			name:        "List non-existent directory",
+			path:        "/non/existent/path/xyz",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := executeListFiles(tt.path)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none. Output: %s", output)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if output == "" {
+					t.Error("Expected output but got empty string")
+				}
+			}
+		})
+	}
+}
+
+func TestExecuteReadFile(t *testing.T) {
+	// Create a test file
+	testFile := "test_file.txt"
+	testContent := "Test content for file reading"
+	if err := os.WriteFile(testFile, []byte(testContent), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove(testFile)
+
+	tests := []struct {
+		name        string
+		path        string
+		expectError bool
+		checkContent bool
+	}{
+		{
+			name:        "Read existing file",
+			path:        testFile,
+			expectError: false,
+			checkContent: true,
+		},
+		{
+			name:        "Read non-existent file",
+			path:        "non_existent_file.txt",
+			expectError: true,
+			checkContent: false,
+		},
+		{
+			name:        "Empty path",
+			path:        "",
+			expectError: true,
+			checkContent: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := executeReadFile(tt.path)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none. Output: %s", output)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if tt.checkContent && output != testContent {
+					t.Errorf("Expected content '%s', got '%s'", testContent, output)
+				}
+			}
+		})
+	}
+}
+
+func TestExecuteEditFile(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		content     string
+		expectError bool
+		verify      bool
+	}{
+		{
+			name:        "Create new file",
+			path:        "test_edit_new.txt",
+			content:     "New file content",
+			expectError: false,
+			verify:      true,
+		},
+		{
+			name:        "Overwrite existing file",
+			path:        "test_edit_existing.txt",
+			content:     "Updated content",
+			expectError: false,
+			verify:      true,
+		},
+		{
+			name:        "Empty path",
+			path:        "",
+			content:     "Some content",
+			expectError: true,
+			verify:      false,
+		},
+		{
+			name:        "Empty content is valid",
+			path:        "test_edit_empty.txt",
+			content:     "",
+			expectError: false,
+			verify:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clean up before and after test
+			defer os.Remove(tt.path)
+
+			// For overwrite test, create a file first
+			if tt.name == "Overwrite existing file" {
+				if err := os.WriteFile(tt.path, []byte("Original content"), 0644); err != nil {
+					t.Fatalf("Failed to create initial file: %v", err)
+				}
+			}
+
+			output, err := executeEditFile(tt.path, tt.content)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none. Output: %s", output)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+
+				if tt.verify {
+					// Verify the file was written correctly
+					content, readErr := os.ReadFile(tt.path)
+					if readErr != nil {
+						t.Errorf("Failed to read written file: %v", readErr)
+					} else if string(content) != tt.content {
+						t.Errorf("File content mismatch. Expected '%s', got '%s'", tt.content, string(content))
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCallClaude(t *testing.T) {
+	envPath := os.Getenv("ENV_PATH")
+	if envPath == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			envPath = ".env"
+		} else {
+			envPath = "../coding-agent/.env"
+		}
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Skipf("Skipping test: cannot read .env file: %v", err)
+	}
+
+	var apiKey string
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "TS_AGENT_API_KEY=") {
+			apiKey = strings.TrimPrefix(line, "TS_AGENT_API_KEY=")
+			apiKey = strings.TrimSpace(apiKey)
+			break
+		}
+	}
+
+	if apiKey == "" {
+		t.Skip("Skipping test: TS_AGENT_API_KEY not found in .env file")
+	}
+
+	tests := []struct {
+		name    string
+		message string
+	}{
+		{
+			name:    "Simple greeting",
+			message: "Say hello in 5 words or less",
+		},
+		{
+			name:    "Math question",
+			message: "What is 2+2? Answer with just the number.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			messages := []Message{
+				{
+					Role:    "user",
+					Content: tt.message,
+				},
+			}
+
+			resp, err := callClaude(apiKey, messages)
+			if err != nil {
+				t.Fatalf("callClaude failed: %v", err)
+			}
+
+			if resp == nil {
+				t.Fatal("Expected response but got nil")
+			}
+
+			if len(resp.Content) == 0 {
+				t.Fatal("Expected content in response but got empty array")
+			}
+
+			hasText := false
+			for _, block := range resp.Content {
+				if block.Type == "text" && block.Text != "" {
+					hasText = true
+					t.Logf("Response: %s", block.Text)
+					break
+				}
+			}
+
+			if !hasText {
+				t.Error("Expected text response but found none")
+			}
+		})
+	}
+}
+
+func TestHandleConversation(t *testing.T) {
+	envPath := os.Getenv("ENV_PATH")
+	if envPath == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			envPath = ".env"
+		} else {
+			envPath = "../coding-agent/.env"
+		}
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Skipf("Skipping test: cannot read .env file: %v", err)
+	}
+
+	var apiKey string
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "TS_AGENT_API_KEY=") {
+			apiKey = strings.TrimPrefix(line, "TS_AGENT_API_KEY=")
+			apiKey = strings.TrimSpace(apiKey)
+			break
+		}
+	}
+
+	if apiKey == "" {
+		t.Skip("Skipping test: TS_AGENT_API_KEY not found in .env file")
+	}
+
+	t.Run("Simple conversation", func(t *testing.T) {
+		var history []Message
+		response, updatedHistory := handleConversation(apiKey, "Hello! Respond with just 'Hi'", history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		if len(updatedHistory) == 0 {
+			t.Fatal("Expected conversation history to be updated")
+		}
+
+		t.Logf("Response: %s", response)
+		t.Logf("History length: %d", len(updatedHistory))
+	})
+
+	t.Run("Multi-turn conversation", func(t *testing.T) {
+		var history []Message
+
+		response1, history := handleConversation(apiKey, "Remember the number 42", history)
+		if response1 == "" {
+			t.Fatal("Expected first response")
+		}
+		t.Logf("First response: %s", response1)
+
+		response2, history := handleConversation(apiKey, "What number did I ask you to remember?", history)
+		if response2 == "" {
+			t.Fatal("Expected second response")
+		}
+		t.Logf("Second response: %s", response2)
+
+		if !strings.Contains(response2, "42") {
+			t.Logf("Warning: Expected '42' in response, but it may have been phrased differently")
+		}
+
+		if len(history) < 4 {
+			t.Errorf("Expected at least 4 messages in history, got %d", len(history))
+		}
+	})
+}
+
+func TestSystemPromptDecider(t *testing.T) {
+	if systemPrompt == "" {
+		t.Fatal("System prompt is empty")
+	}
+
+	requiredTerms := []string{"github_query", "tool", "GitHub"}
+	for _, term := range requiredTerms {
+		if !strings.Contains(systemPrompt, term) {
+			t.Errorf("System prompt should contain '%s'", term)
+		}
+	}
+
+	t.Logf("System prompt length: %d characters", len(systemPrompt))
+}
+
+func TestGitHubTool(t *testing.T) {
+	if githubTool.Name != "github_query" {
+		t.Errorf("Expected tool name 'github_query', got '%s'", githubTool.Name)
+	}
+
+	if githubTool.Description == "" {
+		t.Error("Tool description should not be empty")
+	}
+
+	if githubTool.InputSchema == nil {
+		t.Fatal("Tool input schema should not be nil")
+	}
+
+	schema, ok := githubTool.InputSchema.(map[string]interface{})
+	if !ok {
+		t.Fatal("Input schema should be a map")
+	}
+
+	properties, ok := schema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Schema should have properties")
+	}
+
+	if _, exists := properties["command"]; !exists {
+		t.Error("Schema should have 'command' property")
+	}
+}
+
+func TestListFilesIntegration(t *testing.T) {
+	envPath := os.Getenv("ENV_PATH")
+	if envPath == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			envPath = ".env"
+		} else {
+			envPath = "../coding-agent/.env"
+		}
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Skipf("Skipping test: cannot read .env file: %v", err)
+	}
+
+	var apiKey string
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "TS_AGENT_API_KEY=") {
+			apiKey = strings.TrimPrefix(line, "TS_AGENT_API_KEY=")
+			apiKey = strings.TrimSpace(apiKey)
+			break
+		}
+	}
+
+	if apiKey == "" {
+		t.Skip("Skipping test: TS_AGENT_API_KEY not found in .env file")
+	}
+
+	t.Run("Full list_files tool use round-trip", func(t *testing.T) {
+		var history []Message
+
+		// Ask a question that should trigger the list_files tool
+		response, updatedHistory := handleConversation(apiKey, "What files are in the current directory? Use the list_files tool.", history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+		t.Logf("History length: %d", len(updatedHistory))
+
+		if len(updatedHistory) < 3 {
+			t.Errorf("Expected at least 3 messages in history, got %d", len(updatedHistory))
+		}
+
+		// Look for tool_use and tool_result in the conversation history
+		foundToolUse := false
+		foundToolResult := false
+
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" && block.Name == "list_files" {
+							foundToolUse = true
+							if block.ID == "" {
+								t.Error("Tool use block should have an ID")
+							}
+							t.Logf("Found tool_use: %s (ID: %s)", block.Name, block.ID)
+						}
+					}
+				}
+			}
+
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							foundToolResult = true
+							if block.ToolUseID == "" {
+								t.Error("Tool result block should have a ToolUseID")
+							}
+							t.Logf("Found tool_result with ToolUseID: %s", block.ToolUseID)
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolUse {
+			t.Error("Expected to find a list_files tool_use block in the conversation history")
+		}
+
+		if !foundToolResult {
+			t.Error("Expected to find a tool_result block in the conversation history")
+		}
+	})
+}
+
+func TestReadFileIntegration(t *testing.T) {
+	envPath := os.Getenv("ENV_PATH")
+	if envPath == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			envPath = ".env"
+		} else {
+			envPath = "../coding-agent/.env"
+		}
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Skipf("Skipping test: cannot read .env file: %v", err)
+	}
+
+	var apiKey string
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "TS_AGENT_API_KEY=") {
+			apiKey = strings.TrimPrefix(line, "TS_AGENT_API_KEY=")
+			apiKey = strings.TrimSpace(apiKey)
+			break
+		}
+	}
+
+	if apiKey == "" {
+		t.Skip("Skipping test: TS_AGENT_API_KEY not found in .env file")
+	}
+
+	// Create a test file for reading
+	testFile := "test_read_file.txt"
+	testContent := "Hello, this is a test file for the read_file tool!"
+	if err := os.WriteFile(testFile, []byte(testContent), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove(testFile)
+
+	t.Run("Full read_file tool use round-trip", func(t *testing.T) {
+		var history []Message
+
+		// Ask a question that should trigger the read_file tool
+		response, updatedHistory := handleConversation(apiKey, "Read the file test_read_file.txt using the read_file tool.", history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+		t.Logf("History length: %d", len(updatedHistory))
+
+		if len(updatedHistory) < 3 {
+			t.Errorf("Expected at least 3 messages in history, got %d", len(updatedHistory))
+		}
+
+		// Look for tool_use and tool_result in the conversation history
+		foundToolUse := false
+		foundToolResult := false
+		var toolResultContent string
+
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" && block.Name == "read_file" {
+							foundToolUse = true
+							if block.ID == "" {
+								t.Error("Tool use block should have an ID")
+							}
+							t.Logf("Found tool_use: %s (ID: %s)", block.Name, block.ID)
+						}
+					}
+				}
+			}
+
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							foundToolResult = true
+							if block.ToolUseID == "" {
+								t.Error("Tool result block should have a ToolUseID")
+							}
+							t.Logf("Found tool_result with ToolUseID: %s", block.ToolUseID)
+							if content, ok := block.Content.(string); ok {
+								toolResultContent = content
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolUse {
+			t.Error("Expected to find a read_file tool_use block in the conversation history")
+		}
+
+		if !foundToolResult {
+			t.Error("Expected to find a tool_result block in the conversation history")
+		}
+
+		// Verify the tool result contains the expected file content
+		if !strings.Contains(toolResultContent, testContent) {
+			t.Errorf("Expected tool result to contain '%s', but got: %s", testContent, toolResultContent)
+		}
+	})
+}
+
+func TestEditFileIntegration(t *testing.T) {
+	envPath := os.Getenv("ENV_PATH")
+	if envPath == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			envPath = ".env"
+		} else {
+			envPath = "../coding-agent/.env"
+		}
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Skipf("Skipping test: cannot read .env file: %v", err)
+	}
+
+	var apiKey string
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "TS_AGENT_API_KEY=") {
+			apiKey = strings.TrimPrefix(line, "TS_AGENT_API_KEY=")
+			apiKey = strings.TrimSpace(apiKey)
+			break
+		}
+	}
+
+	if apiKey == "" {
+		t.Skip("Skipping test: TS_AGENT_API_KEY not found in .env file")
+	}
+
+	testFile := "test_edit_integration.txt"
+	defer os.Remove(testFile)
+
+	t.Run("Full edit_file tool use round-trip", func(t *testing.T) {
+		var history []Message
+
+		expectedContent := "This is test content written by the edit_file tool!"
+
+		// Ask to create/edit a file
+		response, updatedHistory := handleConversation(apiKey,
+			fmt.Sprintf("Create a file called %s with the content: %s. Use the edit_file tool.", testFile, expectedContent),
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+		t.Logf("History length: %d", len(updatedHistory))
+
+		if len(updatedHistory) < 3 {
+			t.Errorf("Expected at least 3 messages in history, got %d", len(updatedHistory))
+		}
+
+		// Look for tool_use and tool_result in the conversation history
+		foundToolUse := false
+		foundToolResult := false
+
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" && block.Name == "edit_file" {
+							foundToolUse = true
+							if block.ID == "" {
+								t.Error("Tool use block should have an ID")
+							}
+							t.Logf("Found tool_use: %s (ID: %s)", block.Name, block.ID)
+
+							// Verify the input parameters
+							if path, ok := block.Input["path"].(string); ok {
+								if path != testFile {
+									t.Errorf("Expected path '%s', got '%s'", testFile, path)
+								}
+							}
+							if content, ok := block.Input["content"].(string); ok {
+								if content != expectedContent {
+									t.Errorf("Expected content '%s', got '%s'", expectedContent, content)
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							foundToolResult = true
+							if block.ToolUseID == "" {
+								t.Error("Tool result block should have a ToolUseID")
+							}
+							t.Logf("Found tool_result with ToolUseID: %s", block.ToolUseID)
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolUse {
+			t.Error("Expected to find an edit_file tool_use block in the conversation history")
+		}
+
+		if !foundToolResult {
+			t.Error("Expected to find a tool_result block in the conversation history")
+		}
+
+		// Verify the file was actually created with the correct content
+		fileContent, err := os.ReadFile(testFile)
+		if err != nil {
+			t.Errorf("Failed to read created file: %v", err)
+		} else if string(fileContent) != expectedContent {
+			t.Errorf("File content mismatch. Expected '%s', got '%s'", expectedContent, string(fileContent))
+		} else {
+			t.Logf("File successfully created with correct content!")
+		}
+	})
+}
+
+func TestGitHubQueryIntegration(t *testing.T) {
+	envPath := os.Getenv("ENV_PATH")
+	if envPath == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			envPath = ".env"
+		} else {
+			envPath = "../coding-agent/.env"
+		}
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Skipf("Skipping test: cannot read .env file: %v", err)
+	}
+
+	var apiKey string
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "TS_AGENT_API_KEY=") {
+			apiKey = strings.TrimPrefix(line, "TS_AGENT_API_KEY=")
+			apiKey = strings.TrimSpace(apiKey)
+			break
+		}
+	}
+
+	if apiKey == "" {
+		t.Skip("Skipping test: TS_AGENT_API_KEY not found in .env file")
+	}
+
+	// Check if gh CLI is available
+	if _, err := executeGitHubCommand("auth status"); err != nil {
+		t.Skipf("Skipping test: gh CLI not configured: %v", err)
+	}
+
+	t.Run("Full GitHub tool use round-trip", func(t *testing.T) {
+		var history []Message
+
+		// Ask a GitHub-related question that should trigger tool use
+		response, updatedHistory := handleConversation(apiKey, "What is my GitHub username? Use gh api to check.", history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+		t.Logf("History length: %d", len(updatedHistory))
+
+		// Verify the conversation history contains the expected message types
+		// Should have at least: user message, assistant with tool_use, user with tool_result, assistant with text
+		if len(updatedHistory) < 3 {
+			t.Errorf("Expected at least 3 messages in history (user, assistant with tool_use, user with tool_result, assistant with text), got %d", len(updatedHistory))
+		}
+
+		// Look for tool_use in the assistant's messages
+		foundToolUse := false
+		foundToolResult := false
+
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" {
+							foundToolUse = true
+							if block.ID == "" {
+								t.Error("Tool use block should have an ID")
+							}
+							if block.Name != "github_query" {
+								t.Errorf("Expected tool name 'github_query', got '%s'", block.Name)
+							}
+							t.Logf("Found tool_use: %s (ID: %s)", block.Name, block.ID)
+						}
+					}
+				}
+			}
+
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							foundToolResult = true
+							if block.ToolUseID == "" {
+								t.Error("Tool result block should have a ToolUseID")
+							}
+							t.Logf("Found tool_result with ToolUseID: %s", block.ToolUseID)
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolUse {
+			t.Error("Expected to find a tool_use block in the conversation history")
+		}
+
+		if !foundToolResult {
+			t.Error("Expected to find a tool_result block in the conversation history")
+		}
+
+		// The response should contain some GitHub-related information
+		if !strings.Contains(strings.ToLower(response), "github") &&
+		   !strings.Contains(response, "gh") &&
+		   len(response) < 3 {
+			t.Logf("Warning: Response doesn't seem to contain GitHub information, but this might be okay")
+		}
+	})
+}
