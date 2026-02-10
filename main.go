@@ -248,7 +248,31 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
+	// Debug: Log raw content blocks to see what API is sending
+	for i, block := range apiResp.Content {
+		if block.Type == "tool_use" {
+			fmt.Fprintf(os.Stderr, "[DEBUG] API Response block %d: type=%s, name=%s, input keys=%v\n",
+				i, block.Type, block.Name, getMapKeys(block.Input))
+			// Log a sample of content if it exists
+			if content, ok := block.Input["content"]; ok {
+				contentStr := fmt.Sprintf("%v", content)
+				if len(contentStr) > 100 {
+					contentStr = contentStr[:100] + "..."
+				}
+				fmt.Fprintf(os.Stderr, "[DEBUG]   content sample: %s\n", contentStr)
+			}
+		}
+	}
+
 	return &apiResp, nil
+}
+
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func handleConversation(apiKey string, userInput string, conversationHistory []Message) (string, []Message) {
