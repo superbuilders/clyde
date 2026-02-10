@@ -43,11 +43,17 @@ File reading questions - Use read_file for:
 
 File editing questions - Use edit_file for:
 - "Create a file with X content"
-- "Edit X file to say Y"
-- "Update X file"
 - "Write to X file"
 
-For file edits, read the file first if modifying existing content, then edit with the updated content.
+CRITICAL: edit_file REQUIRES the 'content' parameter with the COMPLETE file content.
+The tool replaces the entire file. To modify existing files:
+1. First use read_file to get the current content
+2. Modify the content in your response
+3. Use edit_file with the COMPLETE modified content (never omit the content parameter!)
+
+WARNING: edit_file is not suitable for complex code modifications. For adding features
+to source files, it's better to explain the changes to the user rather than attempting
+to edit large code files.
 
 Always use the appropriate tool first, then provide a natural response based on the results.`
 )
@@ -139,17 +145,17 @@ var readFileTool = Tool{
 
 var editFileTool = Tool{
 	Name:        "edit_file",
-	Description: "Edit a file by writing new content to it. This will overwrite the entire file with the provided content.",
+	Description: "Write complete file content to a path. IMPORTANT: This completely replaces the file - you MUST provide the ENTIRE new file content, not just changes. To modify an existing file: (1) use read_file to get current content, (2) modify it, (3) provide the COMPLETE modified content to this tool.",
 	InputSchema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"path": map[string]interface{}{
 				"type":        "string",
-				"description": "The file path to edit. Can be absolute or relative to the current directory.",
+				"description": "The file path to write to. Can be absolute or relative to the current directory.",
 			},
 			"content": map[string]interface{}{
 				"type":        "string",
-				"description": "The new content to write to the file. This will replace the entire file contents.",
+				"description": "REQUIRED: The complete new file content. This MUST contain the ENTIRE file content as this tool replaces the whole file. Never omit this parameter.",
 			},
 		},
 		"required": []string{"path", "content"},
