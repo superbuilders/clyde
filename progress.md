@@ -868,6 +868,12 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-02-10)
 
+**Recent Fix (2026-02-10)**: Fixed .env loading to use `godotenv` library
+- Issue: Main application only manually loaded TS_AGENT_API_KEY, not BRAVE_SEARCH_API_KEY
+- Solution: Added godotenv dependency to properly load all environment variables
+- Impact: web_search and browse tools now work correctly in REPL
+- Tests: All 25 tests still passing
+
 **Active Tools**: 10 ✨
 1. `list_files` - Directory listings with helpful error messages
 2. `read_file` - Read file contents with size warnings and validation

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	md "github.com/JohannesKaufmann/html-to-markdown"
+	"github.com/joho/godotenv"
 )
 
 const (
@@ -1581,6 +1582,7 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 
 
 func main() {
+	// Determine which .env file to load
 	envPath := os.Getenv("ENV_PATH")
 	if envPath == "" {
 		if _, err := os.Stat(".env"); err == nil {
@@ -1590,28 +1592,22 @@ func main() {
 		}
 	}
 
-	data, err := os.ReadFile(envPath)
+	// Load all environment variables from .env file
+	err := godotenv.Load(envPath)
 	if err != nil {
-		fmt.Printf("Error reading .env file from '%s': %v\n\n", envPath, err)
+		fmt.Printf("Error loading .env file from '%s': %v\n\n", envPath, err)
 		fmt.Println("To fix this:")
 		fmt.Println("  1. Create a .env file in the current directory, OR")
 		fmt.Println("  2. Set ENV_PATH environment variable to your .env file location")
 		fmt.Println("  3. Example: export ENV_PATH=/path/to/.env")
 		fmt.Println("\nThe .env file should contain:")
 		fmt.Println("  TS_AGENT_API_KEY=your-anthropic-api-key-here")
+		fmt.Println("  BRAVE_SEARCH_API_KEY=your-brave-api-key-here  # Optional: for web_search")
 		os.Exit(1)
 	}
 
-	var apiKey string
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "TS_AGENT_API_KEY=") {
-			apiKey = strings.TrimPrefix(line, "TS_AGENT_API_KEY=")
-			apiKey = strings.TrimSpace(apiKey)
-			break
-		}
-	}
-
+	// Verify required API key is present
+	apiKey := os.Getenv("TS_AGENT_API_KEY")
 	if apiKey == "" {
 		fmt.Printf("Error: TS_AGENT_API_KEY not found in '%s'\n\n", envPath)
 		fmt.Println("Please add this line to your .env file:")
