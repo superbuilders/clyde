@@ -39,9 +39,13 @@ You: Read the README.md file
 → Reading file...
 Claude: [Displays file contents]
 
-You: Create a file called notes.txt with "Meeting at 3pm"
-→ Editing file...
-Claude: [Confirms file creation]
+You: Change "Hello" to "Hi" in the file main.go
+→ Patching file...
+Claude: [Confirms successful patch]
+
+You: Run ls -la to see all files
+→ Running bash command...
+Claude: [Shows directory listing]
 
 You: exit
 Goodbye!
@@ -70,12 +74,13 @@ go test -v
 
 ## Available Tools
 
-The REPL includes four integrated tools:
+The REPL includes five integrated tools:
 
 1. **github_query**: Execute GitHub CLI commands (requires `gh` CLI)
 2. **list_files**: List files and directories in any path
 3. **read_file**: Read and display file contents
-4. **edit_file**: Create or modify files with new content
+4. **patch_file**: Edit files using find/replace (patch-based approach)
+5. **run_bash**: Execute arbitrary bash commands
 
 ## Documentation
 

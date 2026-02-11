@@ -11,17 +11,19 @@ A complete Go application that includes:
 #### Core Features
 1. **REPL Interface**: Interactive command-line interface for natural conversation with Claude
 2. **Anthropic API Integration**: Direct HTTP client for Claude API (Sonnet 4.5 model)
-3. **Multi-Tool Support**: Four integrated tools with proper feedback:
+3. **Multi-Tool Support**: Five integrated tools with proper feedback:
    - **GitHub Tool**: Executes `gh` CLI commands for GitHub queries
    - **List Files Tool**: Lists files and directories using `ls -la`
    - **Read File Tool**: Reads and displays file contents
-   - **Edit File Tool**: Creates or overwrites files with new content
+   - **Patch File Tool**: Edits files using find/replace (no size limits!)
+   - **Run Bash Tool**: Executes arbitrary bash commands
 4. **Conversation History**: Maintains context across multiple turns
 5. **Tool Use Feedback**: Shows progress messages when using tools:
    - "→ Running GitHub query..."
    - "→ Listing files..."
    - "→ Reading file..."
-   - "→ Editing file..."
+   - "→ Patching file..."
+   - "→ Running bash command..."
 
 #### Architecture Components
 - **Message Types**: User and assistant messages with support for text and tool content
@@ -436,8 +438,26 @@ default:
 
 This approach makes it easy to add more tools in the future while maintaining consistent error handling and feedback messages.
 
-**Note on Edit File Tool**:
-The `edit_file` tool uses a simple overwrite approach - it replaces the entire file with new content. The system prompt instructs Claude to read the file first if modifying existing content, then write the updated version. This provides a balance between simplicity and safety.
+### Major Tool Improvements (2026-02-10)
+
+**Replaced edit_file with patch_file**:
+The original `edit_file` tool used full-file replacement, which hit Claude API size limits (~14KB+) causing:
+- API timeouts
+- Missing content parameters
+- Files being erased
+
+The new `patch_file` tool uses find/replace:
+- Only sends the specific text to change (no size limits)
+- Validates old_text is unique in the file
+- More intuitive for code editing
+- Similar to professional editor find/replace
+
+**Added run_bash tool**:
+Enables Claude to execute arbitrary bash commands:
+- Run system commands
+- Execute scripts
+- Check system information
+- Any shell/command-line operations
 
 ## Future Enhancements (Not Implemented)
 - Streaming responses for faster feedback
