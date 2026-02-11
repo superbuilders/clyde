@@ -7,47 +7,7 @@ import (
 	"testing"
 )
 
-func TestExecuteGitHubCommand(t *testing.T) {
-	tests := []struct {
-		name        string
-		command     string
-		expectError bool
-	}{
-		{
-			name:        "Valid command - check auth status",
-			command:     "auth status",
-			expectError: false,
-		},
-		{
-			name:        "Valid command - api user",
-			command:     "api user",
-			expectError: false,
-		},
-		{
-			name:        "Invalid command",
-			command:     "invalid-command-xyz",
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			output, err := executeGitHubCommand(tt.command)
-
-			if tt.expectError {
-				if err == nil {
-					t.Errorf("Expected error but got none. Output: %s", output)
-				}
-			} else {
-				if err != nil {
-					t.Logf("Command failed (might be due to gh not configured): %v", err)
-				} else if output == "" {
-					t.Error("Expected output but got empty string")
-				}
-			}
-		})
-	}
-}
+// TestExecuteGitHubCommand removed - github_query tool deprecated in favor of run_bash
 
 func TestExecuteListFiles(t *testing.T) {
 	tests := []struct {
@@ -561,43 +521,23 @@ func TestSystemPromptDecider(t *testing.T) {
 		t.Fatal("System prompt is empty")
 	}
 
-	requiredTerms := []string{"github_query", "tool", "GitHub"}
+	// Check for run_bash with gh CLI instead of deprecated github_query
+	requiredTerms := []string{"run_bash", "tool", "gh repo list", "gh pr list"}
 	for _, term := range requiredTerms {
 		if !strings.Contains(systemPrompt, term) {
 			t.Errorf("System prompt should contain '%s'", term)
 		}
 	}
 
+	// Make sure old github_query tool is NOT present
+	if strings.Contains(systemPrompt, "github_query") {
+		t.Error("System prompt should NOT contain 'github_query' (deprecated tool)")
+	}
+
 	t.Logf("System prompt length: %d characters", len(systemPrompt))
 }
 
-func TestGitHubTool(t *testing.T) {
-	if githubTool.Name != "github_query" {
-		t.Errorf("Expected tool name 'github_query', got '%s'", githubTool.Name)
-	}
-
-	if githubTool.Description == "" {
-		t.Error("Tool description should not be empty")
-	}
-
-	if githubTool.InputSchema == nil {
-		t.Fatal("Tool input schema should not be nil")
-	}
-
-	schema, ok := githubTool.InputSchema.(map[string]interface{})
-	if !ok {
-		t.Fatal("Input schema should be a map")
-	}
-
-	properties, ok := schema["properties"].(map[string]interface{})
-	if !ok {
-		t.Fatal("Schema should have properties")
-	}
-
-	if _, exists := properties["command"]; !exists {
-		t.Error("Schema should have 'command' property")
-	}
-}
+// TestGitHubTool removed - github_query tool deprecated in favor of run_bash
 
 func TestListFilesIntegration(t *testing.T) {
 	envPath := os.Getenv("ENV_PATH")
@@ -1102,16 +1042,16 @@ func TestGitHubQueryIntegration(t *testing.T) {
 		t.Skip("Skipping test: TS_AGENT_API_KEY not found in .env file")
 	}
 
-	// Check if gh CLI is available
-	if _, err := executeGitHubCommand("auth status"); err != nil {
+	// Check if gh CLI is available using run_bash
+	if _, err := executeRunBash("gh auth status"); err != nil {
 		t.Skipf("Skipping test: gh CLI not configured: %v", err)
 	}
 
-	t.Run("Full GitHub tool use round-trip", func(t *testing.T) {
+	t.Run("Full GitHub tool use round-trip with run_bash", func(t *testing.T) {
 		var history []Message
 
-		// Ask a GitHub-related question that should trigger tool use
-		response, updatedHistory := handleConversation(apiKey, "What is my GitHub username? Use gh api to check.", history)
+		// Ask a GitHub-related question that should trigger run_bash with gh command
+		response, updatedHistory := handleConversation(apiKey, "What is my GitHub username? Use the bash tool to run 'gh api user'.", history)
 
 		if response == "" {
 			t.Fatal("Expected response but got empty string")
@@ -1126,7 +1066,7 @@ func TestGitHubQueryIntegration(t *testing.T) {
 			t.Errorf("Expected at least 3 messages in history (user, assistant with tool_use, user with tool_result, assistant with text), got %d", len(updatedHistory))
 		}
 
-		// Look for tool_use in the assistant's messages
+		// Look for run_bash tool_use in the assistant's messages
 		foundToolUse := false
 		foundToolResult := false
 
@@ -1139,10 +1079,18 @@ func TestGitHubQueryIntegration(t *testing.T) {
 							if block.ID == "" {
 								t.Error("Tool use block should have an ID")
 							}
-							if block.Name != "github_query" {
-								t.Errorf("Expected tool name 'github_query', got '%s'", block.Name)
+							if block.Name != "run_bash" {
+								t.Errorf("Expected tool name 'run_bash', got '%s'", block.Name)
 							}
 							t.Logf("Found tool_use: %s (ID: %s)", block.Name, block.ID)
+							
+							// Verify the command contains gh
+							if command, ok := block.Input["command"].(string); ok {
+								if !strings.Contains(command, "gh") {
+									t.Errorf("Expected command to contain 'gh', got: %s", command)
+								}
+								t.Logf("Command: %s", command)
+							}
 						}
 					}
 				}
@@ -1164,7 +1112,7 @@ func TestGitHubQueryIntegration(t *testing.T) {
 		}
 
 		if !foundToolUse {
-			t.Error("Expected to find a tool_use block in the conversation history")
+			t.Error("Expected to find a run_bash tool_use block in the conversation history")
 		}
 
 		if !foundToolResult {

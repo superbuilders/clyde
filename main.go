@@ -18,20 +18,20 @@ const (
 	maxTokens   = 4096
 	systemPrompt = `You are a helpful AI assistant with access to several tools:
 
-1. github_query: For GitHub-related questions (repos, PRs, issues, user profile, etc.)
-2. list_files: For listing files and directories in a given path
-3. read_file: For reading the contents of a file
-4. patch_file: For editing files using find/replace (patch-based approach)
-5. run_bash: For executing arbitrary bash commands
-6. write_file: For creating new files or completely replacing file contents
+1. list_files: For listing files and directories in a given path
+2. read_file: For reading the contents of a file
+3. patch_file: For editing files using find/replace (patch-based approach)
+4. write_file: For creating new files or completely replacing file contents
+5. run_bash: For executing arbitrary bash commands (including gh, git, etc.)
 
 IMPORTANT DECIDER: Before responding, determine if you need to use a tool:
 
-GitHub questions - Use github_query for:
-- Questions about repositories, PRs, issues, workflows
-- Questions about user profile, organizations
-- Any "show me", "list", "what are" questions related to GitHub
-- Status checks, recent activity, etc.
+GitHub questions - Use run_bash with gh commands:
+- Questions about repositories: run_bash("gh repo list")
+- Questions about pull requests: run_bash("gh pr list")
+- Questions about issues: run_bash("gh issue list")
+- User profile info: run_bash("gh api user")
+- Any GitHub queries: run_bash("gh <command>")
 
 File system questions - Use list_files for:
 - "What files are in X directory?"
@@ -60,6 +60,9 @@ Bash execution - Use run_bash for:
 - "Execute Y script"
 - "Check system information"
 - Any shell/command-line operations
+- Git operations: run_bash("git status"), run_bash("git commit -m 'message'")
+- GitHub CLI: run_bash("gh repo list"), run_bash("gh pr list")
+- Package managers, build tools, test runners, etc.
 
 CRITICAL: For patch_file, you MUST:
 1. First use read_file to see current content
@@ -108,21 +111,6 @@ type Response struct {
 	Model      string         `json:"model"`
 	StopReason string         `json:"stop_reason"`
 	Usage      interface{}    `json:"usage,omitempty"`
-}
-
-var githubTool = Tool{
-	Name:        "github_query",
-	Description: "Execute GitHub CLI (gh) commands to query GitHub information. This tool runs 'gh' bash commands to get information about repositories, pull requests, issues, user profile, and more. The command should be a valid 'gh' command without the 'gh' prefix.",
-	InputSchema: map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"command": map[string]interface{}{
-				"type":        "string",
-				"description": "The gh command to execute (without 'gh' prefix). Examples: 'repo list', 'pr list', 'issue list', 'api user'",
-			},
-		},
-		"required": []string{"command"},
-	},
 }
 
 var listFilesTool = Tool{
@@ -210,15 +198,6 @@ var writeFileTool = Tool{
 		},
 		"required": []string{"path", "content"},
 	},
-}
-
-func executeGitHubCommand(command string) (string, error) {
-	cmd := exec.Command("gh", strings.Fields(command)...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("command failed: %s\nOutput: %s", err, string(output))
-	}
-	return string(output), nil
 }
 
 func executeListFiles(path string) (string, error) {
@@ -324,7 +303,7 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 		MaxTokens: maxTokens,
 		System:    systemPrompt,
 		Messages:  messages,
-		Tools:     []Tool{githubTool, listFilesTool, readFileTool, patchFileTool, runBashTool, writeFileTool},
+		Tools:     []Tool{listFilesTool, readFileTool, patchFileTool, writeFileTool, runBashTool},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -407,15 +386,6 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 			var displayMessage string
 
 			switch toolBlock.Name {
-			case "github_query":
-				command, ok := toolBlock.Input["command"].(string)
-				if !ok || command == "" {
-					err = fmt.Errorf("github_query requires non-empty 'command' parameter")
-				} else {
-					displayMessage = "→ Running GitHub query..."
-					output, err = executeGitHubCommand(command)
-				}
-
 			case "list_files":
 				path := ""
 				if pathVal, ok := toolBlock.Input["path"]; ok && pathVal != nil {

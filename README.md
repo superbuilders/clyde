@@ -16,8 +16,8 @@ go build -o claude-repl
 ## Features
 
 - 💬 **Interactive REPL**: Natural conversation with Claude
-- 🔧 **GitHub Integration**: Ask questions about your GitHub account
-- 📁 **File System Tools**: List directories and read files
+- 🔧 **GitHub Integration**: Ask questions about your GitHub account via `gh` CLI
+- 📁 **File System Tools**: List directories and read/write files
 - 🔄 **Conversation Memory**: Maintains context across turns
 - ⚡ **Fast & Lightweight**: Single binary, minimal dependencies
 
@@ -78,14 +78,13 @@ go test -v
 
 ## Available Tools
 
-The REPL includes six integrated tools:
+The REPL includes five integrated tools:
 
-1. **github_query**: Execute GitHub CLI commands (requires `gh` CLI)
-2. **list_files**: List files and directories in any path
-3. **read_file**: Read and display file contents
-4. **patch_file**: Edit files using find/replace (patch-based approach)
-5. **write_file**: Create new files or completely replace file contents
-6. **run_bash**: Execute arbitrary bash commands
+1. **list_files**: List files and directories in any path
+2. **read_file**: Read and display file contents
+3. **patch_file**: Edit files using find/replace (patch-based approach)
+4. **write_file**: Create new files or completely replace file contents
+5. **run_bash**: Execute arbitrary bash commands (including gh, git, etc.)
 
 ## Documentation
 

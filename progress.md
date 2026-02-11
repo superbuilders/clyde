@@ -11,16 +11,14 @@ A complete Go application that includes:
 #### Core Features
 1. **REPL Interface**: Interactive command-line interface for natural conversation with Claude
 2. **Anthropic API Integration**: Direct HTTP client for Claude API (Sonnet 4.5 model)
-3. **Multi-Tool Support**: Six integrated tools with proper feedback:
-   - **GitHub Tool**: Executes `gh` CLI commands for GitHub queries
+3. **Multi-Tool Support**: Five integrated tools with proper feedback:
    - **List Files Tool**: Lists files and directories using `ls -la`
    - **Read File Tool**: Reads and displays file contents
    - **Patch File Tool**: Edits files using find/replace (no size limits!)
    - **Write File Tool**: Creates new files or replaces entire file contents
-   - **Run Bash Tool**: Executes arbitrary bash commands
+   - **Run Bash Tool**: Executes arbitrary bash commands (including `gh` for GitHub, `git` for version control, test runners, etc.)
 4. **Conversation History**: Maintains context across multiple turns
 5. **Tool Use Feedback**: Shows progress messages when using tools:
-   - "→ Running GitHub query..."
    - "→ Listing files..."
    - "→ Reading file..."
    - "→ Patching file..."
@@ -29,8 +27,8 @@ A complete Go application that includes:
 
 #### Architecture Components
 - **Message Types**: User and assistant messages with support for text and tool content
-- **Tool Definition**: `github_query` tool with JSON schema for gh commands
-- **System Prompt with Decider**: Intelligent system prompt that decides when to use the GitHub tool
+- **Tool Definitions**: Five tools with JSON schemas for list_files, read_file, patch_file, write_file, and run_bash
+- **System Prompt with Decider**: Intelligent system prompt that decides when to use each tool
 - **Tool Execution Loop**: Handles tool_use responses and continues conversation until text response
 
 #### System Prompt Decider
@@ -38,11 +36,12 @@ The system prompt includes explicit decision logic for all tools:
 ```
 IMPORTANT DECIDER: Before responding, determine if you need to use a tool:
 
-GitHub questions - Use github_query for:
-- Questions about repositories, PRs, issues, workflows
-- Questions about user profile, organizations
-- Any "show me", "list", "what are" questions related to GitHub
-- Status checks, recent activity, etc.
+GitHub questions - Use run_bash with gh commands:
+- Questions about repositories: run_bash("gh repo list")
+- Questions about pull requests: run_bash("gh pr list")
+- Questions about issues: run_bash("gh issue list")
+- User profile info: run_bash("gh api user")
+- Any GitHub queries: run_bash("gh <command>")
 
 File system questions - Use list_files for:
 - "What files are in X directory?"
@@ -71,14 +70,15 @@ Bash execution - Use run_bash for:
 - "Execute Y script"
 - "Check system information"
 - Any shell/command-line operations
+- Git operations: run_bash("git status"), run_bash("git commit -m 'message'")
+- GitHub CLI: run_bash("gh repo list"), run_bash("gh pr list")
+- Package managers, build tools, test runners, etc.
 ```
 
 ### Integration Tests (`main_test.go`)
 Comprehensive test suite covering:
 
-1. **TestExecuteGitHubCommand**: Tests gh command execution
-   - Valid commands (auth status, api user)
-   - Invalid commands (error handling)
+1. ~~**TestExecuteGitHubCommand**~~: REMOVED - github_query tool deprecated in favor of run_bash
 
 2. **TestExecuteListFiles**: Tests file listing execution
    - List current directory
@@ -128,10 +128,10 @@ Comprehensive test suite covering:
    - History tracking validation
 
 10. **TestSystemPromptDecider**: Validates system prompt content
-   - Checks for required terms (tools, GitHub, file operations)
+   - Checks for required terms (tools, run_bash, gh commands)
+   - Verifies old github_query tool is NOT present
 
-11. **TestGitHubTool**: Validates tool definition structure
-   - Tool name, description, and schema validation
+11. ~~**TestGitHubTool**~~: REMOVED - github_query tool deprecated
 
 12. **TestListFilesIntegration**: Full end-to-end list_files tool test
    - Tests complete file listing flow with actual tool use
@@ -155,11 +155,12 @@ Comprehensive test suite covering:
     - Ensures the full round-trip works with the Claude API
     - **NOTE**: Skipped due to edit_file being replaced by patch_file
 
-15. **TestGitHubQueryIntegration**: Full end-to-end GitHub tool test
-    - Tests complete GitHub query flow with actual tool use
-    - Validates tool_use block contains ID
-    - Validates tool_result block contains ToolUseID
-    - Ensures the full round-trip works with the Claude API
+15. **TestGitHubQueryIntegration**: Full end-to-end GitHub query test using run_bash
+   - Tests complete GitHub query flow using run_bash with gh commands
+   - Validates tool_use block contains ID and command parameter
+   - Validates tool_result block contains ToolUseID
+   - Ensures the full round-trip works with the Claude API
+   - **UPDATED**: Now uses run_bash instead of deprecated github_query tool
 
 16. **TestRunBashIntegration**: Full end-to-end run_bash tool test
     - Tests complete bash command execution flow
@@ -229,15 +230,15 @@ You: What's 5 + 3?
 Claude: 8
 ```
 
-### GitHub Queries
+### GitHub Queries (via run_bash)
 ```
 You: What repositories do I have?
-→ Running GitHub query...
-Claude: [Lists your repositories using gh repo list]
+→ Running bash command...
+Claude: [Lists your repositories using 'gh repo list']
 
 You: Show me my recent pull requests
-→ Running GitHub query...
-Claude: [Lists your PRs using gh pr list]
+→ Running bash command...
+Claude: [Lists your PRs using 'gh pr list']
 ```
 
 ### File Operations
@@ -251,7 +252,7 @@ You: Read the README.md file
 Claude: [Displays the contents of README.md]
 
 You: Create a file called notes.txt with "Meeting at 3pm"
-→ Editing file...
+→ Writing file...
 Claude: [Confirms file was created successfully]
 ```
 
@@ -270,24 +271,6 @@ Goodbye!
 - **API Version**: `2023-06-01`
 
 ### Tool Schemas
-
-#### GitHub Query Tool
-```json
-{
-  "name": "github_query",
-  "description": "Execute GitHub CLI (gh) commands...",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "command": {
-        "type": "string",
-        "description": "The gh command to execute (without 'gh' prefix)"
-      }
-    },
-    "required": ["command"]
-  }
-}
-```
 
 #### List Files Tool
 ```json
@@ -428,27 +411,25 @@ Goodbye!
 
 ## Test Results
 ```
-=== TestExecuteGitHubCommand       PASS (0.71s)
 === TestExecuteListFiles           PASS (0.01s)
 === TestExecuteReadFile            PASS (0.00s)
 === TestExecuteRunBash             PASS (0.01s)
 === TestExecuteWriteFile           PASS (0.00s)
 === TestExecutePatchFile           PASS (0.00s)
 === TestExecuteEditFile            SKIP (deprecated)
-=== TestCallClaude                 PASS (2.67s)
-=== TestHandleConversation         PASS (5.34s)
+=== TestCallClaude                 PASS (3.33s)
+=== TestHandleConversation         PASS (5.61s)
 === TestSystemPromptDecider        PASS (0.00s)
-=== TestGitHubTool                 PASS (0.00s)
-=== TestListFilesIntegration       PASS (6.13s)
-=== TestReadFileIntegration        PASS (3.65s)
+=== TestListFilesIntegration       PASS (6.76s)
+=== TestReadFileIntegration        PASS (4.10s)
 === TestEditFileIntegration        SKIP (deprecated)
 === TestEditFileWithLargeContent   SKIP (deprecated)
-=== TestGitHubQueryIntegration     PASS (4.18s)
-=== TestRunBashIntegration         PASS (12.13s)
-=== TestWriteFileIntegration       PASS (11.06s)
+=== TestGitHubQueryIntegration     PASS (4.31s) - now uses run_bash
+=== TestRunBashIntegration         PASS (13.31s)
+=== TestWriteFileIntegration       PASS (11.16s)
 
-PASS - All tests completed successfully (46.07s total)
-14 tests passed, 3 tests skipped
+PASS - All tests completed successfully (47.47s total)
+13 tests passed, 3 tests skipped
 ```
 
 ## Files Created
@@ -522,6 +503,47 @@ Added `TestGitHubQueryIntegration` which:
 
 **Lesson Learned**:
 Integration tests must exercise the actual user workflows, not just individual components. A test suite that passes 100% but never tests the critical path is worse than no tests at all—it creates false confidence. Always ensure your tests cover the "happy path" that users will actually execute.
+
+## Tool Deprecations
+
+### GitHub Query Tool (Deprecated 2026-02-10)
+
+**Removed**: The dedicated `github_query` tool has been deprecated and removed from the codebase.
+
+**Rationale**: 
+- Redundant with `run_bash` tool
+- `gh` commands work perfectly via `run_bash`
+- Example: `run_bash("gh repo list")` vs `github_query("repo list")`
+- Less code to maintain
+- Consistent pattern: all external CLI tools go through bash
+
+**Migration**:
+```
+OLD: github_query("repo list")
+NEW: run_bash("gh repo list")
+
+OLD: github_query("pr list")  
+NEW: run_bash("gh pr list")
+
+OLD: github_query("api user")
+NEW: run_bash("gh api user")
+```
+
+**Changes Made**:
+1. ✅ Removed `githubTool` from tools array in `callClaude()`
+2. ✅ Removed `executeGitHubCommand()` function
+3. ✅ Removed `case "github_query":` from switch statement
+4. ✅ Updated system prompt to use `run_bash` with `gh` commands
+5. ✅ Updated tests to use bash for GitHub operations
+6. ✅ Updated documentation (README, progress.md)
+
+**Test Updates**:
+- Removed `TestExecuteGitHubCommand` (no longer needed)
+- Removed `TestGitHubTool` (tool no longer exists)
+- Updated `TestSystemPromptDecider` to check for `run_bash` and `gh` instead of `github_query`
+- Updated `TestGitHubQueryIntegration` to expect `run_bash` tool usage with `gh` commands
+
+All tests pass: 13 tests passed, 3 skipped (deprecated edit_file tests), 47.47s total.
 
 ## Feature Additions
 
