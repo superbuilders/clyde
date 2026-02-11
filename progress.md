@@ -595,6 +595,60 @@ When working on tasks, especially complex ones:
 
 **Lesson**: Meta-documentation instructions are just as important as tool instructions. The AI needs to know not just *what* to do, but *when* and *why* to document.
 
+### Better Tool Progress Messages (Added 2026-02-10)
+
+**Priority #3 Completed**: Enhanced all tool progress messages to show context and relevant parameters.
+
+**Problem**: Generic progress messages like "→ Reading file..." didn't tell users which file or what was happening.
+
+**Solution**: Updated each tool's display message to include relevant context:
+
+**Before**:
+```
+→ Listing files...
+→ Reading file...
+→ Patching file...
+→ Running bash command...
+→ Writing file...
+```
+
+**After**:
+```
+→ Listing files: . (current directory)
+→ Reading file: main.go
+→ Patching file: todos.md (+353 bytes)
+→ Running bash: go test -v
+→ Writing file: progress.md (42.5 KB)
+```
+
+**Implementation Details**:
+1. **list_files**: Shows path, with special handling for current directory
+2. **read_file**: Shows the file path being read
+3. **patch_file**: Shows file path and size change (+/- bytes)
+4. **run_bash**: Shows the command (truncated if > 60 chars)
+5. **write_file**: Shows file path and formatted size (bytes/KB/MB)
+
+**Code Changes**:
+- Updated 5 display message locations in `handleConversation()`
+- Added size formatting for write_file (bytes → KB → MB)
+- Added command truncation for long bash commands
+- Net change: +921 bytes in main.go
+
+**Impact**:
+- Users can see exactly what's happening at a glance
+- Better transparency without being verbose
+- Helps with debugging when operations take time
+- All tests still pass (13 passed, 3 skipped)
+
+**Example Output from Tests**:
+```
+→ Listing files: . (current directory)
+→ Reading file: test_read_file.txt
+→ Running bash: gh api user
+→ Writing file: test_write_integration_new.txt (51 bytes)
+→ Writing file: progress.md (42.5 KB)
+```
+
 ## Current Status (2026-02-10)
 
 **Active Tools**: 5
@@ -614,13 +668,18 @@ When working on tasks, especially complex ones:
 - Zero external dependencies
 - Fast startup time
 
-**System Prompt**: 2.8 KB (expanded from 2.1 KB)
+**System Prompt**: 2.8 KB
 - Includes comprehensive tool decision logic
-- **NEW (Priority #2)**: Includes progress.md philosophy and memory model
+- Includes progress.md philosophy and memory model (Priority #2)
 - Instructs AI to read and update progress.md proactively
 - AI should now document changes automatically
 
-**Next Priority**: #3 - Better Tool Progress Messages
+**Tool Progress Messages**: Enhanced (Priority #3)
+- Show context: file paths, command names, sizes
+- Examples: "→ Reading file: main.go", "→ Running bash: go test -v"
+- Better user experience and transparency
+
+**Next Priority**: #4 - Better Error Handling & Messages
 - Show more context in progress messages
 - Example: "→ Reading file: main.go" instead of just "→ Reading file..."
 - Estimated time: 30 minutes

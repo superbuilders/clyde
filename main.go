@@ -423,7 +423,11 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 				if pathVal, ok := toolBlock.Input["path"]; ok && pathVal != nil {
 					path, _ = pathVal.(string)
 				}
-				displayMessage = "→ Listing files..."
+				if path == "" || path == "." {
+					displayMessage = "→ Listing files: . (current directory)"
+				} else {
+					displayMessage = fmt.Sprintf("→ Listing files: %s", path)
+				}
 				output, err = executeListFiles(path)
 
 			case "read_file":
@@ -431,7 +435,7 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 				if !ok || path == "" {
 					err = fmt.Errorf("read_file requires non-empty 'path' parameter")
 				} else {
-					displayMessage = "→ Reading file..."
+					displayMessage = fmt.Sprintf("→ Reading file: %s", path)
 					output, err = executeReadFile(path)
 				}
 
@@ -447,7 +451,12 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 				} else if !newTextOk {
 					err = fmt.Errorf("patch_file requires 'new_text' parameter")
 				} else {
-					displayMessage = "→ Patching file..."
+					changeSize := len(newText) - len(oldText)
+					if changeSize >= 0 {
+						displayMessage = fmt.Sprintf("→ Patching file: %s (+%d bytes)", path, changeSize)
+					} else {
+						displayMessage = fmt.Sprintf("→ Patching file: %s (%d bytes)", path, changeSize)
+					}
 					output, err = executePatchFile(path, oldText, newText)
 				}
 
@@ -456,7 +465,12 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 				if !ok || command == "" {
 					err = fmt.Errorf("run_bash requires non-empty 'command' parameter")
 				} else {
-					displayMessage = "→ Running bash command..."
+					// Truncate long commands for display
+					displayCmd := command
+					if len(displayCmd) > 60 {
+						displayCmd = displayCmd[:57] + "..."
+					}
+					displayMessage = fmt.Sprintf("→ Running bash: %s", displayCmd)
 					output, err = executeRunBash(command)
 				}
 
@@ -469,7 +483,17 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 				} else if !contentOk {
 					err = fmt.Errorf("write_file requires 'content' parameter")
 				} else {
-					displayMessage = "→ Writing file..."
+					// Format file size nicely
+					size := len(content)
+					var sizeStr string
+					if size < 1024 {
+						sizeStr = fmt.Sprintf("%d bytes", size)
+					} else if size < 1024*1024 {
+						sizeStr = fmt.Sprintf("%.1f KB", float64(size)/1024)
+					} else {
+						sizeStr = fmt.Sprintf("%.1f MB", float64(size)/(1024*1024))
+					}
+					displayMessage = fmt.Sprintf("→ Writing file: %s (%s)", path, sizeStr)
 					output, err = executeWriteFile(path, content)
 				}
 
