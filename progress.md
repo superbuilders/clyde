@@ -11,11 +11,12 @@ A complete Go application that includes:
 #### Core Features
 1. **REPL Interface**: Interactive command-line interface for natural conversation with Claude
 2. **Anthropic API Integration**: Direct HTTP client for Claude API (Sonnet 4.5 model)
-3. **Multi-Tool Support**: Five integrated tools with proper feedback:
+3. **Multi-Tool Support**: Six integrated tools with proper feedback:
    - **GitHub Tool**: Executes `gh` CLI commands for GitHub queries
    - **List Files Tool**: Lists files and directories using `ls -la`
    - **Read File Tool**: Reads and displays file contents
    - **Patch File Tool**: Edits files using find/replace (no size limits!)
+   - **Write File Tool**: Creates new files or replaces entire file contents
    - **Run Bash Tool**: Executes arbitrary bash commands
 4. **Conversation History**: Maintains context across multiple turns
 5. **Tool Use Feedback**: Shows progress messages when using tools:
@@ -23,6 +24,7 @@ A complete Go application that includes:
    - "→ Listing files..."
    - "→ Reading file..."
    - "→ Patching file..."
+   - "→ Writing file..."
    - "→ Running bash command..."
 
 #### Architecture Components
@@ -32,7 +34,7 @@ A complete Go application that includes:
 - **Tool Execution Loop**: Handles tool_use responses and continues conversation until text response
 
 #### System Prompt Decider
-The system prompt includes explicit decision logic for all three tools:
+The system prompt includes explicit decision logic for all tools:
 ```
 IMPORTANT DECIDER: Before responding, determine if you need to use a tool:
 
@@ -51,6 +53,24 @@ File reading questions - Use read_file for:
 - "Show me the contents of X file"
 - "What's in X file?"
 - "Read X file"
+
+File editing questions - Use patch_file for:
+- "Add X to the file"
+- "Change X to Y in the file"
+- "Update the function to do Z"
+- "Fix the bug by changing X"
+
+File writing questions - Use write_file for:
+- "Create a new file with X content"
+- "Write X to file Y"
+- "Replace the entire contents of file Z"
+- Creating new files from scratch
+
+Bash execution - Use run_bash for:
+- "Run X command"
+- "Execute Y script"
+- "Check system information"
+- Any shell/command-line operations
 ```
 
 ### Integration Tests (`main_test.go`)
@@ -76,47 +96,87 @@ Comprehensive test suite covering:
    - Empty path (error handling)
    - Empty content (valid edge case)
 
-5. **TestCallClaude**: Tests direct API calls
+5. **TestExecuteRunBash**: Tests bash command execution
+   - Simple echo command
+   - Command with output
+   - Empty command (error handling)
+   - Invalid command (error handling)
+   - Command that exits with error
+
+6. **TestExecuteWriteFile**: Tests file writing execution
+   - Create new file
+   - Replace existing file
+   - Empty path (error handling)
+   - Write empty content
+   - Write multiline content
+
+7. **TestExecutePatchFile**: Tests patch file execution
+   - Replace unique text
+   - Old text not found (error handling)
+   - Non-unique old text (error handling)
+   - Empty old text (error handling)
+   - Delete text (empty new_text)
+
+8. **TestCallClaude**: Tests direct API calls
    - Simple greeting response
    - Math question response
    - Validates API response structure
 
-6. **TestHandleConversation**: Tests full conversation flow
+9. **TestHandleConversation**: Tests full conversation flow
    - Single-turn conversations
    - Multi-turn conversations with memory
    - History tracking validation
 
-7. **TestSystemPromptDecider**: Validates system prompt content
+10. **TestSystemPromptDecider**: Validates system prompt content
    - Checks for required terms (tools, GitHub, file operations)
 
-8. **TestGitHubTool**: Validates tool definition structure
+11. **TestGitHubTool**: Validates tool definition structure
    - Tool name, description, and schema validation
 
-9. **TestListFilesIntegration**: Full end-to-end list_files tool test
+12. **TestListFilesIntegration**: Full end-to-end list_files tool test
    - Tests complete file listing flow with actual tool use
    - Validates tool_use block contains ID
    - Validates tool_result block contains ToolUseID
    - Ensures the full round-trip works with the Claude API
 
-10. **TestReadFileIntegration**: Full end-to-end read_file tool test
+13. **TestReadFileIntegration**: Full end-to-end read_file tool test
    - Tests complete file reading flow with actual tool use
    - Creates test file and validates content is read correctly
    - Validates tool_use block contains ID
    - Validates tool_result block contains ToolUseID
    - Ensures the full round-trip works with the Claude API
 
-11. **TestEditFileIntegration**: Full end-to-end edit_file tool test
+14. **TestEditFileIntegration**: Full end-to-end edit_file tool test (DEPRECATED)
     - Tests complete file editing flow with actual tool use
     - Creates test file and validates content is written correctly
     - Validates tool_use block contains ID and correct input parameters
     - Validates tool_result block contains ToolUseID
     - Verifies the file was physically created with correct content
     - Ensures the full round-trip works with the Claude API
+    - **NOTE**: Skipped due to edit_file being replaced by patch_file
 
-12. **TestGitHubQueryIntegration**: Full end-to-end GitHub tool test
+15. **TestGitHubQueryIntegration**: Full end-to-end GitHub tool test
     - Tests complete GitHub query flow with actual tool use
     - Validates tool_use block contains ID
     - Validates tool_result block contains ToolUseID
+    - Ensures the full round-trip works with the Claude API
+
+16. **TestRunBashIntegration**: Full end-to-end run_bash tool test
+    - Tests complete bash command execution flow
+    - Tests whoami command execution
+    - Tests echo command with output verification
+    - Tests error handling with exit 1 command
+    - Validates tool_use block contains ID and command parameter
+    - Validates tool_result block contains ToolUseID
+    - Ensures the full round-trip works with the Claude API
+
+17. **TestWriteFileIntegration**: Full end-to-end write_file tool test
+    - Tests creating new file with write_file tool
+    - Tests replacing existing file contents
+    - Tests writing multiline file content
+    - Validates tool_use block contains ID and correct input parameters
+    - Validates tool_result block contains ToolUseID
+    - Verifies the file was physically created/replaced with correct content
     - Ensures the full round-trip works with the Claude API
 
 ### Dependencies
@@ -287,6 +347,72 @@ Goodbye!
 }
 ```
 
+#### Patch File Tool
+```json
+{
+  "name": "patch_file",
+  "description": "Edit a file by finding and replacing text...",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "The file path to edit"
+      },
+      "old_text": {
+        "type": "string",
+        "description": "The exact text to find and replace (must be unique)"
+      },
+      "new_text": {
+        "type": "string",
+        "description": "The new text to replace old_text with"
+      }
+    },
+    "required": ["path", "old_text", "new_text"]
+  }
+}
+```
+
+#### Write File Tool
+```json
+{
+  "name": "write_file",
+  "description": "Write content to a file. Creates new file or completely replaces existing file...",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "The file path to write to"
+      },
+      "content": {
+        "type": "string",
+        "description": "The complete content to write to the file"
+      }
+    },
+    "required": ["path", "content"]
+  }
+}
+```
+
+#### Run Bash Tool
+```json
+{
+  "name": "run_bash",
+  "description": "Execute arbitrary bash commands...",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "The bash command to execute"
+      }
+    },
+    "required": ["command"]
+  }
+}
+```
+
 ### Conversation Flow
 1. User enters message
 2. Message added to conversation history
@@ -302,25 +428,32 @@ Goodbye!
 
 ## Test Results
 ```
-=== TestExecuteGitHubCommand       PASS (0.74s)
+=== TestExecuteGitHubCommand       PASS (0.71s)
 === TestExecuteListFiles           PASS (0.01s)
 === TestExecuteReadFile            PASS (0.00s)
-=== TestExecuteEditFile            PASS (0.00s)
-=== TestCallClaude                 PASS (2.84s)
-=== TestHandleConversation         PASS (6.61s)
+=== TestExecuteRunBash             PASS (0.01s)
+=== TestExecuteWriteFile           PASS (0.00s)
+=== TestExecutePatchFile           PASS (0.00s)
+=== TestExecuteEditFile            SKIP (deprecated)
+=== TestCallClaude                 PASS (2.67s)
+=== TestHandleConversation         PASS (5.34s)
 === TestSystemPromptDecider        PASS (0.00s)
 === TestGitHubTool                 PASS (0.00s)
-=== TestListFilesIntegration       PASS (5.74s)
-=== TestReadFileIntegration        PASS (3.58s)
-=== TestEditFileIntegration        PASS (4.00s)
-=== TestGitHubQueryIntegration     PASS (3.56s)
+=== TestListFilesIntegration       PASS (6.13s)
+=== TestReadFileIntegration        PASS (3.65s)
+=== TestEditFileIntegration        SKIP (deprecated)
+=== TestEditFileWithLargeContent   SKIP (deprecated)
+=== TestGitHubQueryIntegration     PASS (4.18s)
+=== TestRunBashIntegration         PASS (12.13s)
+=== TestWriteFileIntegration       PASS (11.06s)
 
-PASS - All 11 tests completed successfully (27.251s total)
+PASS - All tests completed successfully (46.07s total)
+14 tests passed, 3 tests skipped
 ```
 
 ## Files Created
-1. `main.go` (10+ KB) - Main application with 3 tools
-2. `main_test.go` (16+ KB) - Comprehensive test suite with 9 tests
+1. `main.go` (18+ KB) - Main application with 6 tools
+2. `main_test.go` (35+ KB) - Comprehensive test suite with 17 tests
 3. `go.mod` - Go module definition
 4. `claude-repl` - Compiled binary (8.4 MB)
 5. `.env` - API key configuration
@@ -459,9 +592,102 @@ Enables Claude to execute arbitrary bash commands:
 - Check system information
 - Any shell/command-line operations
 
+**Added write_file tool** (2026-02-10):
+Provides a dedicated tool for creating new files or replacing entire file contents:
+- Creates new files with specified content
+- Completely replaces existing file contents
+- Separate from patch_file for clarity of purpose
+- Better for creating new files from scratch
+- Returns appropriate messages ("created" vs "replaced")
+- Includes comprehensive unit and integration tests
+
+**Testing Standards Maintained**:
+Both run_bash and write_file tools include:
+- Unit tests for execution functions (`TestExecuteRunBash`, `TestExecuteWriteFile`)
+- Integration tests with full API round-trips (`TestRunBashIntegration`, `TestWriteFileIntegration`)
+- Multiple sub-tests covering different scenarios (success, errors, edge cases)
+- Validation of tool_use and tool_result blocks
+- Explicit checks for ToolUseID to prevent regression bugs
+
+## Design Philosophy & Principles
+
+### Memory Model (Established 2026-02-10)
+**Decision**: Do NOT implement traditional message history persistence.
+
+**Philosophy**: Message history compaction is the wrong abstraction for coding agents. Curated documentation > raw chat logs.
+
+**Approach**:
+- Use `progress.md` as the canonical source of truth for important learnings and project state
+- AI reads `progress.md` at the start of complex tasks
+- AI updates `progress.md` with important learnings, bugs fixed, and design decisions
+- Treat `progress.md` as the "memory" rather than raw conversation history
+- Keep `progress.md` structured and organized (not a dump of all messages)
+- Human maintains editorial control over what's "remembered"
+
+### Error Handling Philosophy (Established 2026-02-10)
+- Helpful error messages > raw debug output
+- Suggest solutions, not just report failures
+- Fail fast with clear guidance
+- Automatic error recovery (no user confirmation required)
+- Agent should attempt recovery without asking
+- If recovery fails, explain what went wrong and what was tried
+- User can always interrupt with Ctrl+C if needed
+
+### Tool Design Philosophy (Established 2026-02-10)
+- Each tool does one thing well
+- Compose tools for complex operations
+- Clear feedback for all operations
+- **Lean into standard tools**: Use bash for git, gh CLI, etc. rather than custom wrappers
+- Avoid redundant abstractions (e.g., no dedicated git or test wrappers when bash suffices)
+
+### Multi-File Operations Philosophy (Established 2026-02-10)
+- Use git for rollback, not custom transaction logic
+- Users should commit before risky operations
+- Agent can suggest `git commit` before multi-file changes
+- Keep it simple: git is good, use git
+- Atomic operations where possible
+- Search before edit for context
+- Coordinate related changes
+
+## Architecture Decisions
+
+### Why No Dedicated Git Tool (Decided 2026-02-10)
+**Question**: Should we add a `git` tool for version control operations?
+
+**Answer**: NO. Use `run_bash` for all git operations.
+- Git commands are simple enough: `git commit`, `git status`, `git diff`
+- No need for a dedicated wrapper
+- Consistent with philosophy: lean into standard tools
+
+### Why No Test Wrapper (Decided 2026-02-10)
+**Question**: Do we need a `test` tool wrapper, or is `run_bash` sufficient?
+
+**Answer**: `run_bash` is sufficient.
+- Tests are just bash commands: `go test -v`, `npm test`, `pytest`
+- No abstraction needed
+- Keep it simple
+
+### Future: Code Organization & Architecture Separation
+**Long-term Vision**: Separate the agent from the CLI so the same agent logic can be called through:
+- 💻 CLI (current REPL interface)
+- 🌐 HTTP API (REST endpoints)
+- 🖥️ GUI (desktop or web interface)
+- 🔧 Bash scripts (programmatic access)
+- 📦 Go package (import into other projects)
+
+**Key Abstraction**: The agent should be interface-driven:
+```go
+type Agent interface {
+    HandleMessage(input string) (response string, err error)
+    RegisterTool(tool Tool) error
+    GetHistory() []Message
+}
+```
+
+This allows different "frontends" (CLI, API, GUI) to use the same agent backend.
+
 ## Future Enhancements (Not Implemented)
 - Streaming responses for faster feedback
-- More tools (file operations, web search, etc.)
 - Configuration file for model selection and parameters
 - Command history with arrow key navigation
 - Syntax highlighting for code in responses

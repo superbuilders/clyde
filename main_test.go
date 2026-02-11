@@ -205,6 +205,101 @@ func TestExecuteRunBash(t *testing.T) {
 	}
 }
 
+func TestExecuteWriteFile(t *testing.T) {
+	testFile := "test_write_file.txt"
+	defer os.Remove(testFile)
+
+	tests := []struct {
+		name        string
+		path        string
+		content     string
+		expectError bool
+		setupFile   bool
+		setupContent string
+	}{
+		{
+			name:        "Create new file",
+			path:        testFile,
+			content:     "Hello, World!",
+			expectError: false,
+			setupFile:   false,
+		},
+		{
+			name:        "Replace existing file",
+			path:        testFile,
+			content:     "New content",
+			expectError: false,
+			setupFile:   true,
+			setupContent: "Old content",
+		},
+		{
+			name:        "Empty path",
+			path:        "",
+			content:     "Some content",
+			expectError: true,
+		},
+		{
+			name:        "Write empty content",
+			path:        testFile,
+			content:     "",
+			expectError: false,
+		},
+		{
+			name:        "Write multiline content",
+			path:        testFile,
+			content:     "Line 1\nLine 2\nLine 3",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clean up before each test
+			os.Remove(testFile)
+
+			// Setup existing file if needed
+			if tt.setupFile {
+				if err := os.WriteFile(tt.path, []byte(tt.setupContent), 0644); err != nil {
+					t.Fatalf("Failed to setup test file: %v", err)
+				}
+			}
+
+			output, err := executeWriteFile(tt.path, tt.content)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none. Output: %s", output)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+
+				// Verify file content
+				if tt.path != "" {
+					content, readErr := os.ReadFile(tt.path)
+					if readErr != nil {
+						t.Errorf("Failed to read written file: %v", readErr)
+					} else if string(content) != tt.content {
+						t.Errorf("File content mismatch. Expected '%s', got '%s'", tt.content, string(content))
+					}
+				}
+
+				// Verify output message
+				if tt.setupFile {
+					if !strings.Contains(output, "replaced") {
+						t.Errorf("Expected 'replaced' in output for existing file, got: %s", output)
+					}
+				} else if tt.path != "" {
+					if !strings.Contains(output, "created") {
+						t.Errorf("Expected 'created' in output for new file, got: %s", output)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestExecutePatchFile(t *testing.T) {
 	// Create a test file
 	testFile := "test_patch.txt"
@@ -1268,6 +1363,223 @@ func TestRunBashIntegration(t *testing.T) {
 
 		if !foundError {
 			t.Logf("Warning: Expected to find IsError flag set in tool result for failing command")
+		}
+	})
+}
+
+func TestWriteFileIntegration(t *testing.T) {
+	envPath := os.Getenv("ENV_PATH")
+	if envPath == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			envPath = ".env"
+		} else {
+			envPath = "../coding-agent/.env"
+		}
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Skipf("Skipping test: cannot read .env file: %v", err)
+	}
+
+	var apiKey string
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "TS_AGENT_API_KEY=") {
+			apiKey = strings.TrimPrefix(line, "TS_AGENT_API_KEY=")
+			apiKey = strings.TrimSpace(apiKey)
+			break
+		}
+	}
+
+	if apiKey == "" {
+		t.Skip("Skipping test: TS_AGENT_API_KEY not found in .env file")
+	}
+
+	t.Run("Create new file with write_file tool", func(t *testing.T) {
+		var history []Message
+		testFile := "test_write_integration_new.txt"
+		defer os.Remove(testFile)
+
+		expectedContent := "This is a test file created by the write_file tool!"
+
+		response, updatedHistory := handleConversation(apiKey,
+			fmt.Sprintf("Use the write_file tool to create a file called %s with this exact content: %s", testFile, expectedContent),
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+		t.Logf("History length: %d", len(updatedHistory))
+
+		// Look for tool_use and tool_result
+		foundToolUse := false
+		foundToolResult := false
+
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" && block.Name == "write_file" {
+							foundToolUse = true
+							t.Logf("Found tool_use: %s (ID: %s)", block.Name, block.ID)
+
+							// Verify input parameters
+							if path, ok := block.Input["path"].(string); ok {
+								if path != testFile {
+									t.Errorf("Expected path '%s', got '%s'", testFile, path)
+								}
+							}
+							if content, ok := block.Input["content"].(string); ok {
+								if content != expectedContent {
+									t.Errorf("Expected content '%s', got '%s'", expectedContent, content)
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							foundToolResult = true
+							t.Logf("Found tool_result with ToolUseID: %s", block.ToolUseID)
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolUse {
+			t.Error("Expected to find a write_file tool_use block")
+		}
+
+		if !foundToolResult {
+			t.Error("Expected to find a tool_result block")
+		}
+
+		// Verify file was created with correct content
+		if _, err := os.Stat(testFile); err != nil {
+			t.Errorf("File was not created: %v", err)
+		} else {
+			content, err := os.ReadFile(testFile)
+			if err != nil {
+				t.Errorf("Failed to read created file: %v", err)
+			} else if string(content) != expectedContent {
+				t.Errorf("File content mismatch. Expected '%s', got '%s'", expectedContent, string(content))
+			} else {
+				t.Logf("✓ File created successfully with correct content")
+			}
+		}
+	})
+
+	t.Run("Replace existing file with write_file tool", func(t *testing.T) {
+		var history []Message
+		testFile := "test_write_integration_replace.txt"
+		defer os.Remove(testFile)
+
+		// Create initial file
+		initialContent := "Old content that will be replaced"
+		if err := os.WriteFile(testFile, []byte(initialContent), 0644); err != nil {
+			t.Fatalf("Failed to create initial file: %v", err)
+		}
+
+		newContent := "New content from write_file tool"
+
+		response, updatedHistory := handleConversation(apiKey,
+			fmt.Sprintf("Use the write_file tool to replace the contents of %s with this: %s", testFile, newContent),
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+
+		// Verify file was replaced
+		content, err := os.ReadFile(testFile)
+		if err != nil {
+			t.Errorf("Failed to read replaced file: %v", err)
+		} else if string(content) != newContent {
+			t.Errorf("File content mismatch. Expected '%s', got '%s'", newContent, string(content))
+		} else {
+			t.Logf("✓ File replaced successfully with correct content")
+		}
+
+		// Verify tool was used
+		foundToolUse := false
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" && block.Name == "write_file" {
+							foundToolUse = true
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolUse {
+			t.Error("Expected to find a write_file tool_use block")
+		}
+	})
+
+	t.Run("Write multiline file content", func(t *testing.T) {
+		var history []Message
+		testFile := "test_write_integration_multiline.txt"
+		defer os.Remove(testFile)
+
+		multilineContent := `Line 1: Hello
+Line 2: World
+Line 3: From write_file tool`
+
+		response, updatedHistory := handleConversation(apiKey,
+			fmt.Sprintf("Use the write_file tool to create %s with this multiline content:\n%s", testFile, multilineContent),
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+
+		// Verify file content
+		content, err := os.ReadFile(testFile)
+		if err != nil {
+			t.Errorf("Failed to read file: %v", err)
+		} else {
+			// Check if content contains the key lines
+			contentStr := string(content)
+			if !strings.Contains(contentStr, "Line 1") || 
+			   !strings.Contains(contentStr, "Line 2") || 
+			   !strings.Contains(contentStr, "Line 3") {
+				t.Errorf("File content doesn't contain expected lines. Got: %s", contentStr)
+			} else {
+				t.Logf("✓ Multiline file created successfully")
+			}
+		}
+
+		// Verify tool was used
+		foundToolUse := false
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" && block.Name == "write_file" {
+							foundToolUse = true
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolUse {
+			t.Error("Expected to find a write_file tool_use block")
 		}
 	})
 }

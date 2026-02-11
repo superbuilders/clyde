@@ -23,6 +23,7 @@ const (
 3. read_file: For reading the contents of a file
 4. patch_file: For editing files using find/replace (patch-based approach)
 5. run_bash: For executing arbitrary bash commands
+6. write_file: For creating new files or completely replacing file contents
 
 IMPORTANT DECIDER: Before responding, determine if you need to use a tool:
 
@@ -47,6 +48,12 @@ File editing questions - Use patch_file for:
 - "Change X to Y in the file"
 - "Update the function to do Z"
 - "Fix the bug by changing X"
+
+File writing questions - Use write_file for:
+- "Create a new file with X content"
+- "Write X to file Y"
+- "Replace the entire contents of file Z"
+- Creating new files from scratch
 
 Bash execution - Use run_bash for:
 - "Run X command"
@@ -186,6 +193,25 @@ var runBashTool = Tool{
 	},
 }
 
+var writeFileTool = Tool{
+	Name:        "write_file",
+	Description: "Write content to a file. This will create a new file or completely replace the contents of an existing file. Use this for creating new files or when you need to replace the entire file contents. For partial edits, use patch_file instead.",
+	InputSchema: map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"path": map[string]interface{}{
+				"type":        "string",
+				"description": "The file path to write to. Can be absolute or relative to the current directory.",
+			},
+			"content": map[string]interface{}{
+				"type":        "string",
+				"description": "The complete content to write to the file.",
+			},
+		},
+		"required": []string{"path", "content"},
+	},
+}
+
 func executeGitHubCommand(command string) (string, error) {
 	cmd := exec.Command("gh", strings.Fields(command)...)
 	output, err := cmd.CombinedOutput()
@@ -270,13 +296,35 @@ func executeRunBash(command string) (string, error) {
 	return string(output), nil
 }
 
+func executeWriteFile(path, content string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("file path is required")
+	}
+
+	// Check if file exists to provide appropriate message
+	fileExists := false
+	if _, err := os.Stat(path); err == nil {
+		fileExists = true
+	}
+
+	// Write the content
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	if fileExists {
+		return fmt.Sprintf("Successfully replaced contents of %s (%d bytes written)", path, len(content)), nil
+	}
+	return fmt.Sprintf("Successfully created %s (%d bytes written)", path, len(content)), nil
+}
+
 func callClaude(apiKey string, messages []Message) (*Response, error) {
 	reqBody := Request{
 		Model:     modelID,
 		MaxTokens: maxTokens,
 		System:    systemPrompt,
 		Messages:  messages,
-		Tools:     []Tool{githubTool, listFilesTool, readFileTool, patchFileTool, runBashTool},
+		Tools:     []Tool{githubTool, listFilesTool, readFileTool, patchFileTool, runBashTool, writeFileTool},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -408,6 +456,19 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 				} else {
 					displayMessage = "→ Running bash command..."
 					output, err = executeRunBash(command)
+				}
+
+			case "write_file":
+				path, pathOk := toolBlock.Input["path"].(string)
+				content, contentOk := toolBlock.Input["content"].(string)
+
+				if !pathOk || path == "" {
+					err = fmt.Errorf("write_file requires non-empty 'path' parameter")
+				} else if !contentOk {
+					err = fmt.Errorf("write_file requires 'content' parameter")
+				} else {
+					displayMessage = "→ Writing file..."
+					output, err = executeWriteFile(path, content)
 				}
 
 			default:
