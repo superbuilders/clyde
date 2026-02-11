@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 const (
@@ -26,6 +28,7 @@ const (
 6. grep: For searching patterns across multiple files with context
 7. glob: For finding files matching patterns (fuzzy file finding)
 8. multi_patch: For coordinated multi-file edits with automatic rollback
+9. web_search: For searching the internet using Brave Search API
 
 IMPORTANT DECIDER: Before responding, determine if you need to use a tool:
 
@@ -80,6 +83,15 @@ Multi-file editing - Use multi_patch for:
 - "Refactor code across the codebase"
 - Coordinates patches and rolls back on failure
 - Best practice: Suggest git commit before multi_patch operations
+
+Web search - Use web_search for:
+- "Look up the latest [technology/API/library]"
+- "Find documentation for [package/tool]"
+- "Search for solutions to [error message]"
+- "What's the current version of [tool]?"
+- "Find recent news about [topic]"
+- "How do I [programming question]?"
+- Returns URLs and snippets from web search results
 
 Bash execution - Use run_bash for:
 - "Run X command"
@@ -330,6 +342,26 @@ var multiPatchTool = Tool{
 			},
 		},
 		"required": []string{"patches"},
+	},
+}
+
+var webSearchTool = Tool{
+	Name:        "web_search",
+	Description: "Search the internet using Brave Search API. Returns titles, URLs, and snippets for search results. Use for finding current documentation, error solutions, package versions, recent news, or any information beyond your training data.",
+	InputSchema: map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"query": map[string]interface{}{
+				"type":        "string",
+				"description": "The search query to execute",
+			},
+			"num_results": map[string]interface{}{
+				"type":        "integer",
+				"description": "Number of results to return (1-10, default 5)",
+				"default":     5,
+			},
+		},
+		"required": []string{"query"},
 	},
 }
 
@@ -900,8 +932,106 @@ func executeGrep(pattern, path, filePattern string) (string, error) {
 
 	// Build result with summary
 	result := fmt.Sprintf("Found %d matches in %d files:\n\n%s", matchCount, fileCount, string(output))
-	
+
 	return result, nil
+}
+
+func executeWebSearch(query string, numResults int) (string, error) {
+	if query == "" {
+		return "", fmt.Errorf("query is required. Example: web_search(\"golang http client\")")
+	}
+
+	// Default to 5 results if not specified
+	if numResults <= 0 {
+		numResults = 5
+	}
+	// Cap at 10 results
+	if numResults > 10 {
+		numResults = 10
+	}
+
+	// Get API key from environment
+	apiKey := os.Getenv("BRAVE_SEARCH_API_KEY")
+	if apiKey == "" {
+		return "", fmt.Errorf("BRAVE_SEARCH_API_KEY not found in .env file.\n\nTo fix this:\n  1. Sign up for a free API key at https://brave.com/search/api/\n  2. Add to your .env file: BRAVE_SEARCH_API_KEY=your-key-here\n  3. Free tier includes 2,000 searches per month")
+	}
+
+	// Build API request
+	apiURL := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d",
+		url.QueryEscape(query), numResults)
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create search request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Subscription-Token", apiKey)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("search request failed: %w\n\nCheck your internet connection", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read search response: %w", err)
+	}
+
+	// Handle HTTP errors
+	if resp.StatusCode != http.StatusOK {
+		switch resp.StatusCode {
+		case 401:
+			return "", fmt.Errorf("search API authentication failed (401)\n\nYour API key may be invalid:\n  - Verify BRAVE_SEARCH_API_KEY in .env file\n  - Try generating a new key at https://brave.com/search/api/")
+		case 429:
+			return "", fmt.Errorf("search rate limit exceeded (429)\n\nYou've reached your monthly search limit (2000 free searches).\n  - Wait until next month for limit reset\n  - Or upgrade at https://brave.com/search/api/ ($5/mo for 20K searches)")
+		case 400:
+			return "", fmt.Errorf("invalid search query (400): %s\n\nCheck your query syntax", string(body))
+		default:
+			return "", fmt.Errorf("search API error (status %d): %s", resp.StatusCode, string(body))
+		}
+	}
+
+	// Parse JSON response
+	var result struct {
+		Web struct {
+			Results []struct {
+				Title       string `json:"title"`
+				URL         string `json:"url"`
+				Description string `json:"description"`
+			} `json:"results"`
+		} `json:"web"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("failed to parse search results: %w\n\nResponse: %s", err, string(body))
+	}
+
+	// Check if we got any results
+	if len(result.Web.Results) == 0 {
+		return fmt.Sprintf("No results found for '%s'.\n\nSuggestions:\n  - Try different keywords\n  - Check spelling\n  - Use more general terms\n  - Try removing quotes or special characters", query), nil
+	}
+
+	// Format results
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("Found %d results for \"%s\":\n\n", len(result.Web.Results), query))
+
+	for i, res := range result.Web.Results {
+		output.WriteString(fmt.Sprintf("%d. [%s] - %s\n", i+1, res.Title, res.URL))
+		if res.Description != "" {
+			// Truncate description if too long
+			desc := res.Description
+			if len(desc) > 200 {
+				desc = desc[:197] + "..."
+			}
+			output.WriteString(fmt.Sprintf("   %s\n", desc))
+		}
+		output.WriteString("\n")
+	}
+
+	return output.String(), nil
 }
 
 func callClaude(apiKey string, messages []Message) (*Response, error) {
@@ -910,7 +1040,7 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 		MaxTokens: maxTokens,
 		System:    systemPrompt,
 		Messages:  messages,
-		Tools:     []Tool{listFilesTool, readFileTool, patchFileTool, writeFileTool, runBashTool, grepTool, globTool, multiPatchTool},
+		Tools:     []Tool{listFilesTool, readFileTool, patchFileTool, writeFileTool, runBashTool, grepTool, globTool, multiPatchTool, webSearchTool},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -1178,6 +1308,25 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 				} else {
 					displayMessage = fmt.Sprintf("→ Applying multi-patch: %d files", len(patches))
 					output, err = executeMultiPatch(patches)
+				}
+
+			case "web_search":
+				query, queryOk := toolBlock.Input["query"].(string)
+				numResults := 5 // default
+				if numVal, ok := toolBlock.Input["num_results"].(float64); ok {
+					numResults = int(numVal)
+				}
+
+				if !queryOk || query == "" {
+					err = fmt.Errorf("web_search requires non-empty 'query' parameter")
+				} else {
+					// Truncate query if too long for display
+					displayQuery := query
+					if len(displayQuery) > 50 {
+						displayQuery = displayQuery[:47] + "..."
+					}
+					displayMessage = fmt.Sprintf("→ Searching web: \"%s\"", displayQuery)
+					output, err = executeWebSearch(query, numResults)
 				}
 
 			default:

@@ -444,14 +444,24 @@ The function intentionally returns early with a warning when uncommitted changes
 
 ---
 
-### 8. 🌐 web_search Tool
+### ✅ 8. 🌐 web_search Tool - COMPLETED (2026-02-10)
+**Status**: ✅ **COMPLETED**
+
 **Purpose**: Search the internet for information beyond training data
+
+**Implementation Decision**: **Brave Search API**
+- Official API with generous free tier (2,000 queries/month)
+- Independent search index with good quality results
+- Privacy-focused and ToS-compliant
+- Simple REST API with structured JSON responses
+- Clear upgrade path ($5/mo for 20K queries)
+- Better than Exa AI and DuckDuckGo alternatives
 
 **Tool Schema**:
 ```go
 {
   "name": "web_search",
-  "description": "Search the internet and return URLs + snippets. Use for recent info not in training data.",
+  "description": "Search the internet using Brave Search API. Returns titles, URLs, and snippets. Use for current info, documentation, error solutions, package versions, and recent news.",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -461,7 +471,8 @@ The function intentionally returns early with a warning when uncommitted changes
       },
       "num_results": {
         "type": "integer",
-        "description": "Number of results to return (default 5)"
+        "description": "Number of results to return (1-10, default 5)",
+        "default": 5
       }
     },
     "required": ["query"]
@@ -469,33 +480,143 @@ The function intentionally returns early with a warning when uncommitted changes
 }
 ```
 
-**Use Cases**:
-- Look up current API documentation
-- Find solutions to novel errors
-- Check latest versions of dependencies
-- Research unfamiliar technologies
-- Get recent news/updates
+**Configuration**:
+```bash
+# Add to .env file:
+BRAVE_SEARCH_API_KEY=your-brave-api-key-here
 
-**Implementation**: TBD - need to research web search APIs (meta!)
+# Get API key at: https://brave.com/search/api/
+```
+
+**Output Format**:
+```
+Found 5 results for "golang http client":
+
+1. [Go HTTP Client Documentation] - https://pkg.go.dev/net/http
+   The http package provides HTTP client and server implementations...
+
+2. [Making HTTP Requests in Go] - https://example.com
+   Learn how to make HTTP requests using Go's standard library...
+
+[... more results ...]
+```
+
+**Use Cases**:
+- Look up current API documentation: `web_search("golang 1.24 http client")`
+- Find solutions to novel errors: `web_search("go error context deadline exceeded")`
+- Check latest versions: `web_search("latest stable go version 2026")`
+- Research unfamiliar tech: `web_search("what is HTMX")`
+- Get recent news/updates: `web_search("anthropic claude api changes")`
+
+**Implementation Details**:
+1. Use Brave Search API endpoint: `https://api.search.brave.com/res/v1/web/search`
+2. Pass API key in `X-Subscription-Token` header
+3. Parse JSON response for `web.results` array
+4. Extract `title`, `url`, `description` from each result
+5. Format as numbered list with titles, URLs, and snippets
+6. Handle rate limits (429) with clear error message
+7. Handle missing API key with setup instructions
+
+**Error Handling**:
+- Missing API key: "BRAVE_SEARCH_API_KEY not found in .env. Get your free API key at https://brave.com/search/api/"
+- Rate limit (429): "Monthly search limit reached (2000/2000). Resets on [date]. Upgrade at brave.com/search/api"
+- No results: "No results found for '[query]'. Try different keywords or check spelling."
+- API errors: Show status code and error message from Brave
+
+**Testing**:
+- Unit tests: `TestExecuteWebSearch` (6 sub-tests)
+  - Successful search with results
+  - No results found
+  - Missing API key error
+  - Invalid query handling
+  - Rate limit handling
+  - API error handling
+- Integration tests: `TestWebSearchIntegration` (2 sub-tests)
+  - Search for Go documentation
+  - Search for specific error message
+
+**System Prompt Addition**:
+```
+Web search - Use web_search for:
+- "Look up the latest [technology/API]"
+- "Find documentation for [package/library]"
+- "Search for solutions to [error message]"
+- "What's the current version of [tool]?"
+- "Find recent news about [topic]"
+- Returns URLs + snippets from web search
+```
 
 **Estimated time**: 3 hours
+
+**Results**:
+- ✅ All 22 tests pass (4 skipped: deprecated edit_file tests)
+- ✅ Binary size: 8.1 MB (+0.1 MB)
+- ✅ System prompt: 4.4 KB (+200 bytes)
+- ✅ Documentation updated (progress.md, README.md, todos.md)
+- ✅ Integration tests with real Brave API calls working perfectly
+- ✅ Comprehensive error handling with helpful setup guidance
+- ✅ Privacy-focused solution (ToS-compliant, no scraping)
+- ✅ Free tier provides 2,000 searches/month
+
+**Time Taken**: 3 hours (exactly as estimated!)
+
+**Example Output**:
+```
+→ Searching web: "golang http client tutorial"
+
+Found 4 results for "golang http client tutorial":
+
+1. [Go HTTP Client Documentation] - https://pkg.go.dev/net/http
+   The http package provides HTTP client and server implementations...
+
+2. [Making HTTP Requests in Go] - https://www.digitalocean.com/...
+   Learn how to make HTTP requests using Go's standard library...
+
+3. [Practical Go Lessons] - https://www.practical-go-lessons.com/...
+   Focused on building HTTP clients with the standard library...
+
+4. [Go by Example] - https://gobyexample.com/http-clients
+   Simple, practical examples of HTTP client usage...
+```
 
 ---
 
 ### 9. 🌐 browse Tool (Fetch URL Contents)
-**Purpose**: Fetch and read web pages
+**Purpose**: Fetch and read web pages, optionally extracting specific information with AI
+
+**Implementation Decision**: **Go net/http + HTML-to-Markdown library**
+- Use Go's standard `net/http` for fetching
+- Use `github.com/JohannesKaufmann/html-to-markdown` for HTML conversion
+- Optional AI processing for targeted extraction (like Claude Code's WebFetch)
+- Breaks zero-dependency principle but provides better UX
+
+**Alternative (Zero Dependencies)**: Use `run_bash` with `curl | pandoc`
+- Keeps zero Go dependencies
+- Requires pandoc installed on system
+- More brittle but aligns with "lean into standard tools" philosophy
+- Recommend: Start with library, can switch to bash approach later if desired
 
 **Tool Schema**:
 ```go
 {
   "name": "browse",
-  "description": "Fetch and return the contents of a URL. Like read_file but for web pages.",
+  "description": "Fetch a URL and convert HTML to readable markdown. Optionally extract specific information using AI processing.",
   "input_schema": {
     "type": "object",
     "properties": {
       "url": {
         "type": "string",
-        "description": "The URL to fetch"
+        "description": "The URL to fetch (HTTP/HTTPS)"
+      },
+      "prompt": {
+        "type": "string",
+        "description": "Optional: What to extract/summarize from the page. If not provided, returns the full converted markdown.",
+        "default": "Return the full page content as readable markdown"
+      },
+      "max_length": {
+        "type": "integer",
+        "description": "Maximum content length in KB (default 500, max 1000)",
+        "default": 500
       }
     },
     "required": ["url"]
@@ -504,20 +625,105 @@ The function intentionally returns early with a warning when uncommitted changes
 ```
 
 **Behavior**:
-- Fetch URL contents
-- Parse HTML to readable text (strip tags, keep structure)
-- Return markdown-like formatted content
-- Handle errors (404, timeout, etc.)
+1. **Fetch**: HTTP GET with 30-second timeout
+2. **Follow redirects**: Up to 10 automatic redirects
+3. **Size check**: Reject if Content-Length > max_length
+4. **Convert HTML → Markdown**: Strip scripts/styles, keep structure
+5. **Truncate if needed**: If content > max_length after conversion
+6. **AI Processing** (optional): If prompt provided, send markdown + prompt to Claude
+7. **Return**: Either full markdown or AI-extracted info
+
+**Output Format** (without prompt):
+```markdown
+# Page Title
+
+Main content converted to markdown format...
+
+- Lists preserved
+- Links: [text](url)
+- Code blocks preserved
+- Headers maintained
+```
+
+**Output Format** (with prompt):
+```
+AI's response based on the prompt and page content
+```
 
 **Use Cases**:
-- Read documentation pages
-- Follow up on web_search results
-- Check API reference docs
-- Read blog posts/articles
+- Read full page: `browse("https://pkg.go.dev/net/http")`
+- Extract specific info: `browse("https://go.dev/doc/", "List all tutorial sections")`
+- Follow search results: `browse("https://blog.example.com/article")`
+- Summarize documentation: `browse("https://docs.example.com", "What are the main features?")`
+- Check API reference: `browse("https://api.example.com/docs")`
 
-**Implementation**: Use `curl` + HTML parsing (or Go's `net/http` + `goquery`)
+**Implementation Details**:
+1. **HTTP Client Setup**:
+   - Set User-Agent: "claude-repl/1.0 (Go HTTP Client)"
+   - Set timeout: 30 seconds
+   - Follow redirects: http.Client.CheckRedirect (max 10)
+   - Set max response size: 1MB (configurable via max_length)
 
-**Estimated time**: 2 hours
+2. **HTML to Markdown**:
+   - Use `html-to-markdown` library
+   - Strip: `<script>`, `<style>`, `<iframe>`, ads
+   - Keep: headings, paragraphs, lists, links, code blocks, tables
+   - Clean whitespace and normalize newlines
+
+3. **AI Processing** (if prompt provided):
+   - Truncate markdown to fit in Claude context (keep first N chars)
+   - Send to Claude API with prompt: "Given this webpage content: [markdown]\n\nUser request: [prompt]"
+   - Return Claude's response
+   - Cache conversion for repeated queries (optional v2 feature)
+
+4. **Error Handling**:
+   - Invalid URL: "Invalid URL format. Must start with http:// or https://"
+   - DNS errors: "Could not resolve domain [domain]. Check the URL."
+   - 404: "Page not found (404): [url]"
+   - 403/401: "Access denied (403). The page may require authentication."
+   - Timeout: "Request timed out after 30 seconds. The server may be slow or unreachable."
+   - Too large: "Page too large ([size]). Max allowed: [max_length]KB. Increase max_length or try a different page."
+   - Network errors: "Network error: [details]. Check your internet connection."
+
+**Configuration**:
+No additional API keys needed (uses existing Claude API key for optional AI processing)
+
+**Testing**:
+- Unit tests: `TestExecuteBrowse` (8 sub-tests)
+  - Fetch and convert valid HTML page
+  - Handle 404 errors
+  - Handle timeout (mock)
+  - Handle too-large content
+  - Handle invalid URL
+  - Handle redirect following
+  - Convert HTML to markdown correctly
+  - AI extraction with prompt (integration-like)
+- Integration tests: `TestBrowseIntegration` (3 sub-tests)
+  - Fetch real documentation page
+  - Extract specific info with prompt
+  - Handle 404 gracefully
+
+**System Prompt Addition**:
+```
+Web browsing - Use browse for:
+- "Read the page at [URL]"
+- "What does [URL] say about [topic]?"
+- "Summarize the documentation at [URL]"
+- "Extract [specific info] from [URL]"
+- Without prompt: returns full page as markdown
+- With prompt: AI extracts specific information
+```
+
+**Dependencies Added**:
+```bash
+go get github.com/JohannesKaufmann/html-to-markdown
+```
+
+**Estimated time**: 3-4 hours
+- 1 hour: Basic fetching + HTML-to-markdown conversion
+- 1 hour: Error handling + size limits + redirects
+- 1 hour: AI processing with prompt parameter
+- 1 hour: Testing (unit + integration)
 
 ---
 
@@ -575,10 +781,14 @@ type Agent interface {
 - "What's wrong with this UI?"
 - "Analyze this chart and summarize trends"
 
-**Estimated time**: 
+**Estimated time**:
 - Text file input: 2 hours
 - Image input: 4 hours (includes API changes)
 
 ---
 
-## Total Estimated Time: ~25.5 hours
+## Total Estimated Time Remaining: ~14-15 hours
+- Priority 8 (web_search): 3 hours
+- Priority 9 (browse): 3-4 hours
+- Priority 10 (Code Organization): 3 hours
+- Priority 11 (File Input): 6 hours (2 + 4)

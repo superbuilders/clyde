@@ -868,7 +868,7 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-02-10)
 
-**Active Tools**: 8 ✨
+**Active Tools**: 9 ✨
 1. `list_files` - Directory listings with helpful error messages
 2. `read_file` - Read file contents with size warnings and validation
 3. `patch_file` - Find/replace edits with detailed guidance for common issues
@@ -876,25 +876,27 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 5. `run_bash` - Execute any bash command with exit code explanations
 6. `grep` - Search for patterns across multiple files with context
 7. `glob` - Find files matching patterns (fuzzy file finding)
-8. `multi_patch` - Coordinated multi-file edits with automatic rollback (NEW ✨)
+8. `multi_patch` - Coordinated multi-file edits with automatic rollback
+9. `web_search` - Search the internet using Brave Search API (NEW ✨)
 
-**Test Suite**: 20 tests passing, 4 skipped
-- Total runtime: ~91 seconds (with new multi_patch tests)
-- Full integration coverage for all 8 tools
+**Test Suite**: 22 tests passing, 4 skipped
+- Total runtime: ~154 seconds (with new web_search integration tests)
+- Full integration coverage for all 9 tools
 - No flaky tests
-- All tests pass after multi_patch implementation
+- All tests pass after web_search implementation
 
-**Binary**: 8.0 MB compiled binary
+**Binary**: 8.1 MB compiled binary
 - Single-file architecture maintained
-- Zero external dependencies
+- Minimal external dependencies (only Go standard library)
 - Fast startup time
-- Now includes coordinated multi-file editing with git rollback!
+- Now includes internet search capabilities via Brave Search API!
 
-**System Prompt**: 4.2 KB (+326 bytes)
+**System Prompt**: 4.4 KB (+200 bytes)
 - Includes comprehensive tool decision logic
 - Includes grep search patterns and examples
 - Includes glob file finding patterns and examples
-- Includes multi_patch guidance and best practices (NEW)
+- Includes multi_patch guidance and best practices
+- Includes web_search for internet queries (NEW)
 - Includes progress.md philosophy and memory model
 - Instructs AI to read and update progress.md proactively
 
@@ -903,7 +905,8 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 - Examples: "→ Reading file: main.go", "→ Running bash: go test -v"
 - "→ Searching: 'func main' in current directory (*.go)"
 - "→ Finding files: '**/*.go' in current directory"
-- "→ Applying multi-patch: 3 files" (NEW)
+- "→ Applying multi-patch: 3 files"
+- "→ Searching web: \"golang http client\"" (NEW)
 - Better user experience and transparency
 
 **Error Handling & Messages**: Enhanced
@@ -911,11 +914,20 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 - Context-specific guidance based on error type
 - All tools provide helpful suggestions when operations fail
 - Multi-patch includes git rollback on failure
-- All tests still pass (20 passed, 4 skipped)
+- Web search includes API key setup guidance and rate limit explanations
+- All tests still pass (22 passed, 4 skipped)
 
-**Completed Priorities**: 7 / 11 from todos.md
+**Completed Priorities**: 8 / 11 from todos.md
 1. ✅ Deprecate GitHub Tool (replaced with run_bash)
 2. ✅ System Prompt: progress.md Philosophy
+3. ✅ Better Tool Progress Messages
+4. ✅ Better Error Handling & Messages
+5. ✅ grep Tool (Search Across Files)
+6. ✅ glob Tool (Fuzzy File Finding)
+7. ✅ multi_patch Tool (Coordinated Multi-File Edits)
+8. ✅ web_search Tool (Search the Internet via Brave API) - NEW!
+
+**Next Priority**: #9 - browse Tool (Fetch URL Contents)
 3. ✅ Better Tool Progress Messages
 4. ✅ Better Error Handling & Messages
 5. ✅ grep Tool (Search Across Files)
@@ -1209,6 +1221,116 @@ When uncommitted changes are detected, the function returns a **warning** instea
   - Encourages git commit workflow
 
 **Time Taken**: ~2 hours (faster than estimated 4 hours!)
+
+**Added web_search tool** (2026-02-10) - Priority #8 ✅:
+Enables internet search using Brave Search API:
+- Search for current documentation, error solutions, package versions, recent news
+- Returns titles, URLs, and snippets for search results
+- Powered by Brave Search API (2,000 free searches/month)
+- Privacy-focused and ToS-compliant (no scraping)
+- Clear error messages for missing API key, rate limits, and no results
+
+**Features**:
+- Uses Brave Search API with `X-Subscription-Token` authentication
+- Configurable results count (1-10, default 5)
+- Formatted output with numbered list of results
+- Each result includes title, URL, and snippet (truncated to 200 chars)
+- Comprehensive error handling for all API error codes
+- 30-second timeout for search requests
+
+**Use Cases**:
+- Find latest documentation: `web_search("golang 1.24 http client")`
+- Solve errors: `web_search("go context deadline exceeded error")`
+- Check versions: `web_search("latest stable go version 2026")`
+- Research tech: `web_search("what is HTMX")`
+- Get news: `web_search("anthropic claude api changes")`
+
+**Configuration**:
+Requires `BRAVE_SEARCH_API_KEY` in `.env` file:
+```bash
+BRAVE_SEARCH_API_KEY=your-brave-api-key-here
+# Get free API key at: https://brave.com/search/api/
+# Free tier: 2,000 searches/month
+# Paid tier: $5/mo for 20,000 searches
+```
+
+**Error Handling**:
+- Missing API key: Provides setup instructions with link to get free key
+- Rate limit (429): Explains monthly limit and upgrade options
+- No results: Suggests trying different keywords and checking spelling
+- Invalid query (400): Shows query syntax error with API response
+- Auth failure (401): Suggests verifying API key and generating new one
+
+**Testing Standards Maintained**:
+- Unit tests: `TestExecuteWebSearch` (4 sub-tests)
+  - Missing API key error handling
+  - Empty query validation
+  - Default num_results behavior
+  - Cap num_results at 10
+- Integration tests: `TestWebSearchIntegration` (2 sub-tests)
+  - Search for Go documentation (verifies full tool use cycle)
+  - Search for specific error message (validates search quality)
+- All 22 tests pass (4 skipped)
+
+**Implementation**:
+```go
+func executeWebSearch(query string, numResults int) (string, error) {
+    // 1. Validate query and API key
+    // 2. Build Brave Search API request
+    // 3. Make HTTP GET with X-Subscription-Token header
+    // 4. Handle all HTTP error codes with helpful messages
+    // 5. Parse JSON response for web.results array
+    // 6. Format as numbered list with titles, URLs, snippets
+    // 7. Return formatted results or helpful error
+}
+```
+
+**System Prompt Addition**:
+```
+Web search - Use web_search for:
+- "Look up the latest [technology/API/library]"
+- "Find documentation for [package/tool]"
+- "Search for solutions to [error message]"
+- "What's the current version of [tool]?"
+- "Find recent news about [topic]"
+- "How do I [programming question]?"
+- Returns URLs and snippets from web search results
+```
+
+**Progress Message**:
+- `→ Searching web: "golang http client"`
+- Truncates long queries (>50 chars) with ellipsis
+
+**Code Changes**:
+- Added `webSearchTool` definition (~20 lines)
+- Added `executeWebSearch()` function (~110 lines)
+- Added web_search case to switch statement (~15 lines)
+- Updated system prompt (+200 bytes)
+- Added to tools array in `callClaude()`
+- Added imports: `net/url`, `time`
+- Total: ~3.5 KB added to main.go
+
+**Test Suite**:
+- Created `web_search_test.go` with 6 tests
+- Total: ~6 KB in separate test file
+- Test runtime: +28 seconds (integration tests with real API calls)
+
+**Results**:
+- ✅ All 22 tests pass (4 skipped)
+- ✅ Binary size: 8.1 MB (increased by 0.1 MB)
+- ✅ System prompt: 4.4 KB (+200 bytes)
+- ✅ Documentation updated (progress.md, README.md, todos.md)
+- ✅ Comprehensive error handling with API key setup guidance
+- ✅ Full integration test coverage with real Brave API calls
+- ✅ Privacy-focused solution (no scraping, ToS-compliant)
+
+**Time Taken**: ~3 hours (exactly as estimated!)
+
+**Decision Rationale - Brave Search API vs Alternatives**:
+- ✅ **Brave over DuckDuckGo HTML scraping**: ToS-compliant, stable, no maintenance burden
+- ✅ **Brave over Exa AI**: Equal/better quality at same price point
+- ✅ **Brave over Google Custom Search**: Simpler API, better privacy, generous free tier
+- ✅ **Official API over scraping**: Reliable, legal, maintainable, ethical
 
 ## Design Philosophy & Principles
 

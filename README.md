@@ -66,6 +66,10 @@ You: Rename function 'oldName' to 'newName' across all Go files
 → Applying multi-patch: 3 files
 Claude: [Coordinates changes across multiple files with rollback on failure]
 
+You: Search for the latest Go HTTP client tutorial
+→ Searching web: "golang http client tutorial"
+Claude: [Returns search results with titles, URLs, and snippets]
+
 You: exit
 Goodbye!
 ```
@@ -75,12 +79,16 @@ Goodbye!
 - Go 1.24+
 - GitHub CLI (`gh`) installed and authenticated
 - Anthropic API key in `.env` file
+- Brave Search API key in `.env` file (optional, for web_search tool)
 
 ## Environment Setup
 
 Create a `.env` file:
 ```bash
 TS_AGENT_API_KEY=your-anthropic-api-key
+BRAVE_SEARCH_API_KEY=your-brave-search-api-key  # Optional: for web_search
+# Get free API key at: https://brave.com/search/api/
+# Free tier: 2,000 searches/month
 ```
 
 Or set the ENV_PATH variable to point to an existing .env file.
@@ -93,7 +101,7 @@ go test -v
 
 ## Available Tools
 
-The REPL includes eight integrated tools:
+The REPL includes nine integrated tools:
 
 1. **list_files**: List files and directories in any path
 2. **read_file**: Read and display file contents
@@ -103,6 +111,7 @@ The REPL includes eight integrated tools:
 6. **grep**: Search for patterns across multiple files with context
 7. **glob**: Find files matching patterns (fuzzy file finding)
 8. **multi_patch**: Apply coordinated changes to multiple files with automatic rollback
+9. **web_search**: Search the internet using Brave Search API
 
 ## Documentation
 
