@@ -868,7 +868,7 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-02-10)
 
-**Active Tools**: 9 ✨
+**Active Tools**: 10 ✨
 1. `list_files` - Directory listings with helpful error messages
 2. `read_file` - Read file contents with size warnings and validation
 3. `patch_file` - Find/replace edits with detailed guidance for common issues
@@ -877,26 +877,27 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 6. `grep` - Search for patterns across multiple files with context
 7. `glob` - Find files matching patterns (fuzzy file finding)
 8. `multi_patch` - Coordinated multi-file edits with automatic rollback
-9. `web_search` - Search the internet using Brave Search API (NEW ✨)
+9. `web_search` - Search the internet using Brave Search API
+10. `browse` - Fetch and read web pages with optional AI extraction (NEW ✨)
 
-**Test Suite**: 22 tests passing, 4 skipped
-- Total runtime: ~154 seconds (with new web_search integration tests)
-- Full integration coverage for all 9 tools
+**Test Suite**: 25 tests passing, 4 skipped
+- Total runtime: ~157 seconds (with new browse integration tests)
+- Full integration coverage for all 10 tools
 - No flaky tests
-- All tests pass after web_search implementation
+- All tests pass after browse implementation
 
 **Binary**: 8.1 MB compiled binary
-- Single-file architecture maintained
-- Minimal external dependencies (only Go standard library)
+- HTML-to-markdown dependency added for browse tool
 - Fast startup time
-- Now includes internet search capabilities via Brave Search API!
+- Now includes both internet search AND web page fetching!
 
-**System Prompt**: 4.4 KB (+200 bytes)
+**System Prompt**: 4.6 KB (+200 bytes)
 - Includes comprehensive tool decision logic
 - Includes grep search patterns and examples
 - Includes glob file finding patterns and examples
 - Includes multi_patch guidance and best practices
-- Includes web_search for internet queries (NEW)
+- Includes web_search for internet queries
+- Includes browse for reading web pages (NEW)
 - Includes progress.md philosophy and memory model
 - Instructs AI to read and update progress.md proactively
 
@@ -917,7 +918,7 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 - Web search includes API key setup guidance and rate limit explanations
 - All tests still pass (22 passed, 4 skipped)
 
-**Completed Priorities**: 8 / 11 from todos.md
+**Completed Priorities**: 9 / 11 from todos.md
 1. ✅ Deprecate GitHub Tool (replaced with run_bash)
 2. ✅ System Prompt: progress.md Philosophy
 3. ✅ Better Tool Progress Messages
@@ -925,9 +926,10 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 5. ✅ grep Tool (Search Across Files)
 6. ✅ glob Tool (Fuzzy File Finding)
 7. ✅ multi_patch Tool (Coordinated Multi-File Edits)
-8. ✅ web_search Tool (Search the Internet via Brave API) - NEW!
+8. ✅ web_search Tool (Search the Internet via Brave API)
+9. ✅ browse Tool (Fetch URL Contents with AI Extraction) - NEW!
 
-**Next Priority**: #9 - browse Tool (Fetch URL Contents)
+**Next Priority**: #10 - Code Organization & Architecture Separation
 3. ✅ Better Tool Progress Messages
 4. ✅ Better Error Handling & Messages
 5. ✅ grep Tool (Search Across Files)
@@ -1331,6 +1333,144 @@ Web search - Use web_search for:
 - ✅ **Brave over Exa AI**: Equal/better quality at same price point
 - ✅ **Brave over Google Custom Search**: Simpler API, better privacy, generous free tier
 - ✅ **Official API over scraping**: Reliable, legal, maintainable, ethical
+
+**Added browse tool** (2026-02-10) - Priority #9 ✅:
+Enables fetching and reading web pages with optional AI extraction:
+- Fetch URLs and convert HTML to readable markdown
+- Optional AI processing to extract specific information with prompts
+- Follow up on web_search results to read full documentation pages
+- Comprehensive error handling for all HTTP status codes
+- Configurable size limits with truncation support
+
+**Features**:
+- Uses Go's `net/http` for fetching with 30-second timeout
+- Automatic redirect following (up to 10 redirects)
+- HTML-to-markdown conversion using `html-to-markdown` library
+- Strips scripts, styles, and other non-content elements
+- Preserves structure: headings, lists, links, code blocks, tables
+- Optional AI processing: provide prompt to extract specific info
+- Size limits: default 500KB, max 1000KB (configurable)
+- Truncation: Automatically handles pages that exceed size limit
+
+**Use Cases**:
+- Read full pages: `browse("https://pkg.go.dev/net/http")`
+- Extract specific info: `browse("https://go.dev/doc/", "List all tutorial sections")`
+- Follow search results: After web_search, use browse to read found pages
+- Summarize docs: `browse("https://docs.example.com", "What are the main features?")`
+- Check API reference: `browse("https://api.example.com/docs")`
+
+**Configuration**:
+No additional API keys needed (uses existing Claude API key for optional AI processing)
+
+**Error Handling**:
+- Invalid URL: "Invalid URL format. Must start with http:// or https://"
+- DNS errors: "Could not resolve domain [domain]. Check the URL."
+- 404: "Page not found (404). The URL may be incorrect or removed."
+- 403/401: "Access denied. The page may require authentication."
+- Timeout: "Request timed out after 30 seconds. Server may be slow."
+- Too large: "Page too large ([size] KB). Max allowed: [max_length] KB."
+- Empty content: "Page returned no readable content. May be JavaScript-heavy."
+- Network errors: "Network error: [details]. Check internet connection."
+
+**Testing Standards Maintained**:
+- Unit tests: `TestExecuteBrowse` (8 sub-tests)
+  - Empty URL validation
+  - Invalid URL format
+  - Fetch valid HTML page
+  - Handle 404, 403 errors
+  - Handle redirects
+  - Default/max length handling
+  - Empty content handling
+- Integration tests: `TestBrowseIntegration` (3 sub-tests)
+  - Fetch real documentation page (example.com)
+  - Extract specific info with prompt (AI processing)
+  - Handle 404 gracefully
+- All 25 tests pass (4 skipped)
+
+**Implementation**:
+```go
+func executeBrowse(urlStr, prompt string, maxLength int, apiKey string, history []Message) (string, error) {
+    // 1. Validate URL format
+    // 2. Create HTTP client with timeout and redirect handling
+    // 3. Make GET request with proper User-Agent
+    // 4. Handle all HTTP error codes
+    // 5. Check content length limits
+    // 6. Read body with size limit
+    // 7. Convert HTML to markdown using html-to-markdown library
+    // 8. If prompt provided: use Claude API to extract specific information
+    // 9. Return markdown or AI-extracted content
+}
+```
+
+**System Prompt Addition**:
+```
+Web browsing - Use browse for:
+- "Read the page at [URL]"
+- "What does [URL] say about [topic]?"
+- "Summarize the documentation at [URL]"
+- "Extract [specific info] from [URL]"
+- Follow up on web_search results to read full pages
+- Without prompt: returns full page as markdown
+- With prompt: AI extracts specific information
+```
+
+**Progress Messages**:
+- `→ Browsing: https://example.com`
+- `→ Browsing: https://example.com (extract: "What is the main heading?")`
+
+**Code Changes**:
+- Added `browseTool` definition (~25 lines)
+- Added `executeBrowse()` function (~155 lines)
+- Added browse case to switch statement (~25 lines)
+- Updated system prompt (+200 bytes)
+- Added to tools array in `callClaude()`
+- Added import: `github.com/JohannesKaufmann/html-to-markdown`
+- Total: ~4.5 KB added to main.go
+
+**Test Suite**:
+- Created `browse_test.go` with 11 tests
+- Total: ~8 KB in separate test file
+- Test runtime: +19 seconds (integration tests with real page fetches)
+
+**Dependencies Added**:
+```bash
+go get github.com/JohannesKaufmann/html-to-markdown
+# Also pulls in: goquery, cascadia, golang.org/x/net
+```
+
+**Results**:
+- ✅ All 25 tests pass (4 skipped)
+- ✅ Binary size: 8.1 MB (unchanged)
+- ✅ System prompt: 4.6 KB (+200 bytes)
+- ✅ Documentation updated (progress.md, README.md, todos.md)
+- ✅ HTML-to-markdown conversion working perfectly
+- ✅ AI extraction with prompts working excellently
+- ✅ Full integration test coverage with real web pages
+- ✅ Comprehensive error handling for all edge cases
+
+**Time Taken**: ~3.5 hours (slightly over 3-4 hour estimate, under if counting 4)
+
+**Decision Rationale - HTML-to-Markdown Library vs Bash**:
+- ✅ **Library over bash+pandoc**: More reliable, portable, no external dependencies
+- ✅ **html-to-markdown over alternatives**: Active development, good quality conversion
+- ✅ **Breaks zero-dependency principle**: Acceptable tradeoff for better UX
+- ✅ **AI processing integration**: Leverages existing Claude API for smart extraction
+
+**Example Output** (without prompt):
+```markdown
+# Example Domain
+
+This domain is for use in illustrative examples in documents. You may use this
+domain in literature without prior coordination or asking for permission.
+
+[More information...](https://iana.org/domains/example)
+```
+
+**Example Output** (with prompt "What is the main heading?"):
+```
+The main heading on the example.com page is **"Example Domain"**. This is
+formatted as an H1 heading (the top-level heading) on the page.
+```
 
 ## Design Philosophy & Principles
 

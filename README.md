@@ -70,6 +70,10 @@ You: Search for the latest Go HTTP client tutorial
 → Searching web: "golang http client tutorial"
 Claude: [Returns search results with titles, URLs, and snippets]
 
+You: Browse https://pkg.go.dev/net/http and tell me about the Client type
+→ Browsing: https://pkg.go.dev/net/http
+Claude: [Fetches page, converts to markdown, and explains the Client type]
+
 You: exit
 Goodbye!
 ```
@@ -101,7 +105,7 @@ go test -v
 
 ## Available Tools
 
-The REPL includes nine integrated tools:
+The REPL includes ten integrated tools:
 
 1. **list_files**: List files and directories in any path
 2. **read_file**: Read and display file contents
@@ -112,6 +116,7 @@ The REPL includes nine integrated tools:
 7. **glob**: Find files matching patterns (fuzzy file finding)
 8. **multi_patch**: Apply coordinated changes to multiple files with automatic rollback
 9. **web_search**: Search the internet using Brave Search API
+10. **browse**: Fetch and read web pages (with optional AI extraction)
 
 ## Documentation
 
