@@ -21,7 +21,7 @@ const (
 1. github_query: For GitHub-related questions (repos, PRs, issues, user profile, etc.)
 2. list_files: For listing files and directories in a given path
 3. read_file: For reading the contents of a file
-4. edit_file: For editing/writing files
+4. patch_file: For editing files using find/replace (patch-based approach)
 
 IMPORTANT DECIDER: Before responding, determine if you need to use a tool:
 
@@ -41,19 +41,17 @@ File reading questions - Use read_file for:
 - "What's in X file?"
 - "Read X file"
 
-File editing questions - Use edit_file for:
-- "Create a file with X content"
-- "Write to X file"
+File editing questions - Use patch_file for:
+- "Add X to the file"
+- "Change X to Y in the file"
+- "Update the function to do Z"
+- "Fix the bug by changing X"
 
-CRITICAL: edit_file REQUIRES the 'content' parameter with the COMPLETE file content.
-The tool replaces the entire file. To modify existing files:
-1. First use read_file to get the current content
-2. Modify the content in your response
-3. Use edit_file with the COMPLETE modified content (never omit the content parameter!)
-
-WARNING: edit_file is not suitable for complex code modifications. For adding features
-to source files, it's better to explain the changes to the user rather than attempting
-to edit large code files.
+CRITICAL: For patch_file, you MUST:
+1. First use read_file to see current content
+2. Identify a unique string to replace (include enough surrounding context)
+3. Use patch_file with exact old_text and new_text
+4. The old_text must be unique in the file (will error if it appears multiple times)
 
 Always use the appropriate tool first, then provide a natural response based on the results.`
 )
@@ -143,22 +141,26 @@ var readFileTool = Tool{
 	},
 }
 
-var editFileTool = Tool{
-	Name:        "edit_file",
-	Description: "Write complete file content to a path. IMPORTANT: This completely replaces the file - you MUST provide the ENTIRE new file content, not just changes. To modify an existing file: (1) use read_file to get current content, (2) modify it, (3) provide the COMPLETE modified content to this tool.",
+var patchFileTool = Tool{
+	Name:        "patch_file",
+	Description: "Edit a file by finding and replacing text. This is a patch-based approach that only requires the specific text to change, not the entire file. To use: (1) use read_file to see current content, (2) identify a unique string to replace, (3) provide the old text and new text. The old_text must match exactly and be unique in the file.",
 	InputSchema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"path": map[string]interface{}{
 				"type":        "string",
-				"description": "The file path to write to. Can be absolute or relative to the current directory.",
+				"description": "The file path to edit. Can be absolute or relative to the current directory.",
 			},
-			"content": map[string]interface{}{
+			"old_text": map[string]interface{}{
 				"type":        "string",
-				"description": "REQUIRED: The complete new file content. This MUST contain the ENTIRE file content as this tool replaces the whole file. Never omit this parameter.",
+				"description": "The exact text to find and replace. This must be unique in the file. Include enough context to make it unique (e.g., surrounding lines).",
+			},
+			"new_text": map[string]interface{}{
+				"type":        "string",
+				"description": "The new text to replace old_text with. Can be empty string to delete the old text.",
 			},
 		},
-		"required": []string{"path", "content"},
+		"required": []string{"path", "old_text", "new_text"},
 	},
 }
 
@@ -194,14 +196,44 @@ func executeReadFile(path string) (string, error) {
 	return string(content), nil
 }
 
-func executeEditFile(path, content string) (string, error) {
+func executePatchFile(path, oldText, newText string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("file path is required")
 	}
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if oldText == "" {
+		return "", fmt.Errorf("old_text is required (cannot be empty)")
+	}
+
+	// Read the current file content
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+
+	fileContent := string(content)
+
+	// Check if old_text exists in the file
+	if !strings.Contains(fileContent, oldText) {
+		return "", fmt.Errorf("old_text not found in file. Make sure it matches exactly including whitespace and newlines")
+	}
+
+	// Count occurrences to ensure it's unique
+	occurrences := strings.Count(fileContent, oldText)
+	if occurrences > 1 {
+		return "", fmt.Errorf("old_text appears %d times in the file. It must be unique. Add more context to make it unique", occurrences)
+	}
+
+	// Replace the text
+	newContent := strings.Replace(fileContent, oldText, newText, 1)
+
+	// Write the modified content back
+	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
-	return fmt.Sprintf("Successfully wrote %d bytes to %s", len(content), path), nil
+
+	changeSize := len(newText) - len(oldText)
+	return fmt.Sprintf("Successfully patched %s: replaced %d bytes with %d bytes (change: %+d bytes)",
+		path, len(oldText), len(newText), changeSize), nil
 }
 
 func callClaude(apiKey string, messages []Message) (*Response, error) {
@@ -210,7 +242,7 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 		MaxTokens: maxTokens,
 		System:    systemPrompt,
 		Messages:  messages,
-		Tools:     []Tool{githubTool, listFilesTool, readFileTool, editFileTool},
+		Tools:     []Tool{githubTool, listFilesTool, readFileTool, patchFileTool},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -368,19 +400,22 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 					output, err = executeReadFile(path)
 				}
 
-			case "edit_file":
+			case "patch_file":
 				path, pathOk := toolBlock.Input["path"].(string)
-				content, contentOk := toolBlock.Input["content"].(string)
+				oldText, oldTextOk := toolBlock.Input["old_text"].(string)
+				newText, newTextOk := toolBlock.Input["new_text"].(string)
 
 				if !pathOk || path == "" {
-					err = fmt.Errorf("edit_file requires non-empty 'path' parameter")
-				} else if !contentOk {
-					err = fmt.Errorf("edit_file requires 'content' parameter (content was: %+v)", toolBlock.Input["content"])
+					err = fmt.Errorf("patch_file requires non-empty 'path' parameter")
+				} else if !oldTextOk {
+					err = fmt.Errorf("patch_file requires 'old_text' parameter")
+				} else if !newTextOk {
+					err = fmt.Errorf("patch_file requires 'new_text' parameter")
 				} else {
-					// Allow empty content only if explicitly provided as empty string
-					displayMessage = "→ Editing file..."
-					fmt.Fprintf(os.Stderr, "[DEBUG] Writing %d bytes to %s\n", len(content), path)
-					output, err = executeEditFile(path, content)
+					displayMessage = "→ Patching file..."
+					fmt.Fprintf(os.Stderr, "[DEBUG] Patching %s: replacing %d bytes with %d bytes\n",
+						path, len(oldText), len(newText))
+					output, err = executePatchFile(path, oldText, newText)
 				}
 
 			default:

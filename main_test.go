@@ -147,61 +147,88 @@ func TestExecuteReadFile(t *testing.T) {
 	}
 }
 
-func TestExecuteEditFile(t *testing.T) {
+func TestExecutePatchFile(t *testing.T) {
+	// Create a test file
+	testFile := "test_patch.txt"
+	initialContent := `Line 1: Hello World
+Line 2: This is a test
+Line 3: End of file`
+	if err := os.WriteFile(testFile, []byte(initialContent), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove(testFile)
+
 	tests := []struct {
 		name        string
 		path        string
-		content     string
+		oldText     string
+		newText     string
 		expectError bool
+		errorMsg    string
 		verify      bool
+		expectedContent string
 	}{
 		{
-			name:        "Create new file",
-			path:        "test_edit_new.txt",
-			content:     "New file content",
+			name:        "Replace unique text",
+			path:        testFile,
+			oldText:     "This is a test",
+			newText:     "This is MODIFIED",
 			expectError: false,
 			verify:      true,
+			expectedContent: `Line 1: Hello World
+Line 2: This is MODIFIED
+Line 3: End of file`,
 		},
 		{
-			name:        "Overwrite existing file",
-			path:        "test_edit_existing.txt",
-			content:     "Updated content",
-			expectError: false,
-			verify:      true,
-		},
-		{
-			name:        "Empty path",
-			path:        "",
-			content:     "Some content",
+			name:        "Old text not found",
+			path:        testFile,
+			oldText:     "Nonexistent text",
+			newText:     "Something",
 			expectError: true,
-			verify:      false,
+			errorMsg:    "not found",
 		},
 		{
-			name:        "Empty content is valid",
-			path:        "test_edit_empty.txt",
-			content:     "",
+			name:        "Non-unique old text",
+			path:        testFile,
+			oldText:     "Line",
+			newText:     "Row",
+			expectError: true,
+			errorMsg:    "appears",
+		},
+		{
+			name:        "Empty old text",
+			path:        testFile,
+			oldText:     "",
+			newText:     "Something",
+			expectError: true,
+			errorMsg:    "cannot be empty",
+		},
+		{
+			name:        "Delete text (empty new_text)",
+			path:        testFile,
+			oldText:     "Line 2: This is a test\n",
+			newText:     "",
 			expectError: false,
 			verify:      true,
+			expectedContent: `Line 1: Hello World
+Line 3: End of file`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Clean up before and after test
-			defer os.Remove(tt.path)
-
-			// For overwrite test, create a file first
-			if tt.name == "Overwrite existing file" {
-				if err := os.WriteFile(tt.path, []byte("Original content"), 0644); err != nil {
-					t.Fatalf("Failed to create initial file: %v", err)
-				}
+			// Reset file content before each test
+			if err := os.WriteFile(testFile, []byte(initialContent), 0644); err != nil {
+				t.Fatalf("Failed to reset file: %v", err)
 			}
 
-			output, err := executeEditFile(tt.path, tt.content)
+			output, err := executePatchFile(tt.path, tt.oldText, tt.newText)
 
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("Expected error but got none. Output: %s", output)
+				} else if tt.errorMsg != "" && !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Expected error to contain '%s', got: %v", tt.errorMsg, err)
 				}
 			} else {
 				if err != nil {
@@ -209,17 +236,20 @@ func TestExecuteEditFile(t *testing.T) {
 				}
 
 				if tt.verify {
-					// Verify the file was written correctly
 					content, readErr := os.ReadFile(tt.path)
 					if readErr != nil {
-						t.Errorf("Failed to read written file: %v", readErr)
-					} else if string(content) != tt.content {
-						t.Errorf("File content mismatch. Expected '%s', got '%s'", tt.content, string(content))
+						t.Errorf("Failed to read patched file: %v", readErr)
+					} else if string(content) != tt.expectedContent {
+						t.Errorf("File content mismatch.\nExpected:\n%s\n\nGot:\n%s", tt.expectedContent, string(content))
 					}
 				}
 			}
 		})
 	}
+}
+
+func TestExecuteEditFile(t *testing.T) {
+	t.Skip("DEPRECATED: edit_file tool replaced with patch_file")
 }
 
 func TestCallClaude(t *testing.T) {
@@ -614,6 +644,8 @@ func TestReadFileIntegration(t *testing.T) {
 }
 
 func TestEditFileIntegration(t *testing.T) {
+	t.Skip("DEPRECATED: edit_file tool replaced with patch_file")
+
 	envPath := os.Getenv("ENV_PATH")
 	if envPath == "" {
 		if _, err := os.Stat(".env"); err == nil {
