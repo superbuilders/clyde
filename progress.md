@@ -433,13 +433,14 @@ PASS - All tests completed successfully (47.47s total)
 ```
 
 ## Files Created
-1. `main.go` (18+ KB) - Main application with 6 tools
-2. `main_test.go` (35+ KB) - Comprehensive test suite with 17 tests
+1. `main.go` (16.2 KB) - Main application with 5 tools (down from 6 after github_query deprecation)
+2. `main_test.go` (41+ KB) - Comprehensive test suite with 13 active tests
 3. `go.mod` - Go module definition
-4. `claude-repl` - Compiled binary (8.4 MB)
+4. `claude-repl` - Compiled binary (8.0 MB)
 5. `.env` - API key configuration
 6. `PROGRESS.md` - This documentation
 7. `README.md` - Project readme
+8. `todos.md` - Priority task list
 
 ## Key Design Decisions
 
@@ -544,6 +545,41 @@ NEW: run_bash("gh api user")
 - Updated `TestGitHubQueryIntegration` to expect `run_bash` tool usage with `gh` commands
 
 All tests pass: 13 tests passed, 3 skipped (deprecated edit_file tests), 47.47s total.
+
+**Impact & Results**:
+- **Code reduction**: Net -56 lines (197 removed, 141 added)
+- **Simplified architecture**: 5 tools instead of 6
+- **Improved consistency**: All CLI tools now use run_bash
+- **Better flexibility**: Can use any gh command without pre-definition
+- **Test coverage maintained**: All 13 active tests pass
+- **Binary size**: 8.0 MB (optimized)
+- **Zero breaking changes**: Migration path is straightforward
+
+**Commit**: `844ac68` - Deprecate github_query tool in favor of run_bash
+
+## Current Status (2026-02-10)
+
+**Active Tools**: 5
+1. `list_files` - Directory listings
+2. `read_file` - Read file contents
+3. `patch_file` - Find/replace edits
+4. `write_file` - Create/replace files
+5. `run_bash` - Execute any bash command (including gh, git, npm, go test, etc.)
+
+**Test Suite**: 13 tests passing, 3 skipped
+- Total runtime: ~47-55 seconds
+- Full integration coverage for all tools
+- No flaky tests
+
+**Binary**: 8.0 MB compiled binary
+- Single-file architecture maintained
+- Zero external dependencies
+- Fast startup time
+
+**Next Priority**: #2 - Better Tool Progress Messages
+- Show more context in progress messages
+- Example: "→ Reading file: main.go" instead of just "→ Reading file..."
+- Estimated time: 30 minutes
 
 ## Feature Additions
 
