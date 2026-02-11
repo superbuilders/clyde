@@ -24,6 +24,7 @@ const (
 4. write_file: For creating new files or completely replacing file contents
 5. run_bash: For executing arbitrary bash commands (including gh, git, etc.)
 6. grep: For searching patterns across multiple files with context
+7. glob: For finding files matching patterns (fuzzy file finding)
 
 IMPORTANT DECIDER: Before responding, determine if you need to use a tool:
 
@@ -63,6 +64,13 @@ Search questions - Use grep for:
 - "Find error messages in logs"
 - "Locate all files containing X"
 - Can filter by file pattern: grep("TODO", ".", "*.go")
+
+File finding questions - Use glob for:
+- "Find all test files"
+- "Where are all the Go files?"
+- "Find all markdown files recursively"
+- "Locate main.go anywhere in the project"
+- Pattern examples: glob("**/*.go"), glob("*_test.go")
 
 Bash execution - Use run_bash for:
 - "Run X command"
@@ -258,6 +266,25 @@ var grepTool = Tool{
 			"file_pattern": map[string]interface{}{
 				"type":        "string",
 				"description": "Optional: filter by file pattern using glob syntax. Example: '*.go', '*.md', 'test_*.py'",
+			},
+		},
+		"required": []string{"pattern"},
+	},
+}
+
+var globTool = Tool{
+	Name:        "glob",
+	Description: "Find files matching patterns. More flexible than list_files for navigating projects. Returns file paths that match the pattern. Useful for finding specific files in large codebases.",
+	InputSchema: map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"pattern": map[string]interface{}{
+				"type":        "string",
+				"description": "File pattern to match. Examples: '**/*.go' (all Go files), '*_test.go' (test files), '*.md' (markdown files), '**/main.go' (find main.go anywhere)",
+			},
+			"path": map[string]interface{}{
+				"type":        "string",
+				"description": "Directory to search. Defaults to current directory if not specified.",
 			},
 		},
 		"required": []string{"pattern"},
@@ -502,6 +529,79 @@ func executeWriteFile(path, content string) (string, error) {
 	return fmt.Sprintf("Successfully created %s (%d bytes written)", path, len(content)), nil
 }
 
+func executeGlob(pattern, path string) (string, error) {
+	if pattern == "" {
+		return "", fmt.Errorf("pattern is required. Example: glob(\"**/*.go\") or glob(\"*_test.go\", \"src\")")
+	}
+
+	// Default to current directory if no path specified
+	if path == "" {
+		path = "."
+	}
+
+	// Check if search path exists
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return "", fmt.Errorf("directory '%s' does not exist. Use '.' for current directory or provide a valid path", path)
+	}
+
+	// Use find command with -name or -path depending on pattern
+	// ** patterns need -path, simple patterns need -name
+	var args []string
+	if strings.Contains(pattern, "**") {
+		// Recursive pattern - use -path
+		// Convert ** glob pattern to find -path pattern
+		// Example: **/*.go -> */*.go (find already recurses by default)
+		findPattern := strings.ReplaceAll(pattern, "**/", "")
+		if !strings.HasPrefix(findPattern, "*") {
+			findPattern = "*/" + findPattern
+		}
+		args = []string{path, "-path", findPattern, "-type", "f"}
+	} else {
+		// Simple pattern - use -name
+		args = []string{path, "-name", pattern, "-type", "f"}
+	}
+
+	cmd := exec.Command("find", args...)
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		// Check for permission errors
+		if strings.Contains(string(output), "Permission denied") {
+			return "", fmt.Errorf("permission denied searching in '%s'. Some directories may not be accessible", path)
+		}
+		return "", fmt.Errorf("find command failed: %s\nOutput: %s", err, string(output))
+	}
+
+	// Process results
+	if len(output) == 0 || strings.TrimSpace(string(output)) == "" {
+		suggestions := []string{
+			fmt.Sprintf("No files found matching pattern '%s' in %s", pattern, path),
+			"",
+			"Suggestions:",
+			"  - Check if the pattern is correct",
+			"  - Try a broader pattern (e.g., '*.go' instead of 'main.go')",
+			"  - Use '**/*.go' to search recursively",
+			"  - Verify you're searching in the right directory",
+			"",
+			"Pattern examples:",
+			"  - '*.go' - all Go files in directory",
+			"  - '**/*.go' - all Go files recursively",
+			"  - '*_test.go' - all test files in directory",
+			"  - '**/main.go' - find main.go anywhere",
+		}
+		return strings.Join(suggestions, "\n"), nil
+	}
+
+	// Count files and format output
+	files := strings.Split(strings.TrimSpace(string(output)), "\n")
+	fileCount := len(files)
+
+	// Build result with summary
+	result := fmt.Sprintf("Found %d files matching '%s':\n\n%s", fileCount, pattern, string(output))
+	
+	return result, nil
+}
+
 func executeGrep(pattern, path, filePattern string) (string, error) {
 	if pattern == "" {
 		return "", fmt.Errorf("pattern is required. Example: grep(\"func main\") or grep(\"TODO\", \"src\", \"*.go\")")
@@ -602,7 +702,7 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 		MaxTokens: maxTokens,
 		System:    systemPrompt,
 		Messages:  messages,
-		Tools:     []Tool{listFilesTool, readFileTool, patchFileTool, writeFileTool, runBashTool, grepTool},
+		Tools:     []Tool{listFilesTool, readFileTool, patchFileTool, writeFileTool, runBashTool, grepTool, globTool},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -842,6 +942,25 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 						displayMessage = fmt.Sprintf("→ Searching: '%s' in %s", pattern, searchPath)
 					}
 					output, err = executeGrep(pattern, path, filePattern)
+				}
+
+			case "glob":
+				pattern, patternOk := toolBlock.Input["pattern"].(string)
+				path := ""
+				
+				if pathVal, ok := toolBlock.Input["path"]; ok && pathVal != nil {
+					path, _ = pathVal.(string)
+				}
+
+				if !patternOk || pattern == "" {
+					err = fmt.Errorf("glob requires a 'pattern' parameter. Example: {\"pattern\": \"**/*.go\"}")
+				} else {
+					searchPath := path
+					if searchPath == "" || searchPath == "." {
+						searchPath = "current directory"
+					}
+					displayMessage = fmt.Sprintf("→ Finding files: '%s' in %s", pattern, searchPath)
+					output, err = executeGlob(pattern, path)
 				}
 
 			default:

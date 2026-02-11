@@ -1873,6 +1873,370 @@ TODO: fix bug Y`
 	})
 }
 
+func TestExecuteGlob(t *testing.T) {
+	// Create test directory structure for glob testing
+	testDir := "test_glob_dir"
+	if err := os.MkdirAll(testDir+"/subdir", 0755); err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+	defer os.RemoveAll(testDir)
+
+	// Create test files
+	testFiles := []string{
+		testDir + "/test1.go",
+		testDir + "/test2.go",
+		testDir + "/test_helper.go",
+		testDir + "/main_test.go",
+		testDir + "/README.md",
+		testDir + "/subdir/nested.go",
+		testDir + "/subdir/doc.md",
+	}
+
+	for _, file := range testFiles {
+		if err := os.WriteFile(file, []byte("test content"), 0644); err != nil {
+			t.Fatalf("Failed to create test file %s: %v", file, err)
+		}
+	}
+
+	tests := []struct {
+		name        string
+		pattern     string
+		path        string
+		expectError bool
+		checkOutput bool
+		shouldFind  bool
+		minFiles    int
+	}{
+		{
+			name:        "Find all Go files (simple pattern)",
+			pattern:     "*.go",
+			path:        testDir,
+			expectError: false,
+			checkOutput: true,
+			shouldFind:  true,
+			minFiles:    4, // 4 Go files in root dir
+		},
+		{
+			name:        "Find all test files",
+			pattern:     "*_test.go",
+			path:        testDir,
+			expectError: false,
+			checkOutput: true,
+			shouldFind:  true,
+			minFiles:    1,
+		},
+		{
+			name:        "Find all Go files recursively",
+			pattern:     "**/*.go",
+			path:        testDir,
+			expectError: false,
+			checkOutput: true,
+			shouldFind:  true,
+			minFiles:    5, // 4 in root + 1 in subdir
+		},
+		{
+			name:        "Find all markdown files recursively",
+			pattern:     "**/*.md",
+			path:        testDir,
+			expectError: false,
+			checkOutput: true,
+			shouldFind:  true,
+			minFiles:    2,
+		},
+		{
+			name:        "Find specific file",
+			pattern:     "README.md",
+			path:        testDir,
+			expectError: false,
+			checkOutput: true,
+			shouldFind:  true,
+			minFiles:    1,
+		},
+		{
+			name:        "Pattern with no matches",
+			pattern:     "*.xyz",
+			path:        testDir,
+			expectError: false, // Not an error, just no matches
+			checkOutput: true,
+			shouldFind:  false,
+		},
+		{
+			name:        "Search in non-existent directory",
+			pattern:     "*.go",
+			path:        "/nonexistent/path/xyz",
+			expectError: true,
+		},
+		{
+			name:        "Empty pattern",
+			pattern:     "",
+			path:        testDir,
+			expectError: true,
+		},
+		{
+			name:        "Find in current directory (empty path)",
+			pattern:     "main_test.go",
+			path:        "",
+			expectError: false,
+			checkOutput: true,
+			shouldFind:  true,
+			minFiles:    1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := executeGlob(tt.pattern, tt.path)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none. Output: %s", output)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+
+				if tt.checkOutput {
+					if tt.shouldFind {
+						// Check if output indicates files were found
+						if !strings.Contains(output, "Found") && !strings.Contains(output, "/") {
+							t.Errorf("Expected file matches but output suggests none: %s", output)
+						}
+
+						// Count files if specified
+						if tt.minFiles > 0 {
+							lines := strings.Split(output, "\n")
+							fileCount := 0
+							for _, line := range lines {
+								// Count lines that look like file paths (contain /)
+								if strings.Contains(line, "/") && !strings.HasPrefix(line, "Found") {
+									fileCount++
+								}
+							}
+							if fileCount < tt.minFiles {
+								t.Errorf("Expected at least %d files, got %d. Output:\n%s",
+									tt.minFiles, fileCount, output)
+							} else {
+								t.Logf("✓ Found %d files (expected at least %d)", fileCount, tt.minFiles)
+							}
+						}
+					} else {
+						// Should indicate no files found
+						if !strings.Contains(output, "No files") && !strings.Contains(output, "found 0") {
+							t.Logf("Output for no matches: %s", output[:min(200, len(output))])
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestGlobIntegration(t *testing.T) {
+	envPath := os.Getenv("ENV_PATH")
+	if envPath == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			envPath = ".env"
+		} else {
+			envPath = "../coding-agent/.env"
+		}
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Skipf("Skipping test: cannot read .env file: %v", err)
+	}
+
+	var apiKey string
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "TS_AGENT_API_KEY=") {
+			apiKey = strings.TrimPrefix(line, "TS_AGENT_API_KEY=")
+			apiKey = strings.TrimSpace(apiKey)
+			break
+		}
+	}
+
+	if apiKey == "" {
+		t.Skip("Skipping test: TS_AGENT_API_KEY not found in .env file")
+	}
+
+	t.Run("Find all test files with glob", func(t *testing.T) {
+		var history []Message
+
+		response, updatedHistory := handleConversation(apiKey,
+			"Use the glob tool to find all files ending with '_test.go' in the current directory",
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+		t.Logf("History length: %d", len(updatedHistory))
+
+		// Look for tool_use and tool_result
+		foundToolUse := false
+		foundToolResult := false
+		var toolResultContent string
+
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" && block.Name == "glob" {
+							foundToolUse = true
+							t.Logf("Found tool_use: %s (ID: %s)", block.Name, block.ID)
+
+							// Verify input parameters
+							if pattern, ok := block.Input["pattern"].(string); ok {
+								t.Logf("Pattern: %s", pattern)
+							}
+						}
+					}
+				}
+			}
+
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							foundToolResult = true
+							t.Logf("Found tool_result with ToolUseID: %s", block.ToolUseID)
+							if content, ok := block.Content.(string); ok {
+								toolResultContent = content
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolUse {
+			t.Error("Expected to find a glob tool_use block")
+		}
+
+		if !foundToolResult {
+			t.Error("Expected to find a tool_result block")
+		}
+
+		// Verify the tool result contains test file paths
+		if toolResultContent != "" {
+			if !strings.Contains(toolResultContent, "_test.go") {
+				t.Logf("Warning: Tool result doesn't seem to contain test files")
+				t.Logf("Tool result (first 200 chars): %s", toolResultContent[:min(200, len(toolResultContent))])
+			} else {
+				t.Logf("✓ Found test files in results")
+			}
+		}
+	})
+
+	t.Run("Find all Go files recursively", func(t *testing.T) {
+		var history []Message
+
+		response, updatedHistory := handleConversation(apiKey,
+			"Use glob to find all Go files recursively using the pattern '**/*.go'",
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+
+		// Verify glob was used
+		foundGlobUse := false
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" && block.Name == "glob" {
+							foundGlobUse = true
+							t.Logf("✓ glob tool was used")
+						}
+					}
+				}
+			}
+		}
+
+		if !foundGlobUse {
+			t.Error("Expected glob tool to be used")
+		}
+	})
+
+	t.Run("Find specific file with glob", func(t *testing.T) {
+		var history []Message
+
+		response, updatedHistory := handleConversation(apiKey,
+			"Use glob to find README.md in the current directory",
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+
+		// Verify tool was used
+		foundToolResult := false
+		for _, msg := range updatedHistory {
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							foundToolResult = true
+							if content, ok := block.Content.(string); ok {
+								if strings.Contains(content, "README.md") {
+									t.Logf("✓ Found README.md in results")
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolResult {
+			t.Error("Expected to find a tool_result block")
+		}
+	})
+
+	t.Run("Handle no matches gracefully", func(t *testing.T) {
+		var history []Message
+
+		response, updatedHistory := handleConversation(apiKey,
+			"Use glob to find all files matching '*.zzznonexistent' in the current directory",
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+
+		// Should handle gracefully with no matches
+		foundToolResult := false
+		for _, msg := range updatedHistory {
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							foundToolResult = true
+							if content, ok := block.Content.(string); ok {
+								t.Logf("Tool result (no matches expected): %s", content[:min(200, len(content))])
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolResult {
+			t.Error("Expected to find a tool_result block")
+		}
+	})
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

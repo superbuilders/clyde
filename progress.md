@@ -868,54 +868,57 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-02-10)
 
-**Active Tools**: 6
+**Active Tools**: 7
 1. `list_files` - Directory listings with helpful error messages
 2. `read_file` - Read file contents with size warnings and validation
 3. `patch_file` - Find/replace edits with detailed guidance for common issues
 4. `write_file` - Create/replace files with safety warnings for large files
 5. `run_bash` - Execute any bash command with exit code explanations
-6. `grep` - Search for patterns across multiple files with context (NEW ✨)
+6. `grep` - Search for patterns across multiple files with context
+7. `glob` - Find files matching patterns (fuzzy file finding) (NEW ✨)
 
-**Test Suite**: 16 tests passing, 3 skipped
-- Total runtime: ~71 seconds (with new grep tests)
-- Full integration coverage for all tools including grep
+**Test Suite**: 18 tests passing, 3 skipped
+- Total runtime: ~87 seconds (with new glob tests)
+- Full integration coverage for all tools including glob
 - No flaky tests
-- All tests pass after grep implementation
+- All tests pass after glob implementation
 
 **Binary**: 8.0 MB compiled binary
 - Single-file architecture maintained
 - Zero external dependencies
 - Fast startup time
-- Now includes grep search functionality
+- Now includes grep search functionality AND glob file finding
 
-**System Prompt**: 3.8 KB (+314 bytes)
+**System Prompt**: 3.9 KB (+100 bytes)
 - Includes comprehensive tool decision logic
 - Includes grep search patterns and examples
-- Includes progress.md philosophy and memory model (Priority #2 ✅)
+- Includes glob file finding patterns and examples (NEW)
+- Includes progress.md philosophy and memory model
 - Instructs AI to read and update progress.md proactively
-- AI should now document changes automatically
 
-**Tool Progress Messages**: Enhanced (Priority #3 ✅)
+**Tool Progress Messages**: Enhanced
 - Show context: file paths, command names, sizes
 - Examples: "→ Reading file: main.go", "→ Running bash: go test -v"
-- NEW: "→ Searching: 'func main' in current directory (*.go)"
+- "→ Searching: 'func main' in current directory (*.go)"
+- NEW: "→ Finding files: '**/*.go' in current directory" (glob)
 - Better user experience and transparency
 
-**Error Handling & Messages**: Enhanced (Priority #4 ✅)
+**Error Handling & Messages**: Enhanced
 - Comprehensive error messages with context and suggestions
 - Context-specific guidance based on error type
 - All tools provide helpful suggestions when operations fail
-- All tests still pass (16 passed, 3 skipped)
+- All tests still pass (18 passed, 3 skipped)
 
-**Completed Priorities**: 5 / 11 from todos.md
+**Completed Priorities**: 6 / 11 from todos.md
 1. ✅ Deprecate GitHub Tool (replaced with run_bash)
 2. ✅ System Prompt: progress.md Philosophy
 3. ✅ Better Tool Progress Messages
 4. ✅ Better Error Handling & Messages
 5. ✅ grep Tool (Search Across Files)
+6. ✅ glob Tool (Fuzzy File Finding)
 
-**Next Priority**: #6 - glob Tool (Fuzzy File Finding)
-- Estimated time: 1 hour
+**Next Priority**: #7 - multi_patch Tool (Coordinated Multi-File Edits)
+- Estimated time: 4 hours
 
 ## Feature Additions
 
@@ -1045,6 +1048,76 @@ Both run_bash and write_file tools include:
 - Multiple sub-tests covering different scenarios (success, errors, edge cases)
 - Validation of tool_use and tool_result blocks
 - Explicit checks for ToolUseID to prevent regression bugs
+
+**Added glob tool** (2026-02-10) - Priority #6 ✅:
+Enables fuzzy file finding by pattern matching:
+- Find files matching patterns (e.g., `*.go`, `**/*.go`, `*_test.go`)
+- More flexible than list_files for navigating large projects
+- Recursive search support with `**` patterns
+- Returns file paths with count summary
+- Helpful error messages for no matches or missing directories
+- Perfect for locating files in large codebases
+
+**Features**:
+- Uses `find` command with `-name` for simple patterns, `-path` for recursive patterns
+- Converts `**` glob patterns to find-compatible patterns
+- Type filtering (`-type f`) to only find files, not directories
+- Returns formatted results with file count summary
+- Handles "no files found" gracefully with pattern suggestions
+- Context-aware error messages for permission issues
+
+**Use Cases**:
+- Find all test files: `glob("*_test.go")`
+- Find all Go files recursively: `glob("**/*.go")`
+- Locate specific file anywhere: `glob("**/main.go")`
+- Find all markdown docs: `glob("**/*.md", "docs")`
+
+**Pattern Support**:
+- `*.go` - all Go files in directory (simple pattern)
+- `**/*.go` - all Go files recursively (recursive pattern)
+- `*_test.go` - all test files in directory
+- `**/main.go` - find main.go anywhere in subdirectories
+- `*.md` - all markdown files
+
+**Testing Standards Maintained**:
+- Unit tests for execution function (`TestExecuteGlob`)
+  - Simple patterns (*.go)
+  - Test file patterns (*_test.go)
+  - Recursive patterns (**/*.go, **/*.md)
+  - Specific file search (README.md)
+  - No matches handling
+  - Error cases (non-existent dir, empty pattern)
+  - Default path handling
+- Integration tests with full API round-trips (`TestGlobIntegration`)
+  - Find test files
+  - Find Go files recursively
+  - Find specific file (README.md)
+  - Handle no matches gracefully
+- All 18 tests pass (3 skipped)
+
+**Implementation**:
+```go
+func executeGlob(pattern, path string) (string, error) {
+    // Uses find with -name or -path depending on pattern
+    // Converts ** patterns: **/*.go → */*.go (find recurses by default)
+    // Returns formatted results with file counts
+    // Handles no matches gracefully with suggestions
+    // Provides helpful error messages for common issues
+}
+```
+
+**Comparison: glob vs grep**:
+- **glob**: Find files by name pattern
+  - Use when: "Find all test files", "Where are the Go files?"
+  - Returns: File paths only
+  - Example: `glob("*_test.go")` → list of test files
+  
+- **grep**: Search file contents for patterns
+  - Use when: "Find all TODOs", "Where is function X defined?"
+  - Returns: File paths + matching lines with context
+  - Example: `grep("TODO", ".", "*.go")` → files and lines with TODO
+
+Together, these tools provide comprehensive code navigation: glob finds the files, grep finds the content.
 
 ## Design Philosophy & Principles
 
