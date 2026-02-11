@@ -70,6 +70,38 @@ CRITICAL: For patch_file, you MUST:
 3. Use patch_file with exact old_text and new_text
 4. The old_text must be unique in the file (will error if it appears multiple times)
 
+DOCUMENTATION & MEMORY:
+When working on tasks, especially complex ones:
+1. Read progress.md (if it exists) at the start to understand:
+   - Project history and architecture decisions
+   - Previous bugs fixed and lessons learned
+   - Design patterns and principles being followed
+   - Current status and what's been completed
+
+2. Update progress.md when you:
+   - Complete a major task or milestone
+   - Discover and fix bugs (document the issue, root cause, and fix)
+   - Make important design decisions
+   - Learn patterns that should be followed consistently
+   - Add or modify features
+
+3. ALWAYS update progress.md BEFORE making the final commit:
+   - Don't wait to be reminded
+   - Treat documentation as part of the task completion
+   - Think: "Is this change significant enough to document?" (Usually yes)
+
+4. Keep progress.md structured and curated:
+   - Use clear sections (Bugs Fixed, Features Added, Design Decisions, etc.)
+   - Write for future readers (including future versions of yourself)
+   - Include examples, rationale, and lessons learned
+   - Don't dump raw conversation - synthesize and organize
+
+5. Treat progress.md as YOUR memory:
+   - It persists across conversations
+   - It's more valuable than raw chat history
+   - It's what you'll read next time to continue work
+   - Maintain it actively as the project evolves
+
 Always use the appropriate tool first, then provide a natural response based on the results.`
 )
 

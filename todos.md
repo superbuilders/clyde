@@ -32,7 +32,47 @@ NEW: run_bash("gh repo list")
 
 ---
 
-### 2. 📢 Better Tool Progress Messages
+### ✅ 2. 📝 System Prompt: Include progress.md Philosophy - COMPLETED (2026-02-10)
+**Status**: ✅ **COMPLETED**
+
+**Priority**: ⚠️ **CRITICAL** - Should have prevented needing to be reminded to update progress.md
+
+**Problem**: When completing Priority #1, had to be reminded separately to update progress.md. Documentation should be automatic.
+
+**Action Taken**: Updated system prompt to explicitly instruct Claude to:
+- Read `progress.md` at the start of complex tasks
+- Update `progress.md` with important learnings, bugs fixed, and design decisions
+- Treat `progress.md` as the "memory" rather than raw conversation history
+- Keep `progress.md` structured and organized (not a dump of all messages)
+- **Always update progress.md before final commit when completing tasks**
+
+**Key Additions to System Prompt**:
+```
+DOCUMENTATION & MEMORY:
+- Read progress.md at start of complex tasks to understand project history
+- Update progress.md when you:
+  * Complete a major task or milestone
+  * Discover and fix bugs
+  * Make design decisions
+  * Learn important patterns or lessons
+- Always update progress.md BEFORE the final commit
+- Keep documentation structured and curated (not a message dump)
+- progress.md is your memory - maintain it actively
+```
+
+**Real Example - Priority #1**: Should have automatically updated docs with code changes.
+
+**Real Example - Priority #2 (this task)**: Updating progress.md AND todos.md BEFORE final commit, not after being reminded!
+
+**Results**:
+- ✅ System prompt: 2.1 KB → 2.8 KB (+33%)
+- ✅ All tests pass (13 passed, 3 skipped)
+- ✅ Binary rebuilt (8.0 MB)
+- ✅ Following new documentation pattern
+
+---
+
+### 3. 📢 Better Tool Progress Messages
 **Current Behavior**:
 ```
 → Reading file...
@@ -55,25 +95,6 @@ NEW: run_bash("gh repo list")
 - Help users understand what's happening without being verbose
 
 **Estimated time**: 30 minutes
-
----
-
-### 3. 📝 System Prompt: Include progress.md Philosophy
-**Action**: Update system prompt to explicitly instruct Claude to:
-- Read `progress.md` at the start of complex tasks
-- Update `progress.md` with important learnings, bugs fixed, and design decisions
-- Treat `progress.md` as the "memory" rather than raw conversation history
-- Keep `progress.md` structured and organized (not a dump of all messages)
-
-**Key Additions to System Prompt**:
-```
-When starting complex tasks:
-1. Read progress.md to understand project history and decisions
-2. Update progress.md when you discover bugs, make design decisions, or learn important patterns
-3. Keep documentation structured and curated (not a message dump)
-```
-
-**Estimated time**: 1 hour
 
 ---
 

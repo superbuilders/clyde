@@ -557,6 +557,44 @@ All tests pass: 13 tests passed, 3 skipped (deprecated edit_file tests), 47.47s 
 
 **Commit**: `844ac68` - Deprecate github_query tool in favor of run_bash
 
+### System Prompt Enhancement: progress.md Philosophy (Added 2026-02-10)
+
+**Priority #2 Completed**: Added comprehensive documentation and memory model instructions to system prompt.
+
+**Problem**: The AI had to be reminded to update progress.md after completing Priority #1. This should have been automatic.
+
+**Solution**: Enhanced system prompt with explicit instructions about documentation and memory management:
+
+**Key Additions**:
+1. **Read progress.md at start** of complex tasks to understand project history
+2. **Update progress.md when**:
+   - Completing major tasks/milestones
+   - Discovering and fixing bugs
+   - Making design decisions
+   - Learning important patterns
+3. **Always update progress.md BEFORE final commit** - Don't wait to be reminded
+4. **Keep documentation structured** - Not a message dump, but curated synthesis
+5. **Treat progress.md as memory** - It persists across conversations
+
+**Impact**:
+- System prompt expanded from 2.1 KB to 2.8 KB
+- AI now has clear guidance on documentation practices
+- Should proactively maintain progress.md going forward
+- Aligns with Memory Model philosophy established earlier
+
+**Example Instructions Added**:
+```
+DOCUMENTATION & MEMORY:
+When working on tasks, especially complex ones:
+1. Read progress.md (if it exists) at the start...
+2. Update progress.md when you...
+3. ALWAYS update progress.md BEFORE making the final commit...
+4. Keep progress.md structured and curated...
+5. Treat progress.md as YOUR memory...
+```
+
+**Lesson**: Meta-documentation instructions are just as important as tool instructions. The AI needs to know not just *what* to do, but *when* and *why* to document.
+
 ## Current Status (2026-02-10)
 
 **Active Tools**: 5
@@ -567,7 +605,7 @@ All tests pass: 13 tests passed, 3 skipped (deprecated edit_file tests), 47.47s 
 5. `run_bash` - Execute any bash command (including gh, git, npm, go test, etc.)
 
 **Test Suite**: 13 tests passing, 3 skipped
-- Total runtime: ~47-55 seconds
+- Total runtime: ~47 seconds (stable)
 - Full integration coverage for all tools
 - No flaky tests
 
@@ -576,7 +614,13 @@ All tests pass: 13 tests passed, 3 skipped (deprecated edit_file tests), 47.47s 
 - Zero external dependencies
 - Fast startup time
 
-**Next Priority**: #2 - Better Tool Progress Messages
+**System Prompt**: 2.8 KB (expanded from 2.1 KB)
+- Includes comprehensive tool decision logic
+- **NEW (Priority #2)**: Includes progress.md philosophy and memory model
+- Instructs AI to read and update progress.md proactively
+- AI should now document changes automatically
+
+**Next Priority**: #3 - Better Tool Progress Messages
 - Show more context in progress messages
 - Example: "→ Reading file: main.go" instead of just "→ Reading file..."
 - Estimated time: 30 minutes
