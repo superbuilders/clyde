@@ -1084,3 +1084,190 @@ func TestGitHubQueryIntegration(t *testing.T) {
 		}
 	})
 }
+
+func TestRunBashIntegration(t *testing.T) {
+	envPath := os.Getenv("ENV_PATH")
+	if envPath == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			envPath = ".env"
+		} else {
+			envPath = "../coding-agent/.env"
+		}
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Skipf("Skipping test: cannot read .env file: %v", err)
+	}
+
+	var apiKey string
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "TS_AGENT_API_KEY=") {
+			apiKey = strings.TrimPrefix(line, "TS_AGENT_API_KEY=")
+			apiKey = strings.TrimSpace(apiKey)
+			break
+		}
+	}
+
+	if apiKey == "" {
+		t.Skip("Skipping test: TS_AGENT_API_KEY not found in .env file")
+	}
+
+	t.Run("Full run_bash tool use round-trip", func(t *testing.T) {
+		var history []Message
+
+		// Ask a question that should trigger the run_bash tool
+		response, updatedHistory := handleConversation(apiKey, "Use the bash tool to find out whoami?", history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+		t.Logf("History length: %d", len(updatedHistory))
+
+		if len(updatedHistory) < 3 {
+			t.Errorf("Expected at least 3 messages in history, got %d", len(updatedHistory))
+		}
+
+		// Look for tool_use and tool_result in the conversation history
+		foundToolUse := false
+		foundToolResult := false
+		var toolResultContent string
+
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" && block.Name == "run_bash" {
+							foundToolUse = true
+							if block.ID == "" {
+								t.Error("Tool use block should have an ID")
+							}
+							t.Logf("Found tool_use: %s (ID: %s)", block.Name, block.ID)
+							
+							// Verify the command parameter
+							if command, ok := block.Input["command"].(string); ok {
+								if !strings.Contains(command, "whoami") {
+									t.Errorf("Expected command to contain 'whoami', got: %s", command)
+								}
+								t.Logf("Command: %s", command)
+							}
+						}
+					}
+				}
+			}
+
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							foundToolResult = true
+							if block.ToolUseID == "" {
+								t.Error("Tool result block should have a ToolUseID")
+							}
+							t.Logf("Found tool_result with ToolUseID: %s", block.ToolUseID)
+							if content, ok := block.Content.(string); ok {
+								toolResultContent = content
+								t.Logf("Tool result content: %s", content)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolUse {
+			t.Error("Expected to find a run_bash tool_use block in the conversation history")
+		}
+
+		if !foundToolResult {
+			t.Error("Expected to find a tool_result block in the conversation history")
+		}
+
+		// Verify the tool result contains a username (should not be empty)
+		if strings.TrimSpace(toolResultContent) == "" {
+			t.Error("Expected tool result to contain a username, but got empty string")
+		}
+
+		// Verify the response mentions the username
+		if !strings.Contains(response, strings.TrimSpace(toolResultContent)) {
+			t.Logf("Warning: Response doesn't seem to mention the username from tool result")
+		}
+	})
+
+	t.Run("Bash tool with echo command", func(t *testing.T) {
+		var history []Message
+
+		testString := "Hello from bash test!"
+		response, updatedHistory := handleConversation(apiKey, 
+			fmt.Sprintf("Use the bash tool to echo '%s'", testString), 
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+
+		// Look for the echo output in the tool result
+		foundExpectedOutput := false
+		for _, msg := range updatedHistory {
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							if content, ok := block.Content.(string); ok {
+								if strings.Contains(content, testString) {
+									foundExpectedOutput = true
+									t.Logf("Found expected output in tool result")
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if !foundExpectedOutput {
+			t.Error("Expected to find the echo output in the tool result")
+		}
+	})
+
+	t.Run("Bash tool with error handling", func(t *testing.T) {
+		var history []Message
+
+		// Ask Claude to run a command that will fail
+		response, updatedHistory := handleConversation(apiKey, 
+			"Use the bash tool to run the command 'exit 1'", 
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+
+		// Look for error indication in the tool result
+		foundError := false
+		for _, msg := range updatedHistory {
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							if block.IsError {
+								foundError = true
+								t.Logf("Found error in tool result as expected")
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if !foundError {
+			t.Logf("Warning: Expected to find IsError flag set in tool result for failing command")
+		}
+	})
+}
