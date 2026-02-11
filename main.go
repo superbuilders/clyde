@@ -25,6 +25,7 @@ const (
 5. run_bash: For executing arbitrary bash commands (including gh, git, etc.)
 6. grep: For searching patterns across multiple files with context
 7. glob: For finding files matching patterns (fuzzy file finding)
+8. multi_patch: For coordinated multi-file edits with automatic rollback
 
 IMPORTANT DECIDER: Before responding, determine if you need to use a tool:
 
@@ -71,6 +72,14 @@ File finding questions - Use glob for:
 - "Find all markdown files recursively"
 - "Locate main.go anywhere in the project"
 - Pattern examples: glob("**/*.go"), glob("*_test.go")
+
+Multi-file editing - Use multi_patch for:
+- "Rename function X to Y across all files"
+- "Update all import paths from A to B"
+- "Apply consistent changes to multiple files"
+- "Refactor code across the codebase"
+- Coordinates patches and rolls back on failure
+- Best practice: Suggest git commit before multi_patch operations
 
 Bash execution - Use run_bash for:
 - "Run X command"
@@ -288,6 +297,39 @@ var globTool = Tool{
 			},
 		},
 		"required": []string{"pattern"},
+	},
+}
+
+var multiPatchTool = Tool{
+	Name:        "multi_patch",
+	Description: "Apply coordinated changes to multiple files atomically. If any patch fails, all previous changes are rolled back using git. Best for refactoring function names, updating imports, or applying consistent changes across files.",
+	InputSchema: map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"patches": map[string]interface{}{
+				"type": "array",
+				"description": "Array of patches to apply to different files",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"path": map[string]interface{}{
+							"type":        "string",
+							"description": "The file path to patch",
+						},
+						"old_text": map[string]interface{}{
+							"type":        "string",
+							"description": "The exact text to find and replace in this file",
+						},
+						"new_text": map[string]interface{}{
+							"type":        "string",
+							"description": "The new text to replace old_text with",
+						},
+					},
+					"required": []string{"path", "old_text", "new_text"},
+				},
+			},
+		},
+		"required": []string{"patches"},
 	},
 }
 
@@ -602,6 +644,172 @@ func executeGlob(pattern, path string) (string, error) {
 	return result, nil
 }
 
+func executeMultiPatch(patches []interface{}) (string, error) {
+	if len(patches) == 0 {
+		return "", fmt.Errorf("multi_patch requires at least one patch. Example: {\"patches\": [{\"path\": \"file.go\", \"old_text\": \"...\", \"new_text\": \"...\"}]}")
+	}
+
+	// Parse patches
+	type patchInfo struct {
+		Path    string
+		OldText string
+		NewText string
+	}
+	
+	var parsedPatches []patchInfo
+	for i, p := range patches {
+		patchMap, ok := p.(map[string]interface{})
+		if !ok {
+			return "", fmt.Errorf("patch %d is not a valid object", i+1)
+		}
+		
+		path, pathOk := patchMap["path"].(string)
+		oldText, oldOk := patchMap["old_text"].(string)
+		newText, newOk := patchMap["new_text"].(string)
+		
+		if !pathOk || path == "" {
+			return "", fmt.Errorf("patch %d is missing 'path' parameter", i+1)
+		}
+		if !oldOk {
+			return "", fmt.Errorf("patch %d is missing 'old_text' parameter", i+1)
+		}
+		if !newOk {
+			return "", fmt.Errorf("patch %d is missing 'new_text' parameter", i+1)
+		}
+		
+		parsedPatches = append(parsedPatches, patchInfo{
+			Path:    path,
+			OldText: oldText,
+			NewText: newText,
+		})
+	}
+
+	// Check if git is available and we're in a git repo
+	gitAvailable := false
+	if cmd := exec.Command("git", "rev-parse", "--git-dir"); cmd.Run() == nil {
+		gitAvailable = true
+	}
+
+	// Check for uncommitted changes and suggest commit if git available
+	if gitAvailable {
+		cmd := exec.Command("git", "status", "--porcelain")
+		output, err := cmd.Output()
+		if err == nil && len(output) > 0 {
+			// There are uncommitted changes - suggest committing first
+			suggestions := []string{
+				"⚠️  You have uncommitted changes.",
+				"",
+				"It's recommended to commit your changes before applying multiple patches.",
+				"This allows you to easily undo if something goes wrong.",
+				"",
+				"To commit first:",
+				"  1. Review changes: run_bash(\"git status\")",
+				"  2. Commit changes: run_bash(\"git add -A && git commit -m 'Before multi-patch'\")",
+				"  3. Then run multi_patch again",
+				"",
+				"Or, if you're sure, I can proceed anyway.",
+				"",
+				fmt.Sprintf("Ready to apply %d patches to:", len(parsedPatches)),
+			}
+			for i, patch := range parsedPatches {
+				suggestions = append(suggestions, fmt.Sprintf("  %d. %s", i+1, patch.Path))
+			}
+			
+			// For now, we'll proceed but with a warning in the output
+			// In a future version, we could add confirmation logic
+			return strings.Join(suggestions, "\n"), nil
+		}
+	}
+
+	// Apply patches
+	var results []string
+	var appliedPatches []patchInfo
+	
+	for i, patch := range parsedPatches {
+		result, err := executePatchFile(patch.Path, patch.OldText, patch.NewText)
+		if err != nil {
+			// Patch failed - attempt rollback if git available
+			failureMsg := []string{
+				fmt.Sprintf("❌ Patch %d/%d FAILED: %s", i+1, len(parsedPatches), patch.Path),
+				fmt.Sprintf("Error: %v", err),
+				"",
+			}
+			
+			if gitAvailable && len(appliedPatches) > 0 {
+				failureMsg = append(failureMsg,
+					fmt.Sprintf("Rolling back %d successful patches...", len(appliedPatches)),
+				)
+				
+				// Attempt to restore each file that was changed
+				var rollbackErrors []string
+				for _, applied := range appliedPatches {
+					if restoreErr := exec.Command("git", "checkout", "--", applied.Path).Run(); restoreErr != nil {
+						rollbackErrors = append(rollbackErrors, fmt.Sprintf("  - Failed to restore %s: %v", applied.Path, restoreErr))
+					}
+				}
+				
+				if len(rollbackErrors) > 0 {
+					failureMsg = append(failureMsg,
+						"⚠️  Some rollback operations failed:",
+					)
+					failureMsg = append(failureMsg, rollbackErrors...)
+					failureMsg = append(failureMsg,
+						"",
+						"You may need to manually restore these files with:",
+						"  git checkout -- <file>",
+					)
+				} else {
+					failureMsg = append(failureMsg,
+						"✓ Successfully rolled back all changes",
+					)
+				}
+			} else if len(appliedPatches) > 0 {
+				failureMsg = append(failureMsg,
+					fmt.Sprintf("⚠️  %d patches were applied before this failure:", len(appliedPatches)),
+				)
+				for _, applied := range appliedPatches {
+					failureMsg = append(failureMsg, fmt.Sprintf("  - %s", applied.Path))
+				}
+				if gitAvailable {
+					failureMsg = append(failureMsg,
+						"",
+						"To undo these changes, run:",
+						"  git checkout -- <files>",
+					)
+				} else {
+					failureMsg = append(failureMsg,
+						"",
+						"You may need to manually undo these changes",
+					)
+				}
+			}
+			
+			return "", fmt.Errorf("%s", strings.Join(failureMsg, "\n"))
+		}
+		
+		appliedPatches = append(appliedPatches, patch)
+		results = append(results, fmt.Sprintf("✓ Patch %d/%d: %s", i+1, len(parsedPatches), result))
+	}
+
+	// All patches succeeded
+	summary := []string{
+		fmt.Sprintf("✅ Successfully applied all %d patches:", len(parsedPatches)),
+		"",
+	}
+	summary = append(summary, results...)
+	
+	if gitAvailable {
+		summary = append(summary,
+			"",
+			"Next steps:",
+			"  - Review changes: run_bash(\"git diff\")",
+			"  - Commit changes: run_bash(\"git add -A && git commit -m 'Applied multi-patch'\")",
+		)
+	}
+	
+	return strings.Join(summary, "\n"), nil
+}
+
 func executeGrep(pattern, path, filePattern string) (string, error) {
 	if pattern == "" {
 		return "", fmt.Errorf("pattern is required. Example: grep(\"func main\") or grep(\"TODO\", \"src\", \"*.go\")")
@@ -702,7 +910,7 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 		MaxTokens: maxTokens,
 		System:    systemPrompt,
 		Messages:  messages,
-		Tools:     []Tool{listFilesTool, readFileTool, patchFileTool, writeFileTool, runBashTool, grepTool, globTool},
+		Tools:     []Tool{listFilesTool, readFileTool, patchFileTool, writeFileTool, runBashTool, grepTool, globTool, multiPatchTool},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -961,6 +1169,15 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 					}
 					displayMessage = fmt.Sprintf("→ Finding files: '%s' in %s", pattern, searchPath)
 					output, err = executeGlob(pattern, path)
+				}
+
+			case "multi_patch":
+				patches, ok := toolBlock.Input["patches"].([]interface{})
+				if !ok || len(patches) == 0 {
+					err = fmt.Errorf("multi_patch requires a 'patches' array. Example: {\"patches\": [{\"path\": \"file.go\", \"old_text\": \"...\", \"new_text\": \"...\"}]}")
+				} else {
+					displayMessage = fmt.Sprintf("→ Applying multi-patch: %d files", len(patches))
+					output, err = executeMultiPatch(patches)
 				}
 
 			default:

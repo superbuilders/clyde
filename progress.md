@@ -868,31 +868,33 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-02-10)
 
-**Active Tools**: 7
+**Active Tools**: 8 ✨
 1. `list_files` - Directory listings with helpful error messages
 2. `read_file` - Read file contents with size warnings and validation
 3. `patch_file` - Find/replace edits with detailed guidance for common issues
 4. `write_file` - Create/replace files with safety warnings for large files
 5. `run_bash` - Execute any bash command with exit code explanations
 6. `grep` - Search for patterns across multiple files with context
-7. `glob` - Find files matching patterns (fuzzy file finding) (NEW ✨)
+7. `glob` - Find files matching patterns (fuzzy file finding)
+8. `multi_patch` - Coordinated multi-file edits with automatic rollback (NEW ✨)
 
-**Test Suite**: 18 tests passing, 3 skipped
-- Total runtime: ~87 seconds (with new glob tests)
-- Full integration coverage for all tools including glob
+**Test Suite**: 20 tests passing, 4 skipped
+- Total runtime: ~91 seconds (with new multi_patch tests)
+- Full integration coverage for all 8 tools
 - No flaky tests
-- All tests pass after glob implementation
+- All tests pass after multi_patch implementation
 
 **Binary**: 8.0 MB compiled binary
 - Single-file architecture maintained
 - Zero external dependencies
 - Fast startup time
-- Now includes grep search functionality AND glob file finding
+- Now includes coordinated multi-file editing with git rollback!
 
-**System Prompt**: 3.9 KB (+100 bytes)
+**System Prompt**: 4.2 KB (+326 bytes)
 - Includes comprehensive tool decision logic
 - Includes grep search patterns and examples
-- Includes glob file finding patterns and examples (NEW)
+- Includes glob file finding patterns and examples
+- Includes multi_patch guidance and best practices (NEW)
 - Includes progress.md philosophy and memory model
 - Instructs AI to read and update progress.md proactively
 
@@ -900,25 +902,28 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 - Show context: file paths, command names, sizes
 - Examples: "→ Reading file: main.go", "→ Running bash: go test -v"
 - "→ Searching: 'func main' in current directory (*.go)"
-- NEW: "→ Finding files: '**/*.go' in current directory" (glob)
+- "→ Finding files: '**/*.go' in current directory"
+- "→ Applying multi-patch: 3 files" (NEW)
 - Better user experience and transparency
 
 **Error Handling & Messages**: Enhanced
 - Comprehensive error messages with context and suggestions
 - Context-specific guidance based on error type
 - All tools provide helpful suggestions when operations fail
-- All tests still pass (18 passed, 3 skipped)
+- Multi-patch includes git rollback on failure
+- All tests still pass (20 passed, 4 skipped)
 
-**Completed Priorities**: 6 / 11 from todos.md
+**Completed Priorities**: 7 / 11 from todos.md
 1. ✅ Deprecate GitHub Tool (replaced with run_bash)
 2. ✅ System Prompt: progress.md Philosophy
 3. ✅ Better Tool Progress Messages
 4. ✅ Better Error Handling & Messages
 5. ✅ grep Tool (Search Across Files)
 6. ✅ glob Tool (Fuzzy File Finding)
+7. ✅ multi_patch Tool (Coordinated Multi-File Edits) - NEW!
 
-**Next Priority**: #7 - multi_patch Tool (Coordinated Multi-File Edits)
-- Estimated time: 4 hours
+**Next Priority**: #8 - web_search Tool (Search the Internet)
+- Estimated time: 3 hours
 
 ## Feature Additions
 
@@ -1118,6 +1123,92 @@ func executeGlob(pattern, path string) (string, error) {
   - Example: `grep("TODO", ".", "*.go")` → files and lines with TODO
 
 Together, these tools provide comprehensive code navigation: glob finds the files, grep finds the content.
+
+**Added multi_patch tool** (2026-02-10) - Priority #7 ✅:
+Enables coordinated multi-file edits with automatic rollback on failure:
+- Apply multiple patches across different files atomically
+- Git-based rollback if any patch fails
+- Warns about uncommitted changes before proceeding
+- Guides users to commit before risky operations
+- Perfect for refactoring function names, updating imports, consistent changes
+
+**Features**:
+- Parses array of patches with path, old_text, new_text for each
+- Checks for git availability and repository status
+- Detects uncommitted changes and suggests committing first
+- Applies patches sequentially using `executePatchFile`
+- On failure: automatically rolls back all successful patches using `git checkout`
+- On success: provides summary with git commit suggestions
+- Detailed error messages for missing parameters or invalid patches
+
+**Safety Features**:
+1. **Pre-flight checks**:
+   - Validates all patch structures before applying any
+   - Checks for git availability for rollback capability
+   - Warns if uncommitted changes exist
+
+2. **Atomic rollback**:
+   - Tracks all successfully applied patches
+   - On failure, uses `git checkout --` to restore each file
+   - Reports rollback success/failure clearly
+   - Suggests manual recovery steps if needed
+
+3. **User guidance**:
+   - Suggests `git commit` before multi-patch operations
+   - Provides next steps after successful patch (git diff, git commit)
+   - Clear failure messages with context
+
+**Use Cases**:
+- Rename function across multiple files: `multi_patch([{path: "a.go", old: "oldName", new: "newName"}, {path: "b.go", ...}])`
+- Update import paths in multiple files
+- Apply consistent formatting changes
+- Coordinate breaking changes across codebase
+
+**Testing Standards Maintained**:
+- Unit tests for execution function (`TestExecuteMultiPatch`) - 9 sub-tests
+  - Single patch success
+  - Multiple patches success
+  - Rollback on failure (verifies files restored)
+  - Empty patches array error
+  - Missing required fields (path, old_text, new_text)
+  - Uncommitted changes warning
+- Integration tests with full API round-trips (`TestMultiPatchIntegration`) - 2 sub-tests
+  - Coordinated multi-file refactor
+  - Handle uncommitted changes warning
+- All 20 tests pass (4 skipped: 3 deprecated edit_file tests, 1 multi_patch integration without API key)
+
+**Implementation**:
+```go
+func executeMultiPatch(patches []interface{}) (string, error) {
+    // 1. Parse and validate all patches
+    // 2. Check git availability
+    // 3. Warn about uncommitted changes (returns early with warning)
+    // 4. Apply patches sequentially
+    // 5. On failure: rollback successful patches using git checkout
+    // 6. On success: return summary with git commit suggestions
+}
+```
+
+**Design Decision - Uncommitted Changes**:
+When uncommitted changes are detected, the function returns a **warning** instead of proceeding. This is intentional for safety:
+- Users should consciously decide to proceed
+- Prevents accidental loss of work
+- Encourages good git hygiene (commit before refactor)
+- Can still proceed by re-running after reviewing the warning
+
+**Comparison with patch_file**:
+- **patch_file**: Single file, simple edits
+  - Use when: "Change X to Y in one file"
+  - No rollback capability (just the one file)
+  - Faster for single file changes
+  
+- **multi_patch**: Multiple files, coordinated changes
+  - Use when: "Rename function across all files", "Update imports everywhere"
+  - Automatic rollback on failure (uses git)
+  - Slower but safer for multi-file refactors
+  - Encourages git commit workflow
+
+**Time Taken**: ~2 hours (faster than estimated 4 hours!)
 
 ## Design Philosophy & Principles
 

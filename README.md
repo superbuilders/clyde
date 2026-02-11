@@ -18,6 +18,7 @@ go build -o claude-repl
 - 💬 **Interactive REPL**: Natural conversation with Claude
 - 🔧 **GitHub Integration**: Ask questions about your GitHub account via `gh` CLI
 - 📁 **File System Tools**: List directories and read/write files
+- ✏️ **Smart Editing**: Patch individual files or coordinate changes across multiple files
 - 🔍 **Search Tool**: Find patterns across multiple files with grep
 - 🗂️ **File Finding Tool**: Find files matching patterns with glob (fuzzy file finding)
 - 🔄 **Conversation Memory**: Maintains context across turns
@@ -61,6 +62,10 @@ You: Find all test files
 → Finding files: '*_test.go' in current directory
 Claude: [Shows all test files in the project]
 
+You: Rename function 'oldName' to 'newName' across all Go files
+→ Applying multi-patch: 3 files
+Claude: [Coordinates changes across multiple files with rollback on failure]
+
 You: exit
 Goodbye!
 ```
@@ -88,7 +93,7 @@ go test -v
 
 ## Available Tools
 
-The REPL includes seven integrated tools:
+The REPL includes eight integrated tools:
 
 1. **list_files**: List files and directories in any path
 2. **read_file**: Read and display file contents
@@ -97,6 +102,7 @@ The REPL includes seven integrated tools:
 5. **run_bash**: Execute arbitrary bash commands (including gh, git, etc.)
 6. **grep**: Search for patterns across multiple files with context
 7. **glob**: Find files matching patterns (fuzzy file finding)
+8. **multi_patch**: Apply coordinated changes to multiple files with automatic rollback
 
 ## Documentation
 
