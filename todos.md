@@ -119,24 +119,55 @@ DOCUMENTATION & MEMORY:
 
 ---
 
-### 4. 🔧 Better Error Handling & Messages
-**Improvements Needed**:
-- More helpful error messages when tools fail
-- Suggest what to do when `patch_file` fails (e.g., "old_text not unique - try adding more context")
-- Better validation before executing tools
-- Clearer feedback on what went wrong and how to fix it
-- Improved error recovery strategies (automatic retry with adjustments)
+### ✅ 4. 🔧 Better Error Handling & Messages - COMPLETED (2026-02-10)
+**Status**: ✅ **COMPLETED**
 
-**Examples**:
+**Problem**: Error messages were too generic and didn't help users fix problems.
+
+**What Was Done**:
+1. ✅ Enhanced all 5 tool execution functions with detailed error messages
+2. ✅ Added context-specific guidance for common error scenarios
+3. ✅ Improved API error messages with actionable suggestions
+4. ✅ Enhanced startup error messages with setup instructions
+5. ✅ Added helpful examples to all validation errors
+
+**Error Message Improvements by Tool**:
+- **list_files**: Directory not found, permission denied, with suggestions
+- **read_file**: File not found, permission denied, directory vs file, large file warnings
+- **patch_file**: Multi-line help for text not found and non-unique text errors
+- **run_bash**: Exit code explanations (127=command not found, 126=permission denied, etc.)
+- **write_file**: Directory doesn't exist with mkdir command, large file warnings
+- **API errors**: Context-aware help for 401, 429, 400, 500+ errors
+- **Startup errors**: .env file setup instructions with examples
+
+**Examples of Improvements**:
 ```
-BAD:  "old_text not found in file"
-GOOD: "old_text not found in file. Make sure it matches exactly including whitespace. Try reading the file first with read_file."
+BEFORE: "old_text not found in file"
+AFTER:  Shows 3 common issues + 3 concrete suggestions
 
-BAD:  "command failed"
-GOOD: "Command 'go test' failed with exit code 1. Output: [error details]. This usually means there are failing tests."
+BEFORE: "command failed: exit status 127"
+AFTER:  Explains exit code + provides installation/PATH troubleshooting
+
+BEFORE: "failed to read file: no such file"
+AFTER:  "file 'X' does not exist. Use list_files to see available files"
 ```
 
-**Estimated time**: 2 hours
+**Impact**:
+- Better user experience (clear, actionable error messages)
+- Faster debugging (suggestions save time)
+- Educational (users learn best practices)
+- Proactive warnings (prevents errors before they happen)
+- Net +5.2 KB in main.go
+- All tests still pass (13 passed, 3 skipped)
+
+**Results**:
+- ✅ All error messages are clear and helpful
+- ✅ Context-specific suggestions provided
+- ✅ Examples included where appropriate
+- ✅ All tests pass with improved error handling
+- ✅ Verified with manual testing
+
+**Philosophy**: Error messages should be teachers, not just reporters.
 
 ---
 

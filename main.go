@@ -239,47 +239,109 @@ func executeListFiles(path string) (string, error) {
 	cmd := exec.Command("ls", "-la", path)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to list files: %s\nOutput: %s", err, string(output))
+		// Check if directory doesn't exist
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			return "", fmt.Errorf("directory '%s' does not exist. Use '.' for current directory or provide a valid path", path)
+		}
+		// Check for permission issues
+		if strings.Contains(string(output), "Permission denied") {
+			return "", fmt.Errorf("permission denied accessing '%s'. Check file permissions or try a different directory", path)
+		}
+		return "", fmt.Errorf("failed to list files in '%s': %s\nOutput: %s", path, err, string(output))
 	}
 	return string(output), nil
 }
 
 func executeReadFile(path string) (string, error) {
 	if path == "" {
-		return "", fmt.Errorf("file path is required")
+		return "", fmt.Errorf("file path is required. Example: read_file(\"main.go\")")
 	}
+	
+	// Check if file exists first
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("file '%s' does not exist. Use list_files to see available files", path)
+		}
+		if os.IsPermission(err) {
+			return "", fmt.Errorf("permission denied reading '%s'. Check file permissions", path)
+		}
+		return "", fmt.Errorf("cannot access '%s': %w", path, err)
+	}
+	
+	// Check if it's a directory
+	if info.IsDir() {
+		return "", fmt.Errorf("'%s' is a directory. Use list_files to list its contents instead", path)
+	}
+	
+	// Check file size to warn about large files
+	if info.Size() > 1024*1024 { // 1MB
+		return "", fmt.Errorf("file '%s' is very large (%d MB). Consider reading a smaller section or using a different approach", 
+			path, info.Size()/(1024*1024))
+	}
+	
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("failed to read file: %w", err)
+		return "", fmt.Errorf("failed to read file '%s': %w", path, err)
 	}
 	return string(content), nil
 }
 
 func executePatchFile(path, oldText, newText string) (string, error) {
 	if path == "" {
-		return "", fmt.Errorf("file path is required")
+		return "", fmt.Errorf("file path is required. Example: patch_file(\"main.go\", \"old text\", \"new text\")")
 	}
 	if oldText == "" {
-		return "", fmt.Errorf("old_text is required (cannot be empty)")
+		return "", fmt.Errorf("old_text is required and cannot be empty. This is the text you want to replace")
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return "", fmt.Errorf("file '%s' does not exist. Use write_file to create a new file, or use list_files to see available files", path)
 	}
 
 	// Read the current file content
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("failed to read file: %w", err)
+		if os.IsPermission(err) {
+			return "", fmt.Errorf("permission denied reading '%s'. Check file permissions", path)
+		}
+		return "", fmt.Errorf("failed to read file '%s': %w", path, err)
 	}
 
 	fileContent := string(content)
 
 	// Check if old_text exists in the file
 	if !strings.Contains(fileContent, oldText) {
-		return "", fmt.Errorf("old_text not found in file. Make sure it matches exactly including whitespace and newlines")
+		// Provide helpful suggestions
+		suggestions := []string{
+			"The old_text was not found in the file. Common issues:",
+			"  1. Whitespace or newlines don't match exactly",
+			"  2. The text has already been changed",
+			"  3. There's a typo in old_text",
+			"",
+			"Suggestions:",
+			"  - Use read_file first to see the current content",
+			"  - Copy the exact text including all whitespace",
+			"  - Check for tabs vs spaces, line endings, etc.",
+		}
+		return "", fmt.Errorf("%s", strings.Join(suggestions, "\n"))
 	}
 
 	// Count occurrences to ensure it's unique
 	occurrences := strings.Count(fileContent, oldText)
 	if occurrences > 1 {
-		return "", fmt.Errorf("old_text appears %d times in the file. It must be unique. Add more context to make it unique", occurrences)
+		suggestions := []string{
+			fmt.Sprintf("The old_text appears %d times in the file. It must be unique to ensure the right text is replaced.", occurrences),
+			"",
+			"To fix this:",
+			"  1. Include more surrounding context in old_text",
+			"  2. Add nearby lines or unique identifiers",
+			"  3. Example: Instead of just 'func foo()', use 'func foo() {\\n\\t// comment\\n\\treturn nil'",
+			"",
+			"Use read_file to see the full context around each occurrence.",
+		}
+		return "", fmt.Errorf("%s", strings.Join(suggestions, "\n"))
 	}
 
 	// Replace the text
@@ -287,7 +349,10 @@ func executePatchFile(path, oldText, newText string) (string, error) {
 
 	// Write the modified content back
 	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
-		return "", fmt.Errorf("failed to write file: %w", err)
+		if os.IsPermission(err) {
+			return "", fmt.Errorf("permission denied writing to '%s'. Check file permissions", path)
+		}
+		return "", fmt.Errorf("failed to write file '%s': %w", path, err)
 	}
 
 	changeSize := len(newText) - len(oldText)
@@ -297,34 +362,110 @@ func executePatchFile(path, oldText, newText string) (string, error) {
 
 func executeRunBash(command string) (string, error) {
 	if command == "" {
-		return "", fmt.Errorf("command is required")
+		return "", fmt.Errorf("command is required. Example: run_bash(\"ls -la\")")
 	}
+	
 	cmd := exec.Command("bash", "-c", command)
 	output, err := cmd.CombinedOutput()
+	
 	if err != nil {
-		return string(output), fmt.Errorf("command failed: %s", err)
+		exitErr, ok := err.(*exec.ExitError)
+		if ok {
+			exitCode := exitErr.ExitCode()
+			suggestions := []string{
+				fmt.Sprintf("Command failed with exit code %d: %s", exitCode, command),
+				"",
+				"Output:",
+				string(output),
+			}
+			
+			// Add context-specific suggestions
+			if exitCode == 127 {
+				suggestions = append(suggestions, 
+					"",
+					"Exit code 127 typically means 'command not found'.",
+					"Suggestions:",
+					"  - Check if the command is installed",
+					"  - Verify the command name is spelled correctly",
+					"  - Try which <command> to see if it's in PATH",
+				)
+			} else if exitCode == 126 {
+				suggestions = append(suggestions,
+					"",
+					"Exit code 126 typically means 'permission denied'.",
+					"Suggestions:",
+					"  - Check file/script permissions",
+					"  - Try: chmod +x <script>",
+				)
+			} else if exitCode == 1 {
+				// Common exit code, try to provide context based on command
+				if strings.Contains(command, "test") {
+					suggestions = append(suggestions,
+						"",
+						"This may indicate test failures. Check the output above for details.",
+					)
+				} else if strings.Contains(command, "git") {
+					suggestions = append(suggestions,
+						"",
+						"Git command failed. Check the output above for details.",
+						"Common issues: uncommitted changes, merge conflicts, or invalid references.",
+					)
+				}
+			}
+			
+			return "", fmt.Errorf("%s", strings.Join(suggestions, "\n"))
+		}
+		return "", fmt.Errorf("failed to execute command '%s': %w", command, err)
 	}
+	
 	return string(output), nil
 }
 
 func executeWriteFile(path, content string) (string, error) {
 	if path == "" {
-		return "", fmt.Errorf("file path is required")
+		return "", fmt.Errorf("file path is required. Example: write_file(\"notes.txt\", \"content\")")
 	}
 
 	// Check if file exists to provide appropriate message
 	fileExists := false
-	if _, err := os.Stat(path); err == nil {
+	existingSize := int64(0)
+	if info, err := os.Stat(path); err == nil {
 		fileExists = true
+		existingSize = info.Size()
+		
+		// Warn if overwriting a large file
+		if existingSize > 100*1024 { // 100KB
+			suggestions := []string{
+				fmt.Sprintf("Warning: You are about to replace the entire contents of '%s' (%d KB).", 
+					path, existingSize/1024),
+				"",
+				"If you meant to edit part of the file, use patch_file instead.",
+				"write_file will completely replace all existing content.",
+			}
+			return "", fmt.Errorf("%s", strings.Join(suggestions, "\n"))
+		}
+	}
+
+	// Check directory exists
+	dir := path
+	if lastSlash := strings.LastIndex(path, "/"); lastSlash > 0 {
+		dir = path[:lastSlash]
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return "", fmt.Errorf("directory '%s' does not exist. Create it first with: run_bash(\"mkdir -p %s\")", dir, dir)
+		}
 	}
 
 	// Write the content
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		return "", fmt.Errorf("failed to write file: %w", err)
+		if os.IsPermission(err) {
+			return "", fmt.Errorf("permission denied writing to '%s'. Check directory and file permissions", path)
+		}
+		return "", fmt.Errorf("failed to write file '%s': %w", path, err)
 	}
 
 	if fileExists {
-		return fmt.Sprintf("Successfully replaced contents of %s (%d bytes written)", path, len(content)), nil
+		return fmt.Sprintf("Successfully replaced contents of %s (%d bytes written, was %d bytes)", 
+			path, len(content), existingSize), nil
 	}
 	return fmt.Sprintf("Successfully created %s (%d bytes written)", path, len(content)), nil
 }
@@ -355,7 +496,7 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, fmt.Errorf("failed to send request to Claude API: %w\nCheck your internet connection", err)
 	}
 	defer resp.Body.Close()
 
@@ -365,12 +506,65 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		// Try to parse error response for better messages
+		var errorResp struct {
+			Error struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		
+		suggestions := []string{
+			fmt.Sprintf("API error (status %d)", resp.StatusCode),
+		}
+		
+		if json.Unmarshal(body, &errorResp) == nil && errorResp.Error.Message != "" {
+			suggestions = append(suggestions, fmt.Sprintf("Error: %s", errorResp.Error.Message))
+		} else {
+			suggestions = append(suggestions, fmt.Sprintf("Response: %s", string(body)))
+		}
+		
+		// Add context-specific help
+		switch resp.StatusCode {
+		case 401:
+			suggestions = append(suggestions,
+				"",
+				"Authentication failed. Check your API key:",
+				"  - Verify TS_AGENT_API_KEY in .env file",
+				"  - Ensure the key starts with 'sk-ant-'",
+				"  - Try generating a new key at https://console.anthropic.com/",
+			)
+		case 429:
+			suggestions = append(suggestions,
+				"",
+				"Rate limit exceeded. Suggestions:",
+				"  - Wait a moment and try again",
+				"  - You may have hit your usage limit",
+				"  - Check your plan limits at https://console.anthropic.com/",
+			)
+		case 400:
+			suggestions = append(suggestions,
+				"",
+				"Bad request. This may indicate:",
+				"  - Invalid tool parameters",
+				"  - Message format issues",
+				"  - Try a simpler request to test",
+			)
+		case 500, 502, 503, 504:
+			suggestions = append(suggestions,
+				"",
+				"Claude API server error. Suggestions:",
+				"  - This is temporary, try again in a moment",
+				"  - Check https://status.anthropic.com/ for service status",
+			)
+		}
+		
+		return nil, fmt.Errorf("%s", strings.Join(suggestions, "\n"))
 	}
 
 	var apiResp Response
 	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal response: %w\nResponse body: %s", err, string(body))
 	}
 
 	return &apiResp, nil
@@ -433,7 +627,7 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 			case "read_file":
 				path, ok := toolBlock.Input["path"].(string)
 				if !ok || path == "" {
-					err = fmt.Errorf("read_file requires non-empty 'path' parameter")
+					err = fmt.Errorf("read_file requires a 'path' parameter. Example: {\"path\": \"main.go\"}")
 				} else {
 					displayMessage = fmt.Sprintf("→ Reading file: %s", path)
 					output, err = executeReadFile(path)
@@ -445,11 +639,11 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 				newText, newTextOk := toolBlock.Input["new_text"].(string)
 
 				if !pathOk || path == "" {
-					err = fmt.Errorf("patch_file requires non-empty 'path' parameter")
+					err = fmt.Errorf("patch_file requires a 'path' parameter. Example: {\"path\": \"main.go\", \"old_text\": \"...\", \"new_text\": \"...\"}")
 				} else if !oldTextOk {
-					err = fmt.Errorf("patch_file requires 'old_text' parameter")
+					err = fmt.Errorf("patch_file requires an 'old_text' parameter with the exact text to replace")
 				} else if !newTextOk {
-					err = fmt.Errorf("patch_file requires 'new_text' parameter")
+					err = fmt.Errorf("patch_file requires a 'new_text' parameter with the replacement text")
 				} else {
 					changeSize := len(newText) - len(oldText)
 					if changeSize >= 0 {
@@ -463,7 +657,7 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 			case "run_bash":
 				command, ok := toolBlock.Input["command"].(string)
 				if !ok || command == "" {
-					err = fmt.Errorf("run_bash requires non-empty 'command' parameter")
+					err = fmt.Errorf("run_bash requires a 'command' parameter. Example: {\"command\": \"ls -la\"}")
 				} else {
 					// Truncate long commands for display
 					displayCmd := command
@@ -479,9 +673,9 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 				content, contentOk := toolBlock.Input["content"].(string)
 
 				if !pathOk || path == "" {
-					err = fmt.Errorf("write_file requires non-empty 'path' parameter")
+					err = fmt.Errorf("write_file requires a 'path' parameter. Example: {\"path\": \"notes.txt\", \"content\": \"...\"}")
 				} else if !contentOk {
-					err = fmt.Errorf("write_file requires 'content' parameter")
+					err = fmt.Errorf("write_file requires a 'content' parameter with the file contents")
 				} else {
 					// Format file size nicely
 					size := len(content)
@@ -543,8 +737,13 @@ func main() {
 
 	data, err := os.ReadFile(envPath)
 	if err != nil {
-		fmt.Printf("Error reading .env file: %v\n", err)
-		fmt.Println("Please set ENV_PATH environment variable or ensure ../coding-agent/.env exists")
+		fmt.Printf("Error reading .env file from '%s': %v\n\n", envPath, err)
+		fmt.Println("To fix this:")
+		fmt.Println("  1. Create a .env file in the current directory, OR")
+		fmt.Println("  2. Set ENV_PATH environment variable to your .env file location")
+		fmt.Println("  3. Example: export ENV_PATH=/path/to/.env")
+		fmt.Println("\nThe .env file should contain:")
+		fmt.Println("  TS_AGENT_API_KEY=your-anthropic-api-key-here")
 		os.Exit(1)
 	}
 
@@ -559,7 +758,10 @@ func main() {
 	}
 
 	if apiKey == "" {
-		fmt.Println("Error: TS_AGENT_API_KEY not found in .env file")
+		fmt.Printf("Error: TS_AGENT_API_KEY not found in '%s'\n\n", envPath)
+		fmt.Println("Please add this line to your .env file:")
+		fmt.Println("  TS_AGENT_API_KEY=your-anthropic-api-key-here")
+		fmt.Println("\nGet your API key from: https://console.anthropic.com/")
 		os.Exit(1)
 	}
 
@@ -573,6 +775,10 @@ func main() {
 		fmt.Print("\nYou: ")
 		input, err := reader.ReadString('\n')
 		if err != nil {
+			if err == io.EOF {
+				fmt.Println("\nGoodbye!")
+				break
+			}
 			fmt.Printf("Error reading input: %v\n", err)
 			continue
 		}

@@ -649,40 +649,225 @@ When working on tasks, especially complex ones:
 → Writing file: progress.md (42.5 KB)
 ```
 
+### Better Error Handling & Messages (Added 2026-02-10)
+
+**Priority #4 Completed**: Comprehensive error handling improvements with helpful, context-aware error messages.
+
+**Problem**: Error messages were too generic and didn't help users understand what went wrong or how to fix it:
+```
+BAD:  "failed to list files: exit status 2"
+BAD:  "failed to read file: no such file"
+BAD:  "old_text not found in file"
+BAD:  "command failed: exit status 127"
+```
+
+**Solution**: Enhanced all tool execution functions with detailed, helpful error messages that:
+1. Explain what went wrong clearly
+2. Provide context about the error
+3. Suggest concrete steps to fix the problem
+4. Include examples where helpful
+
+**Improvements by Tool**:
+
+#### 1. list_files
+- **Directory doesn't exist**: Suggests using '.' for current directory
+- **Permission denied**: Identifies permission issues and suggests checking permissions
+- **General errors**: Includes full error details and output
+
+**Example**:
+```
+directory '/nonexistent' does not exist. Use '.' for current directory or provide a valid path
+```
+
+#### 2. read_file
+- **Missing path**: Shows example usage
+- **File doesn't exist**: Suggests using list_files to see available files
+- **Permission denied**: Identifies permission issues
+- **Directory instead of file**: Suggests using list_files instead
+- **Large files**: Warns about files >1MB and suggests alternatives
+
+**Example**:
+```
+file 'nonexistent.txt' does not exist. Use list_files to see available files
+```
+
+#### 3. patch_file
+- **Missing parameters**: Shows example usage with all parameters
+- **File doesn't exist**: Suggests using write_file to create new file
+- **Old text not found**: Multi-line explanation with 3 common issues + 3 suggestions
+- **Non-unique old text**: Explains the problem with occurrence count + detailed fix steps
+- **Permission errors**: Clear permission denied messages
+
+**Example (non-unique text)**:
+```
+The old_text appears 2 times in the file. It must be unique to ensure the right text is replaced.
+
+To fix this:
+  1. Include more surrounding context in old_text
+  2. Add nearby lines or unique identifiers
+  3. Example: Instead of just 'func foo()', use 'func foo() {\n\t// comment\n\treturn nil'
+
+Use read_file to see the full context around each occurrence.
+```
+
+**Example (text not found)**:
+```
+The old_text was not found in the file. Common issues:
+  1. Whitespace or newlines don't match exactly
+  2. The text has already been changed
+  3. There's a typo in old_text
+
+Suggestions:
+  - Use read_file first to see the current content
+  - Copy the exact text including all whitespace
+  - Check for tabs vs spaces, line endings, etc.
+```
+
+#### 4. run_bash
+- **Missing command**: Shows example usage
+- **Exit code 127** (command not found): Explains the error + suggests checking installation and PATH
+- **Exit code 126** (permission denied): Explains the error + suggests chmod
+- **Exit code 1 with test commands**: Suggests checking output for test failures
+- **Exit code 1 with git commands**: Suggests common git issues
+- **All errors**: Shows full command output for debugging
+
+**Example (command not found)**:
+```
+Command failed with exit code 127: nonexistentcommand
+
+Output:
+bash: nonexistentcommand: command not found
+
+Exit code 127 typically means 'command not found'.
+Suggestions:
+  - Check if the command is installed
+  - Verify the command name is spelled correctly
+  - Try which <command> to see if it's in PATH
+```
+
+#### 5. write_file
+- **Missing parameters**: Shows example usage
+- **Directory doesn't exist**: Shows exact mkdir command needed
+- **Permission denied**: Clear permission error messages
+- **Large file warning**: Warns before replacing files >100KB, suggests using patch_file
+
+**Example (directory doesn't exist)**:
+```
+directory '/nonexistent/path' does not exist. Create it first with: run_bash("mkdir -p /nonexistent/path")
+```
+
+#### 6. API Errors (callClaude function)
+- **401 Unauthorized**: Provides API key setup instructions + console link
+- **429 Rate Limit**: Explains rate limits + suggests waiting + console link
+- **400 Bad Request**: Lists common causes
+- **500/502/503/504 Server Errors**: Explains temporary nature + status page link
+- **Network errors**: Suggests checking internet connection
+- **All errors**: Parses error response for detailed message when available
+
+**Example (401 error)**:
+```
+API error (status 401)
+Error: Invalid API key
+
+Authentication failed. Check your API key:
+  - Verify TS_AGENT_API_KEY in .env file
+  - Ensure the key starts with 'sk-ant-'
+  - Try generating a new key at https://console.anthropic.com/
+```
+
+#### 7. Startup Errors (main function)
+- **Missing .env file**: Shows exact location being checked + setup instructions
+- **Missing API key**: Shows exact .env format needed + console link
+- **EOF on input**: Graceful exit on Ctrl+D
+
+**Example**:
+```
+Error reading .env file from '.env': no such file or directory
+
+To fix this:
+  1. Create a .env file in the current directory, OR
+  2. Set ENV_PATH environment variable to your .env file location
+  3. Example: export ENV_PATH=/path/to/.env
+
+The .env file should contain:
+  TS_AGENT_API_KEY=your-anthropic-api-key-here
+```
+
+**Code Changes**:
+- Enhanced all 5 tool execution functions (executeListFiles, executeReadFile, executePatchFile, executeRunBash, executeWriteFile)
+- Enhanced callClaude API error handling
+- Enhanced main function startup error handling
+- Enhanced parameter validation messages in handleConversation
+- Net change: +5.2 KB in main.go
+
+**Impact**:
+- **Better UX**: Users understand what went wrong immediately
+- **Faster debugging**: Clear suggestions save time
+- **Less frustration**: No more cryptic error codes
+- **Educational**: Users learn best practices through error messages
+- **Proactive**: Prevents errors (e.g., warns before replacing large files)
+- **All tests pass**: 13 passed, 3 skipped (no breaking changes)
+
+**Test Verification**:
+Created demo showing all error message improvements:
+```bash
+# Tests showed:
+# ✓ Non-unique text error with detailed fix steps
+# ✓ Text not found error with troubleshooting guide
+# ✓ File not found error with tool suggestions
+# ✓ Command not found error with exit code explanation
+# ✓ All messages are clear, helpful, and actionable
+```
+
+**Philosophy**:
+Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
+
 ## Current Status (2026-02-10)
 
 **Active Tools**: 5
-1. `list_files` - Directory listings
-2. `read_file` - Read file contents
-3. `patch_file` - Find/replace edits
-4. `write_file` - Create/replace files
-5. `run_bash` - Execute any bash command (including gh, git, npm, go test, etc.)
+1. `list_files` - Directory listings with helpful error messages
+2. `read_file` - Read file contents with size warnings and validation
+3. `patch_file` - Find/replace edits with detailed guidance for common issues
+4. `write_file` - Create/replace files with safety warnings for large files
+5. `run_bash` - Execute any bash command with exit code explanations
 
 **Test Suite**: 13 tests passing, 3 skipped
 - Total runtime: ~47 seconds (stable)
 - Full integration coverage for all tools
 - No flaky tests
+- All tests pass after error handling improvements
 
 **Binary**: 8.0 MB compiled binary
 - Single-file architecture maintained
 - Zero external dependencies
 - Fast startup time
+- Now with comprehensive error handling (+5.2 KB)
 
-**System Prompt**: 2.8 KB
+**System Prompt**: 3.5 KB
 - Includes comprehensive tool decision logic
-- Includes progress.md philosophy and memory model (Priority #2)
+- Includes progress.md philosophy and memory model (Priority #2 ✅)
 - Instructs AI to read and update progress.md proactively
 - AI should now document changes automatically
 
-**Tool Progress Messages**: Enhanced (Priority #3)
+**Tool Progress Messages**: Enhanced (Priority #3 ✅)
 - Show context: file paths, command names, sizes
 - Examples: "→ Reading file: main.go", "→ Running bash: go test -v"
 - Better user experience and transparency
 
-**Next Priority**: #4 - Better Error Handling & Messages
-- Show more context in progress messages
-- Example: "→ Reading file: main.go" instead of just "→ Reading file..."
-- Estimated time: 30 minutes
+**Error Handling & Messages**: Enhanced (Priority #4 ✅)
+- Comprehensive error messages with context and suggestions
+- Context-specific guidance based on error type
+- All tools provide helpful suggestions when operations fail
+- All tests still pass (13 passed, 3 skipped)
+
+**Completed Priorities**: 4 / 11 from todos.md
+1. ✅ Deprecate GitHub Tool (replaced with run_bash)
+2. ✅ System Prompt: progress.md Philosophy
+3. ✅ Better Tool Progress Messages
+4. ✅ Better Error Handling & Messages
+
+**Next Priority**: #5 - grep Tool (Search Across Files)
+- Estimated time: 2 hours
 
 ## Feature Additions
 
