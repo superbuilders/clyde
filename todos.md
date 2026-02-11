@@ -171,7 +171,107 @@ AFTER:  "file 'X' does not exist. Use list_files to see available files"
 
 ---
 
-### 5. 🔍 grep Tool (Search Across Files)
+### ✅ 5. 🔍 grep Tool (Search Across Files) - COMPLETED (2026-02-10)
+**Status**: ✅ **COMPLETED**
+
+**Purpose**: Search for patterns across multiple files with context and line numbers.
+
+**What Was Built**:
+
+**Tool Schema**:
+```go
+{
+  "name": "grep",
+  "description": "Search for patterns across multiple files. Returns file paths and matching lines with context.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "pattern": {
+        "type": "string",
+        "description": "The search pattern (can be regex)"
+      },
+      "path": {
+        "type": "string", 
+        "description": "Directory to search (defaults to current directory)"
+      },
+      "file_pattern": {
+        "type": "string",
+        "description": "Optional: filter by file pattern (e.g., '*.go', '*.md')"
+      }
+    },
+    "required": ["pattern"]
+  }
+}
+```
+
+**Implementation**:
+- Uses `grep -rnI` (recursive, line numbers, skip binary files)
+- Supports `--include` for file pattern filtering
+- Returns formatted results with match count and file count
+- Handles "no matches found" gracefully with suggestions
+- Context-aware error messages for permission issues
+
+**Use Cases**:
+- Find all references to a function/variable: `grep("func main", ".", "*.go")`
+- Search for TODO comments: `grep("TODO", ".")`
+- Find error messages in logs: `grep("error:", "logs")`
+- Locate configuration values: `grep("API_KEY", ".")`
+
+**Testing**:
+- Unit tests: `TestExecuteGrep` (7 sub-tests)
+  - Search across multiple files
+  - File pattern filtering
+  - No matches handling
+  - Error cases
+- Integration tests: `TestGrepIntegration` (3 sub-tests)
+  - Search for function definitions
+  - Search for TODO comments
+  - Handle no matches gracefully
+- All 16 tests pass (3 skipped)
+
+**System Prompt Updates**:
+Added grep decision logic to system prompt:
+```
+Search questions - Use grep for:
+- "Find all references to X"
+- "Where is function Y defined?"
+- "Search for TODO comments"
+- "Find error messages in logs"
+- "Locate all files containing X"
+- Can filter by file pattern: grep("TODO", ".", "*.go")
+```
+
+**Progress Messages**:
+- `→ Searching: 'func main' in current directory (*.go)`
+- `→ Searching: 'TODO' in . (all files)`
+
+**Code Changes**:
+- Added `grepTool` definition (24 lines)
+- Added `executeGrep()` function (94 lines)
+- Added grep case to tool execution switch (20 lines)
+- Updated system prompt (+314 bytes)
+- Added to tools array in `callClaude()`
+- Total: ~4.6 KB added to main.go
+
+**Test Suite**:
+- Added `TestExecuteGrep()` with 7 sub-tests
+- Added `TestGrepIntegration()` with 3 sub-tests
+- Total: ~9 KB added to main_test.go
+- Test runtime: +22.7 seconds (grep integration tests)
+
+**Results**:
+- ✅ All 16 tests pass (3 skipped)
+- ✅ Binary size: 8.0 MB (unchanged)
+- ✅ System prompt: 3.8 KB (+314 bytes)
+- ✅ Documentation updated (progress.md, readme.md, todos.md)
+- ✅ Comprehensive error handling and helpful messages
+- ✅ Full integration test coverage
+
+**Time Taken**: ~1 hour (faster than estimated 2 hours!)
+
+---
+
+### 6. 🗂️ glob Tool (Fuzzy File Finding)
 **Purpose**: Search for patterns across multiple files
 
 **Tool Schema**:

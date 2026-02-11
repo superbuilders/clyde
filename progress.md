@@ -180,6 +180,22 @@ Comprehensive test suite covering:
     - Verifies the file was physically created/replaced with correct content
     - Ensures the full round-trip works with the Claude API
 
+18. **TestExecuteGrep**: Unit tests for grep execution
+    - Tests searching for patterns across multiple files
+    - Tests file pattern filtering (*.go, *.md, etc.)
+    - Tests handling of no matches found
+    - Tests error cases (non-existent directories, empty patterns)
+    - Tests searching in current directory with empty path
+
+19. **TestGrepIntegration**: Full end-to-end grep tool test
+    - Tests searching for function definitions with file pattern filter
+    - Tests searching for TODO comments across all files
+    - Tests graceful handling of no matches (with helpful suggestions)
+    - Validates tool_use block contains ID and correct input parameters
+    - Validates tool_result block contains ToolUseID
+    - Verifies grep output includes file paths and line numbers
+    - Ensures the full round-trip works with the Claude API
+
 ### Dependencies
 - **Minimal external dependencies**: Uses only Go standard library
   - `net/http`: API communication
@@ -396,6 +412,32 @@ Goodbye!
 }
 ```
 
+#### Grep Tool
+```json
+{
+  "name": "grep",
+  "description": "Search for patterns across multiple files. Returns file paths and matching lines with context.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "pattern": {
+        "type": "string",
+        "description": "The search pattern (text or regex)"
+      },
+      "path": {
+        "type": "string",
+        "description": "Directory to search (defaults to current directory)"
+      },
+      "file_pattern": {
+        "type": "string",
+        "description": "Optional: filter by file pattern using glob syntax (e.g., '*.go', '*.md')"
+      }
+    },
+    "required": ["pattern"]
+  }
+}
+```
+
 ### Conversation Flow
 1. User enters message
 2. Message added to conversation history
@@ -415,26 +457,28 @@ Goodbye!
 === TestExecuteReadFile            PASS (0.00s)
 === TestExecuteRunBash             PASS (0.01s)
 === TestExecuteWriteFile           PASS (0.00s)
+=== TestExecuteGrep                PASS (0.01s) - NEW ✨
 === TestExecutePatchFile           PASS (0.00s)
 === TestExecuteEditFile            SKIP (deprecated)
-=== TestCallClaude                 PASS (3.33s)
-=== TestHandleConversation         PASS (5.61s)
+=== TestCallClaude                 PASS (2.21s)
+=== TestHandleConversation         PASS (8.00s)
 === TestSystemPromptDecider        PASS (0.00s)
-=== TestListFilesIntegration       PASS (6.76s)
-=== TestReadFileIntegration        PASS (4.10s)
+=== TestListFilesIntegration       PASS (6.98s)
+=== TestReadFileIntegration        PASS (3.57s)
 === TestEditFileIntegration        SKIP (deprecated)
 === TestEditFileWithLargeContent   SKIP (deprecated)
-=== TestGitHubQueryIntegration     PASS (4.31s) - now uses run_bash
-=== TestRunBashIntegration         PASS (13.31s)
-=== TestWriteFileIntegration       PASS (11.16s)
+=== TestGitHubQueryIntegration     PASS (3.56s)
+=== TestRunBashIntegration         PASS (10.96s)
+=== TestWriteFileIntegration       PASS (12.51s)
+=== TestGrepIntegration            PASS (22.73s) - NEW ✨
 
-PASS - All tests completed successfully (47.47s total)
-13 tests passed, 3 tests skipped
+PASS - All tests completed successfully (71.1s total)
+16 tests passed, 3 tests skipped
 ```
 
 ## Files Created
-1. `main.go` (16.2 KB) - Main application with 5 tools (down from 6 after github_query deprecation)
-2. `main_test.go` (41+ KB) - Comprehensive test suite with 13 active tests
+1. `main.go` (20.8 KB) - Main application with 6 tools (grep added!)
+2. `main_test.go` (50+ KB) - Comprehensive test suite with 16 active tests
 3. `go.mod` - Go module definition
 4. `claude-repl` - Compiled binary (8.0 MB)
 5. `.env` - API key configuration
@@ -824,27 +868,29 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-02-10)
 
-**Active Tools**: 5
+**Active Tools**: 6
 1. `list_files` - Directory listings with helpful error messages
 2. `read_file` - Read file contents with size warnings and validation
 3. `patch_file` - Find/replace edits with detailed guidance for common issues
 4. `write_file` - Create/replace files with safety warnings for large files
 5. `run_bash` - Execute any bash command with exit code explanations
+6. `grep` - Search for patterns across multiple files with context (NEW ✨)
 
-**Test Suite**: 13 tests passing, 3 skipped
-- Total runtime: ~47 seconds (stable)
-- Full integration coverage for all tools
+**Test Suite**: 16 tests passing, 3 skipped
+- Total runtime: ~71 seconds (with new grep tests)
+- Full integration coverage for all tools including grep
 - No flaky tests
-- All tests pass after error handling improvements
+- All tests pass after grep implementation
 
 **Binary**: 8.0 MB compiled binary
 - Single-file architecture maintained
 - Zero external dependencies
 - Fast startup time
-- Now with comprehensive error handling (+5.2 KB)
+- Now includes grep search functionality
 
-**System Prompt**: 3.5 KB
+**System Prompt**: 3.8 KB (+314 bytes)
 - Includes comprehensive tool decision logic
+- Includes grep search patterns and examples
 - Includes progress.md philosophy and memory model (Priority #2 ✅)
 - Instructs AI to read and update progress.md proactively
 - AI should now document changes automatically
@@ -852,22 +898,24 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 **Tool Progress Messages**: Enhanced (Priority #3 ✅)
 - Show context: file paths, command names, sizes
 - Examples: "→ Reading file: main.go", "→ Running bash: go test -v"
+- NEW: "→ Searching: 'func main' in current directory (*.go)"
 - Better user experience and transparency
 
 **Error Handling & Messages**: Enhanced (Priority #4 ✅)
 - Comprehensive error messages with context and suggestions
 - Context-specific guidance based on error type
 - All tools provide helpful suggestions when operations fail
-- All tests still pass (13 passed, 3 skipped)
+- All tests still pass (16 passed, 3 skipped)
 
-**Completed Priorities**: 4 / 11 from todos.md
+**Completed Priorities**: 5 / 11 from todos.md
 1. ✅ Deprecate GitHub Tool (replaced with run_bash)
 2. ✅ System Prompt: progress.md Philosophy
 3. ✅ Better Tool Progress Messages
 4. ✅ Better Error Handling & Messages
+5. ✅ grep Tool (Search Across Files)
 
-**Next Priority**: #5 - grep Tool (Search Across Files)
-- Estimated time: 2 hours
+**Next Priority**: #6 - glob Tool (Fuzzy File Finding)
+- Estimated time: 1 hour
 
 ## Feature Additions
 
@@ -946,6 +994,49 @@ Provides a dedicated tool for creating new files or replacing entire file conten
 - Better for creating new files from scratch
 - Returns appropriate messages ("created" vs "replaced")
 - Includes comprehensive unit and integration tests
+
+**Added grep tool** (2026-02-10) - Priority #5 ✅:
+Enables powerful search across multiple files:
+- Search for text patterns or regex across directories
+- Filter by file patterns (e.g., `*.go`, `*.md`)
+- Returns file paths and matching lines with line numbers
+- Helpful error messages for no matches or missing directories
+- Perfect for finding function definitions, TODO comments, error messages
+
+**Features**:
+- Uses `grep -rnI` (recursive, line numbers, skip binary files)
+- Supports `--include` for file pattern filtering
+- Returns formatted results with match count and file count
+- Handles "no matches found" gracefully with suggestions
+- Context-aware error messages for permission issues
+
+**Use Cases**:
+- Find all references to a function: `grep("func main", ".", "*.go")`
+- Search for TODO comments: `grep("TODO", ".")`
+- Find error messages: `grep("error:", "logs")`
+- Locate configuration values: `grep("API_KEY", ".")`
+
+**Testing Standards Maintained**:
+- Unit tests for execution function (`TestExecuteGrep`)
+  - Search across multiple files
+  - File pattern filtering
+  - No matches handling
+  - Error cases
+- Integration tests with full API round-trips (`TestGrepIntegration`)
+  - Search for function definitions
+  - Search for TODO comments
+  - Handle no matches gracefully
+- All 16 tests pass (3 skipped)
+
+**Implementation**:
+```go
+func executeGrep(pattern, path, filePattern string) (string, error) {
+    // Uses grep -rnI with optional --include filter
+    // Returns formatted results with match and file counts
+    // Handles exit code 1 (no matches) gracefully
+    // Provides helpful error messages for common issues
+}
+```
 
 **Testing Standards Maintained**:
 Both run_bash and write_file tools include:

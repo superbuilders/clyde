@@ -18,6 +18,7 @@ go build -o claude-repl
 - 💬 **Interactive REPL**: Natural conversation with Claude
 - 🔧 **GitHub Integration**: Ask questions about your GitHub account via `gh` CLI
 - 📁 **File System Tools**: List directories and read/write files
+- 🔍 **Search Tool**: Find patterns across multiple files with grep
 - 🔄 **Conversation Memory**: Maintains context across turns
 - ⚡ **Fast & Lightweight**: Single binary, minimal dependencies
 
@@ -51,6 +52,10 @@ You: Run ls -la to see all files
 → Running bash command...
 Claude: [Shows directory listing]
 
+You: Find all TODO comments in Go files
+→ Searching for 'TODO' in current directory (*.go)
+Claude: [Shows files and lines with TODO comments]
+
 You: exit
 Goodbye!
 ```
@@ -78,13 +83,14 @@ go test -v
 
 ## Available Tools
 
-The REPL includes five integrated tools:
+The REPL includes six integrated tools:
 
 1. **list_files**: List files and directories in any path
 2. **read_file**: Read and display file contents
 3. **patch_file**: Edit files using find/replace (patch-based approach)
 4. **write_file**: Create new files or completely replace file contents
 5. **run_bash**: Execute arbitrary bash commands (including gh, git, etc.)
+6. **grep**: Search for patterns across multiple files with context
 
 ## Documentation
 

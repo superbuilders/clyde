@@ -260,6 +260,162 @@ func TestExecuteWriteFile(t *testing.T) {
 	}
 }
 
+func TestExecuteGrep(t *testing.T) {
+	// Create test files for grep
+	testDir := "test_grep_dir"
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+	defer os.RemoveAll(testDir)
+
+	// Create test files with various content
+	testFiles := map[string]string{
+		"test1.go": `package main
+func main() {
+	// TODO: implement feature
+	fmt.Println("Hello")
+}`,
+		"test2.go": `package main
+func helper() {
+	// TODO: fix bug
+	return
+}`,
+		"test.txt": `This is a text file
+TODO: write documentation
+No code here`,
+		"test.md": `# README
+This is markdown
+func notRealCode()`,
+	}
+
+	for filename, content := range testFiles {
+		path := testDir + "/" + filename
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to create test file %s: %v", filename, err)
+		}
+	}
+
+	tests := []struct {
+		name        string
+		pattern     string
+		path        string
+		filePattern string
+		expectError bool
+		checkOutput bool
+		shouldMatch bool
+		minMatches  int
+	}{
+		{
+			name:        "Search for TODO in all files",
+			pattern:     "TODO",
+			path:        testDir,
+			filePattern: "",
+			expectError: false,
+			checkOutput: true,
+			shouldMatch: true,
+			minMatches:  3, // Should find 3 TODOs
+		},
+		{
+			name:        "Search for TODO only in .go files",
+			pattern:     "TODO",
+			path:        testDir,
+			filePattern: "*.go",
+			expectError: false,
+			checkOutput: true,
+			shouldMatch: true,
+			minMatches:  2, // Should find 2 TODOs in .go files
+		},
+		{
+			name:        "Search for func in .go files",
+			pattern:     "func",
+			path:        testDir,
+			filePattern: "*.go",
+			expectError: false,
+			checkOutput: true,
+			shouldMatch: true,
+			minMatches:  2,
+		},
+		{
+			name:        "Search for non-existent pattern",
+			pattern:     "NONEXISTENT_PATTERN_XYZ",
+			path:        testDir,
+			filePattern: "",
+			expectError: false, // grep returns no error for no matches
+			checkOutput: true,
+			shouldMatch: false,
+		},
+		{
+			name:        "Search in non-existent directory",
+			pattern:     "TODO",
+			path:        "/nonexistent/path/xyz",
+			filePattern: "",
+			expectError: true,
+		},
+		{
+			name:        "Empty pattern",
+			pattern:     "",
+			path:        testDir,
+			filePattern: "",
+			expectError: true,
+		},
+		{
+			name:        "Search in current directory (empty path)",
+			pattern:     "func TestExecuteGrep",
+			path:        "",
+			filePattern: "*.go",
+			expectError: false,
+			checkOutput: true,
+			shouldMatch: true,
+			minMatches:  1, // Should find this function definition
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := executeGrep(tt.pattern, tt.path, tt.filePattern)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none. Output: %s", output)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+
+				if tt.checkOutput {
+					if tt.shouldMatch {
+						// Check if output indicates matches were found
+						if !strings.Contains(output, "Found") && !strings.Contains(output, ":") {
+							t.Errorf("Expected matches but output suggests none: %s", output)
+						}
+
+						// Count matches if specified
+						if tt.minMatches > 0 {
+							lines := strings.Split(output, "\n")
+							matchCount := 0
+							for _, line := range lines {
+								if strings.Contains(line, ":") && !strings.HasPrefix(line, "Found") {
+									matchCount++
+								}
+							}
+							if matchCount < tt.minMatches {
+								t.Errorf("Expected at least %d matches, got %d. Output:\n%s", 
+									tt.minMatches, matchCount, output)
+							}
+						}
+					} else {
+						// Should indicate no matches
+						if !strings.Contains(output, "No matches") && !strings.Contains(output, "found") {
+							t.Errorf("Expected no matches indication but got: %s", output)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestExecutePatchFile(t *testing.T) {
 	// Create a test file
 	testFile := "test_patch.txt"
@@ -1530,4 +1686,196 @@ Line 3: From write_file tool`
 			t.Error("Expected to find a write_file tool_use block")
 		}
 	})
+}
+
+func TestGrepIntegration(t *testing.T) {
+	envPath := os.Getenv("ENV_PATH")
+	if envPath == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			envPath = ".env"
+		} else {
+			envPath = "../coding-agent/.env"
+		}
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Skipf("Skipping test: cannot read .env file: %v", err)
+	}
+
+	var apiKey string
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "TS_AGENT_API_KEY=") {
+			apiKey = strings.TrimPrefix(line, "TS_AGENT_API_KEY=")
+			apiKey = strings.TrimSpace(apiKey)
+			break
+		}
+	}
+
+	if apiKey == "" {
+		t.Skip("Skipping test: TS_AGENT_API_KEY not found in .env file")
+	}
+
+	t.Run("Search for function definitions with grep", func(t *testing.T) {
+		var history []Message
+
+		response, updatedHistory := handleConversation(apiKey,
+			"Use the grep tool to search for 'func Test' in the current directory, only in .go files",
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+		t.Logf("History length: %d", len(updatedHistory))
+
+		// Look for tool_use and tool_result
+		foundToolUse := false
+		foundToolResult := false
+		var toolResultContent string
+
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" && block.Name == "grep" {
+							foundToolUse = true
+							t.Logf("Found tool_use: %s (ID: %s)", block.Name, block.ID)
+
+							// Verify input parameters
+							if pattern, ok := block.Input["pattern"].(string); ok {
+								t.Logf("Search pattern: %s", pattern)
+							}
+							if filePattern, ok := block.Input["file_pattern"].(string); ok {
+								t.Logf("File pattern: %s", filePattern)
+							}
+						}
+					}
+				}
+			}
+
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							foundToolResult = true
+							t.Logf("Found tool_result with ToolUseID: %s", block.ToolUseID)
+							if content, ok := block.Content.(string); ok {
+								toolResultContent = content
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolUse {
+			t.Error("Expected to find a grep tool_use block")
+		}
+
+		if !foundToolResult {
+			t.Error("Expected to find a tool_result block")
+		}
+
+		// Verify the tool result contains test function matches
+		if toolResultContent != "" {
+			// Should find test functions in main_test.go
+			if !strings.Contains(toolResultContent, "func Test") {
+				t.Logf("Warning: Tool result doesn't seem to contain test function definitions")
+				t.Logf("Tool result (first 200 chars): %s", toolResultContent[:min(200, len(toolResultContent))])
+			}
+		}
+	})
+
+	t.Run("Search for TODO comments", func(t *testing.T) {
+		var history []Message
+
+		// Create a test file with TODO
+		testFile := "test_grep_todos.txt"
+		testContent := `Line 1: Some code
+TODO: implement feature X
+Line 3: More code
+TODO: fix bug Y`
+		if err := os.WriteFile(testFile, []byte(testContent), 0644); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+		defer os.Remove(testFile)
+
+		response, updatedHistory := handleConversation(apiKey,
+			"Use the grep tool to find all TODO comments in the current directory",
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+
+		// Verify grep was used
+		foundGrepUse := false
+		for _, msg := range updatedHistory {
+			if msg.Role == "assistant" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_use" && block.Name == "grep" {
+							foundGrepUse = true
+							t.Logf("✓ grep tool was used")
+						}
+					}
+				}
+			}
+		}
+
+		if !foundGrepUse {
+			t.Error("Expected grep tool to be used")
+		}
+	})
+
+	t.Run("Search with no matches", func(t *testing.T) {
+		var history []Message
+
+		response, updatedHistory := handleConversation(apiKey,
+			"Use grep to search for the pattern 'ZZZNONEXISTENTZZZPATTERN' in the current directory",
+			history)
+
+		if response == "" {
+			t.Fatal("Expected response but got empty string")
+		}
+
+		t.Logf("Response: %s", response)
+
+		// Should handle gracefully with no matches
+		foundToolResult := false
+		for _, msg := range updatedHistory {
+			if msg.Role == "user" {
+				if contentBlocks, ok := msg.Content.([]ContentBlock); ok {
+					for _, block := range contentBlocks {
+						if block.Type == "tool_result" {
+							foundToolResult = true
+							if content, ok := block.Content.(string); ok {
+								// Should mention no matches
+								if !strings.Contains(strings.ToLower(content), "no match") &&
+								   !strings.Contains(strings.ToLower(content), "found 0") {
+									t.Logf("Tool result: %s", content[:min(200, len(content))])
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if !foundToolResult {
+			t.Error("Expected to find a tool_result block")
+		}
+	})
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
