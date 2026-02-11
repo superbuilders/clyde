@@ -218,6 +218,17 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
+	// Debug: Log the tool definitions being sent
+	fmt.Fprintf(os.Stderr, "[DEBUG] === Sending Request ===\n")
+	fmt.Fprintf(os.Stderr, "[DEBUG] Tools being sent: %d\n", len(reqBody.Tools))
+	for i, tool := range reqBody.Tools {
+		fmt.Fprintf(os.Stderr, "[DEBUG] Tool %d: name=%s\n", i, tool.Name)
+		if toolJSON, err := json.MarshalIndent(tool, "  ", "  "); err == nil {
+			fmt.Fprintf(os.Stderr, "%s\n", toolJSON)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "[DEBUG] === End Request ===\n")
+
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -248,12 +259,14 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	// Debug: Log raw content blocks to see what API is sending
+	// Debug: Log ALL content blocks to see complete API response structure
+	fmt.Fprintf(os.Stderr, "[DEBUG] === API Response with %d blocks ===\n", len(apiResp.Content))
 	for i, block := range apiResp.Content {
+		fmt.Fprintf(os.Stderr, "[DEBUG] Block %d: type=%s", i, block.Type)
+
 		if block.Type == "tool_use" {
-			fmt.Fprintf(os.Stderr, "[DEBUG] API Response block %d: type=%s, name=%s, input keys=%v\n",
-				i, block.Type, block.Name, getMapKeys(block.Input))
-			// Log a sample of content if it exists
+			fmt.Fprintf(os.Stderr, ", name=%s, id=%s, input keys=%v\n", block.Name, block.ID, getMapKeys(block.Input))
+			// Log content sample if it exists
 			if content, ok := block.Input["content"]; ok {
 				contentStr := fmt.Sprintf("%v", content)
 				if len(contentStr) > 100 {
@@ -261,8 +274,17 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 				}
 				fmt.Fprintf(os.Stderr, "[DEBUG]   content sample: %s\n", contentStr)
 			}
+		} else if block.Type == "text" {
+			textPreview := block.Text
+			if len(textPreview) > 200 {
+				textPreview = textPreview[:200] + "..."
+			}
+			fmt.Fprintf(os.Stderr, ", text preview: %s\n", textPreview)
+		} else {
+			fmt.Fprintf(os.Stderr, "\n")
 		}
 	}
+	fmt.Fprintf(os.Stderr, "[DEBUG] === End API Response ===\n")
 
 	return &apiResp, nil
 }
