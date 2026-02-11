@@ -22,6 +22,7 @@ const (
 2. list_files: For listing files and directories in a given path
 3. read_file: For reading the contents of a file
 4. patch_file: For editing files using find/replace (patch-based approach)
+5. run_bash: For executing arbitrary bash commands
 
 IMPORTANT DECIDER: Before responding, determine if you need to use a tool:
 
@@ -46,6 +47,12 @@ File editing questions - Use patch_file for:
 - "Change X to Y in the file"
 - "Update the function to do Z"
 - "Fix the bug by changing X"
+
+Bash execution - Use run_bash for:
+- "Run X command"
+- "Execute Y script"
+- "Check system information"
+- Any shell/command-line operations
 
 CRITICAL: For patch_file, you MUST:
 1. First use read_file to see current content
@@ -164,6 +171,21 @@ var patchFileTool = Tool{
 	},
 }
 
+var runBashTool = Tool{
+	Name:        "run_bash",
+	Description: "Execute arbitrary bash commands and return the output. Use this for running shell commands, scripts, or any command-line operations.",
+	InputSchema: map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"command": map[string]interface{}{
+				"type":        "string",
+				"description": "The bash command to execute. Can be any valid bash command or script.",
+			},
+		},
+		"required": []string{"command"},
+	},
+}
+
 func executeGitHubCommand(command string) (string, error) {
 	cmd := exec.Command("gh", strings.Fields(command)...)
 	output, err := cmd.CombinedOutput()
@@ -236,13 +258,25 @@ func executePatchFile(path, oldText, newText string) (string, error) {
 		path, len(oldText), len(newText), changeSize), nil
 }
 
+func executeRunBash(command string) (string, error) {
+	if command == "" {
+		return "", fmt.Errorf("command is required")
+	}
+	cmd := exec.Command("bash", "-c", command)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("command failed: %s", err)
+	}
+	return string(output), nil
+}
+
 func callClaude(apiKey string, messages []Message) (*Response, error) {
 	reqBody := Request{
 		Model:     modelID,
 		MaxTokens: maxTokens,
 		System:    systemPrompt,
 		Messages:  messages,
-		Tools:     []Tool{githubTool, listFilesTool, readFileTool, patchFileTool},
+		Tools:     []Tool{githubTool, listFilesTool, readFileTool, patchFileTool, runBashTool},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -416,6 +450,15 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 					fmt.Fprintf(os.Stderr, "[DEBUG] Patching %s: replacing %d bytes with %d bytes\n",
 						path, len(oldText), len(newText))
 					output, err = executePatchFile(path, oldText, newText)
+				}
+
+			case "run_bash":
+				command, ok := toolBlock.Input["command"].(string)
+				if !ok || command == "" {
+					err = fmt.Errorf("run_bash requires non-empty 'command' parameter")
+				} else {
+					displayMessage = "→ Running bash command..."
+					output, err = executeRunBash(command)
 				}
 
 			default:

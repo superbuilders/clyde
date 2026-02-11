@@ -147,6 +147,64 @@ func TestExecuteReadFile(t *testing.T) {
 	}
 }
 
+func TestExecuteRunBash(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		expectError bool
+		checkOutput bool
+		expectedOut string
+	}{
+		{
+			name:        "Simple echo command",
+			command:     "echo 'Hello, World!'",
+			expectError: false,
+			checkOutput: true,
+			expectedOut: "Hello, World!\n",
+		},
+		{
+			name:        "Command with output",
+			command:     "ls -la . | head -1",
+			expectError: false,
+			checkOutput: false, // Just verify it runs
+		},
+		{
+			name:        "Empty command",
+			command:     "",
+			expectError: true,
+		},
+		{
+			name:        "Invalid command",
+			command:     "nonexistent-command-xyz",
+			expectError: true,
+		},
+		{
+			name:        "Command that exits with error",
+			command:     "exit 1",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := executeRunBash(tt.command)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none. Output: %s", output)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if tt.checkOutput && output != tt.expectedOut {
+					t.Errorf("Expected output '%s', got '%s'", tt.expectedOut, output)
+				}
+			}
+		})
+	}
+}
+
 func TestExecutePatchFile(t *testing.T) {
 	// Create a test file
 	testFile := "test_patch.txt"
