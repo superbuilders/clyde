@@ -905,70 +905,112 @@ func loadSystemPrompt() string {
 
 ---
 
-### 12. 🧰 Consolidated Tool Execution Framework
-**Purpose**: Eliminate duplication in tool execution pattern
+### ✅ 12. 🧰 Consolidated Tool Execution Framework - COMPLETED (2026-02-13)
+**Status**: ✅ **COMPLETED** (as part of Priority #10)
 
-**Current Issue**: Each tool in handleConversation has duplicate code:
-- Parameter validation
-- Display message formatting
-- Error handling boilerplate
-- Result formatting
+**What Was Implemented**: Function-based tool registry pattern
 
-**Proposed Solution**:
+**Implementation** (from `tools/registry.go`):
 ```go
-type ToolExecutor interface {
-    Validate(params map[string]interface{}) error
-    Execute(params map[string]interface{}) (string, error)
-    DisplayMessage(params map[string]interface{}) string
+// ExecutorFunc is a function that executes a tool
+type ExecutorFunc func(input map[string]interface{}, apiClient *api.Client, 
+                      conversationHistory []api.Message) (string, error)
+
+// DisplayFunc is a function that formats a display message for a tool
+type DisplayFunc func(input map[string]interface{}) string
+
+// Registration holds a tool registration
+type Registration struct {
+    Tool     api.Tool
+    Execute  ExecutorFunc
+    Display  DisplayFunc
 }
 
-// Generic execution in handleConversation
-for _, toolBlock := range toolUseBlocks {
-    executor := getExecutor(toolBlock.Name)
-    
-    if err := executor.Validate(toolBlock.Input); err != nil {
-        // Handle validation error
-        continue
+// Register registers a tool with its executor and display functions
+func Register(tool api.Tool, execute ExecutorFunc, display DisplayFunc) {
+    Registry[tool.Name] = &Registration{
+        Tool:    tool,
+        Execute: execute,
+        Display: display,
     }
-    
-    fmt.Println(executor.DisplayMessage(toolBlock.Input))
-    output, err := executor.Execute(toolBlock.Input)
-    // Handle result...
 }
 ```
 
-**Example Tool Implementation**:
+**Tool Pattern** (each tool file):
 ```go
-type ReadFileTool struct{}
+func init() {
+    Register(readFileTool, executeReadFile, displayReadFile)
+}
 
-func (t *ReadFileTool) Validate(params map[string]interface{}) error {
-    path, ok := params["path"].(string)
+var readFileTool = api.Tool{
+    Name: "read_file",
+    Description: "...",
+    InputSchema: {...},
+}
+
+func executeReadFile(input map[string]interface{}, apiClient *api.Client, 
+                     conversationHistory []api.Message) (string, error) {
+    // Validation inline
+    path, ok := input["path"].(string)
     if !ok || path == "" {
-        return fmt.Errorf("read_file requires 'path' parameter")
+        return "", fmt.Errorf("file path is required")
     }
-    return nil
+    
+    // Execution
+    content, err := os.ReadFile(path)
+    return string(content), err
 }
 
-func (t *ReadFileTool) Execute(params map[string]interface{}) (string, error) {
-    path := params["path"].(string)
-    return executeReadFile(path)
-}
-
-func (t *ReadFileTool) DisplayMessage(params map[string]interface{}) string {
-    path := params["path"].(string)
+func displayReadFile(input map[string]interface{}) string {
+    path, _ := input["path"].(string)
     return fmt.Sprintf("→ Reading file: %s", path)
 }
 ```
 
-**Benefits**:
-- **DRY**: Eliminate ~200 lines of duplicate validation/formatting
-- **Consistency**: All tools follow same pattern
-- **Testability**: Easy to test tool behavior in isolation
-- **Extensibility**: Add new tools by implementing interface
+**Agent Uses Registry** (from `agent/agent.go`):
+```go
+// Get tool registration
+reg, err := tools.GetTool(toolBlock.Name)
+if err != nil {
+    // Handle unknown tool
+}
 
-**This pairs perfectly with #10**: Each tool file implements ToolExecutor interface
+// Display progress message
+if reg.Display != nil {
+    fmt.Println(reg.Display(toolBlock.Input))
+}
 
-**Estimated time**: 3-4 hours (refactor all 10 tools)
+// Execute the tool
+output, err := reg.Execute(toolBlock.Input, a.apiClient, a.history)
+```
+
+**Benefits Achieved**:
+- ✅ **DRY**: Zero duplication in agent code
+- ✅ **Consistency**: All 10 tools follow same pattern
+- ✅ **Testability**: Each tool can be tested in isolation
+- ✅ **Extensibility**: Add new tools by creating one file with init()
+- ✅ **No boilerplate**: Tools self-register via init()
+- ✅ **Type-safe**: Function signatures enforced by types
+
+**Why Function-Based vs Interface**:
+The implementation uses function-based registration instead of the interface-based approach proposed in the TODO. This is actually **better** because:
+
+1. **More flexible**: Functions are first-class in Go
+2. **Less boilerplate**: No need to create struct types for each tool
+3. **Easier to test**: Can pass mock functions directly
+4. **More idiomatic Go**: Composition over inheritance
+5. **Simpler**: Validation inline with execution (fewer moving parts)
+
+**Results**:
+- ✅ All 10 tools use consistent pattern
+- ✅ Zero tool-specific code in agent
+- ✅ Agent.HandleMessage() is generic (40 lines for all tools)
+- ✅ Adding new tools requires zero agent changes
+- ✅ All tests pass with new architecture
+
+**Completed**: 2026-02-13 (as part of Priority #10 - Code Organization)
+
+**Time Taken**: Included in Priority #10's 2-hour refactor
 
 ---
 
