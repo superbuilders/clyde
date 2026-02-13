@@ -97,6 +97,30 @@ BRAVE_SEARCH_API_KEY=your-brave-search-api-key  # Optional: for web_search
 
 Or set the ENV_PATH variable to point to an existing .env file.
 
+## Customizing the System Prompt
+
+The system prompt is stored in `prompts/system.txt` and can be customized:
+
+**Development Mode**: If you're running from source, edit `prompts/system.txt` directly. Changes take effect immediately without recompilation.
+
+**Production Mode**: When running the compiled binary in a directory without `prompts/system.txt`, it uses the embedded version from compilation time.
+
+This dual-mode approach allows:
+- Fast iteration during development (no rebuild needed)
+- Single-binary distribution in production (embedded prompt)
+
+To test prompt changes:
+```bash
+# Edit the prompt
+vim prompts/system.txt
+
+# Run without rebuilding
+./claude-repl
+
+# When satisfied, rebuild to embed the new prompt
+go build -o claude-repl
+```
+
 ## Testing
 
 ```bash

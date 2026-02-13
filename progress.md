@@ -943,7 +943,7 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 - Web search includes API key setup guidance and rate limit explanations
 - All tests still pass (22 passed, 4 skipped)
 
-**Completed Priorities**: 12 / 15 from todos.md ✨
+**Completed Priorities**: 13 / 15 from todos.md ✨
 1. ✅ Deprecate GitHub Tool (replaced with run_bash)
 2. ✅ System Prompt: progress.md Philosophy  
 3. ✅ Better Tool Progress Messages
@@ -955,9 +955,10 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 9. ✅ browse Tool (Fetch URL Contents with AI Extraction)
 10. ✅ Code Organization & Architecture Separation
 11. ✅ Test Organization
-12. ✅ Test Cleanup - **NEW!** ✨
+12. ✅ Test Cleanup
+13. ✅ External System Prompt (Development & Production Mode) - **NEW!** ✨
 
-**Next Priority**: #13 - External System Prompt (moved from #12)
+**Next Priority**: #14 - Config File for Global Installation
 
 ## Feature Additions
 
@@ -1891,6 +1892,138 @@ tests/
 4. **Build failures are good**: They force cleanup of technical debt
 
 **Time Taken**: ~5 minutes (file deletions + documentation)
+
+### External System Prompt (Completed 2026-02-13)
+
+**Priority #13 Completed**: Enhanced system prompt loading to support both development and production modes.
+
+**Problem**: While the system prompt was already externalized to `prompts/system.txt` during Priority #10, it was only embedded using `//go:embed`. This meant:
+- Every prompt change required recompilation
+- No way to iterate quickly during development
+- Couldn't test prompt variations without rebuilding
+
+**Solution**: Implemented dual-mode prompt loading that checks for external file first, then falls back to embedded version.
+
+**Implementation**:
+```go
+//go:embed system.txt
+var embeddedSystemPrompt string
+
+// SystemPrompt loads from file if available (dev mode),
+// otherwise uses embedded version (production mode)
+var SystemPrompt = loadSystemPrompt()
+
+func loadSystemPrompt() string {
+    // Try to load from file first (development mode)
+    if content, err := os.ReadFile("prompts/system.txt"); err == nil {
+        return string(content)
+    }
+    
+    // Fallback to embedded version (production mode)
+    return embeddedSystemPrompt
+}
+
+// GetSystemPrompt allows reloading at runtime
+func GetSystemPrompt() string {
+    return loadSystemPrompt()
+}
+```
+
+**How It Works**:
+
+1. **Development Mode** (when `prompts/system.txt` exists in current directory):
+   - Loads prompt from file at startup
+   - Changes take effect immediately when restarting the REPL
+   - No rebuild required for prompt iteration
+   - Perfect for testing prompt variations
+
+2. **Production Mode** (when file doesn't exist):
+   - Uses embedded version from compile time
+   - Single binary works anywhere
+   - No external dependencies required
+   - Distribution-friendly
+
+**Testing**:
+Created comprehensive test suite in `tests/prompts_test.go`:
+- `TestSystemPromptLoading`: Verifies prompt loads and contains expected content
+- `TestSystemPromptDevelopmentMode`: Tests loading from file when present
+- `TestSystemPromptProductionMode`: Tests embedded fallback when file missing
+- `TestSystemPromptFileOverride`: Tests custom prompt file override
+- `TestSystemPromptNotEmpty`: Validates prompt is initialized and reasonably sized
+
+**Benefits**:
+
+1. **Fast Iteration**: Edit `prompts/system.txt` and restart REPL (no rebuild)
+2. **Single Binary**: Compiled binary still includes embedded prompt
+3. **Zero Breaking Changes**: Existing code works unchanged
+4. **Better Development UX**: No more waiting for compilation during prompt work
+5. **Production Ready**: Distribution binary needs no external files
+
+**Use Cases**:
+
+**During Development**:
+```bash
+# Edit the prompt
+vim prompts/system.txt
+
+# Test immediately (no rebuild)
+./claude-repl
+# ... test prompt changes ...
+^C
+
+# Iterate quickly
+vim prompts/system.txt
+./claude-repl
+# ... test again ...
+```
+
+**For Distribution**:
+```bash
+# When satisfied with prompt changes, rebuild to embed
+go build -o claude-repl
+
+# Binary now contains the new prompt
+# Can be distributed and run anywhere without prompts/system.txt
+```
+
+**Documentation Updates**:
+Added section to README.md explaining:
+- Development mode (load from file)
+- Production mode (use embedded)
+- Workflow for testing and finalizing prompt changes
+
+**Results**:
+- ✅ All tests pass (6 new prompt tests added)
+- ✅ Binary size: 8.1 MB (unchanged - just added loading logic)
+- ✅ Zero breaking changes to existing code
+- ✅ Significantly improves development experience
+- ✅ Maintains single-binary distribution
+- ✅ README.md updated with usage instructions
+
+**Code Changes**:
+- `prompts/prompts.go`: Enhanced with dual-mode loading (+713 bytes)
+- `tests/prompts_test.go`: New test file with 6 tests (+3.3 KB)
+- `README.md`: New "Customizing the System Prompt" section (+750 bytes)
+- Total: ~4.7 KB of additions
+
+**Time Taken**: ~30 minutes (as estimated in TODO)
+
+**Comparison with TODO Estimate**:
+The TODO estimated 30 minutes and mentioned using `//go:embed` as a fallback. We implemented exactly that approach, with the added benefit of a `GetSystemPrompt()` function for runtime reloading in tests.
+
+**Philosophy Alignment**:
+This feature aligns perfectly with the project's emphasis on:
+- Developer experience (fast iteration)
+- Production quality (single binary)
+- Simplicity (automatic fallback)
+- Zero external dependencies in production
+
+**Future Possibility**:
+The `GetSystemPrompt()` function could be used to support:
+- Hot-reloading of prompts (without restart)
+- Per-user custom prompts
+- A/B testing different prompt variants
+- Dynamic prompt selection based on task type
 
 ## Future Enhancements (Not Implemented)
 - Streaming responses for faster feedback

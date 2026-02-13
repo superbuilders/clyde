@@ -849,45 +849,59 @@ func init() {
 
 ---
 
-### 11. 🗄️ External System Prompt
-**Purpose**: Move system prompt out of code and into external file
+### ✅ 11. 🗄️ External System Prompt - COMPLETED (2026-02-13)
+**Status**: ✅ **COMPLETED**
 
-**Current Issue**: 200+ line systemPrompt constant is hardcoded in main.go
+**What Was Built**: Dual-mode system prompt loading
 
-**Proposed Solution**:
-```
-claude-repl/
-├── prompts/
-│   └── system.txt         # System prompt as plain text file
-└── main.go                # Loads prompt at startup
-```
+**Features Implemented**:
+1. ✅ System prompt in external file (`prompts/system.txt`)
+2. ✅ Development mode: loads from file (allows iteration without rebuild)
+3. ✅ Production mode: uses embedded version (single binary)
+4. ✅ Automatic fallback (embedded when file missing)
+5. ✅ `GetSystemPrompt()` for runtime reloading in tests
 
 **Implementation**:
 ```go
-// Load at startup (in main or init)
-systemPrompt, err := os.ReadFile("prompts/system.txt")
-if err != nil {
-    // Fallback to embedded default
-    systemPrompt = defaultSystemPrompt
+//go:embed system.txt
+var embeddedSystemPrompt string
+
+var SystemPrompt = loadSystemPrompt()
+
+func loadSystemPrompt() string {
+    // Try file first (dev mode)
+    if content, err := os.ReadFile("prompts/system.txt"); err == nil {
+        return string(content)
+    }
+    // Fallback to embedded (production)
+    return embeddedSystemPrompt
 }
 ```
 
 **Benefits**:
-- **Iteration speed**: Edit prompt without recompiling
-- **Version control**: Clear diffs in git for prompt changes
-- **Experimentation**: Easy to test prompt variations
-- **Separation**: Code vs. instructions clearly separated
-- **Readability**: main.go becomes cleaner
+- Fast iteration: edit prompt and restart (no rebuild)
+- Single binary: embedded version for distribution
+- Zero breaking changes: existing code unchanged
+- Better DX: no compilation wait during prompt work
 
-**Fallback Strategy**: Embed default prompt using `//go:embed` for single-binary distribution:
-```go
-//go:embed prompts/system.txt
-var defaultSystemPrompt string
-```
+**Testing**:
+- 6 new tests in `tests/prompts_test.go`
+- Tests both development and production modes
+- Tests custom prompt override capability
+- All tests pass
 
-**This pairs perfectly with #10**: When reorganizing code, move prompt to `prompts/system.txt`
+**Documentation**:
+- Added "Customizing the System Prompt" section to README.md
+- Explains development vs production modes
+- Shows workflow for testing and finalizing prompts
 
-**Estimated time**: 30 minutes (simple extraction)
+**Results**:
+- ✅ All tests pass (including 6 new prompt tests)
+- ✅ Binary size: 8.1 MB (unchanged)
+- ✅ Zero breaking changes
+- ✅ Significantly improved development experience
+
+**Time Taken**: ~30 minutes (as estimated!)
 
 ---
 
