@@ -1817,14 +1817,12 @@ go test ./tests/... -v -run TestName
 
 **Time Taken**: ~5 minutes (simple file move)
 
-**Deprecated Tests** (still present, just organized):
-The 4 deprecated tests remain in `tests/main_test.go`:
-1. `TestExecuteEditFile` - edit_file tool replaced with patch_file (2026-02-10)
-2. `TestEditFileIntegration` - edit_file tool replaced with patch_file (2026-02-10)
-3. `TestEditFileWithLargeContent` - demonstrated the bug before fix (2026-02-10)
-4. `TestExecuteGitHubCommand` - github_query tool replaced with run_bash (2026-02-10)
+**Deprecated Tests Cleanup** (2026-02-13):
+After code organization, deprecated tests were removed entirely:
+1. ~~`TestEditFileWithLargeContent`~~ - Deleted (duplicate function name issue)
+2. ~~`test_errors.sh`~~ - Deleted (manual testing script, replaced by unit tests)
 
-All marked with `t.Skip()` and clear deprecation messages.
+All deprecated tests have been removed. The test suite is now clean with no build errors or deprecated code.
 
 ## Future Enhancements (Not Implemented)
 - Streaming responses for faster feedback
