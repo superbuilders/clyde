@@ -957,9 +957,12 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 11. ✅ Test Organization
 12. ✅ Test Cleanup
 13. ✅ External System Prompt (Development & Production Mode)
-14. ✅ Consolidated Tool Execution Framework - **NEW!** ✨
+14. ✅ Consolidated Tool Execution Framework
 
-**Next Priority**: #15 - Config File for Global Installation
+**Cancelled Items**: 1 ❌
+- ❌ Custom Error Types (Priority #13) - Overengineering, Priority #4 already solved this
+
+**Remaining Priority**: #15 - Config File for Global Installation (Optional)
 
 ## Feature Additions
 
@@ -2245,6 +2248,77 @@ After (modular):
 
 **Lesson Learned**:
 Sometimes the best way to implement a framework is as a side effect of good modular design. By organizing code into logical packages with clear responsibilities, we naturally eliminated duplication and created extensible patterns without explicitly setting out to build a "framework."
+
+### Custom Error Types (Cancelled 2026-02-13)
+
+**Priority #13 Cancelled**: Decision made to NOT implement custom error types.
+
+**Original Proposal**: Create structured error types (`ToolError`, `ValidationError`, `APIError`) with fields like `Tool`, `Message`, `Suggestions`, etc.
+
+**Why Cancelled**:
+
+Priority #4 (Better Error Handling & Messages) already achieved the goal. The current string-based errors with excellent messages are sufficient:
+
+```go
+// Current approach - works great
+fmt.Errorf("file '%s' does not exist. Use list_files to see available files", path)
+fmt.Errorf("permission denied reading '%s'. Check file permissions", path)
+```
+
+**Reasons Against Custom Types**:
+
+1. **No programmatic error handling needed**:
+   - Errors go directly to Claude AI (needs text, not structure)
+   - No recovery logic in the agent
+   - Just pass error text to Claude for natural language explanation
+
+2. **String errors are more flexible**:
+   - Easy inline context: `fmt.Errorf("failed to read '%s': %w", path, err)`
+   - Natural error wrapping with `%w`
+   - No struct creation overhead
+
+3. **Already excellent UX**:
+   - Priority #4 made errors clear, actionable, and helpful
+   - Multi-line suggestions work fine in strings
+   - Users (via Claude) get everything they need
+
+4. **Testing is sufficient**:
+   - Standard Go error checking works fine
+   - No need for type assertions or error field inspection
+
+5. **Would add complexity**:
+   - ~300 lines of error definitions and constructors
+   - More complex returns throughout codebase
+   - Need to handle both custom and standard errors
+   - More maintenance burden
+
+6. **Go's philosophy**:
+   - Go favors simple errors with good messages
+   - Current approach is idiomatic
+   - Elaborate error hierarchies are un-Go-like
+
+**When Custom Types WOULD Make Sense**:
+
+Custom error types would be valuable if the project had:
+- Recovery logic based on error type
+- External API returning structured errors to clients
+- Error categorization for metrics/logging
+- Multi-tier system needing error propagation
+- Programmatic error handling in middleware
+
+**But This REPL Has None Of Those**:
+- Single-tier architecture
+- Errors displayed via Claude (text-based)
+- No recovery or retry logic
+- No external API clients
+- Simple, linear error flow
+
+**Philosophy**:
+Not every problem needs a complex solution. The string-based approach with excellent messages (from Priority #4) is the right tool for this job. Custom error types would be overengineering without tangible benefits.
+
+**Decision**: Maintain current simple, effective error handling. Focus efforts on features that provide user value.
+
+**Date**: 2026-02-13
 
 ## Future Enhancements (Not Implemented)
 - Streaming responses for faster feedback

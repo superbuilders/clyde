@@ -1014,83 +1014,61 @@ The implementation uses function-based registration instead of the interface-bas
 
 ---
 
-### 13. 🚨 Better Error Handling (Custom Error Types)
-**Purpose**: Create structured error types with suggestions and context
+### ❌ 13. 🚨 Custom Error Types - CANCELLED (2026-02-13)
+**Status**: ❌ **CANCELLED** - Overengineering
 
-**Current Problem**: Errors are strings with formatting, hard to test or handle programmatically
+**Original Purpose**: Create structured error types with suggestions and context
 
-**Proposed Solution**:
-```go
-// errors/errors.go
-type ToolError struct {
-    Tool        string
-    Message     string
-    Suggestions []string
-    Params      map[string]interface{}
-}
+**Why Cancelled**:
 
-func (e *ToolError) Error() string {
-    var b strings.Builder
-    b.WriteString(fmt.Sprintf("Tool '%s' error: %s\n", e.Tool, e.Message))
-    if len(e.Suggestions) > 0 {
-        b.WriteString("\nSuggestions:\n")
-        for _, s := range e.Suggestions {
-            b.WriteString(fmt.Sprintf("  - %s\n", s))
-        }
-    }
-    return b.String()
-}
+Priority #4 (Better Error Handling & Messages) already achieved the goal with excellent, actionable error messages using simple string-based errors. Custom error types would add complexity without meaningful benefit.
 
-type ValidationError struct {
-    Field       string
-    Value       interface{}
-    Expected    string
-    Example     string
-}
+**Arguments Against Custom Types**:
 
-type APIError struct {
-    StatusCode  int
-    Message     string
-    Retry       bool
-    Suggestions []string
-}
-```
+1. **Current errors are already excellent**:
+   ```go
+   fmt.Errorf("file '%s' does not exist. Use list_files to see available files", path)
+   fmt.Errorf("permission denied reading '%s'. Check file permissions", path)
+   ```
+   These are clear, actionable, and include suggestions inline.
 
-**Usage Example**:
-```go
-// Instead of:
-return "", fmt.Errorf("file '%s' does not exist. Use list_files to see available files", path)
+2. **No need for programmatic error handling**:
+   - Errors go directly to Claude AI (needs text, not structure)
+   - No recovery logic that would benefit from structured types
+   - Agent just passes errors to Claude for natural language explanation
 
-// Do:
-return "", &ToolError{
-    Tool: "read_file",
-    Message: fmt.Sprintf("file '%s' does not exist", path),
-    Suggestions: []string{
-        "Use list_files to see available files",
-        fmt.Sprintf("Check if path is correct: %s", path),
-    },
-    Params: map[string]interface{}{"path": path},
-}
-```
+3. **String errors are more flexible**:
+   - Easy context inclusion: `fmt.Errorf("failed to read '%s': %w", path, err)`
+   - Natural error wrapping with `%w`
+   - No struct creation overhead for every error
 
-**Error Helpers**:
-```go
-func FileNotFoundError(path string) error { ... }
-func PermissionDeniedError(path string) error { ... }
-func RequiresParameterError(tool, param string) error { ... }
-func DirectoryNotFileError(path string) error { ... }
-```
+4. **Testing is already sufficient**:
+   - Standard Go error checking works fine
+   - Tests verify error conditions without needing type assertions
 
-**Benefits**:
-- **Testability**: Can assert on error types, not string matching
-- **Consistency**: Same format across all tools
-- **Programmatic handling**: Can inspect error fields
-- **Rich context**: Structured data about what went wrong
-- **DRY**: Reuse common error helpers
+5. **More code to maintain**:
+   - Would add ~300 lines of error type definitions and constructors
+   - More complex returns throughout codebase
+   - Need to handle both custom and standard errors
 
-**Combines well with #3 from above**: Error duplication reduction
+6. **Go's philosophy**:
+   - Go favors simple errors with good messages over elaborate hierarchies
+   - Current approach is more idiomatic
 
-**Estimated time**: 2-3 hours (define types + refactor error returns)
+**When Custom Types WOULD Make Sense**:
+- Recovery logic based on error type
+- External API returning structured errors to clients
+- Error categorization for metrics/logging
+- Multi-tier system needing error propagation
+
+**But for this REPL**:
+- Errors go to Claude (needs human-readable text)
+- No recovery logic (just display and continue)
+- Simple architecture (not a distributed system)
+
+**Conclusion**: Priority #4 already solved error handling properly. Adding structured types would be overengineering without tangible benefits.
+
+**Decision Date**: 2026-02-13
 
 ---
 
