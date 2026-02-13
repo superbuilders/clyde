@@ -1244,3 +1244,363 @@ Or use a `.env` file in your project directory for project-specific configuratio
 **Estimated time**:
 - Text file input: 2 hours
 - Image input: 4 hours (includes API changes)
+
+---
+
+### 16. 🔌 Complete Agent Decoupling (UI-Agnostic Agent)
+**Status**: ⏳ **NOT STARTED**
+
+**Purpose**: Make the agent 100% UI-agnostic by removing the single remaining UI coupling
+
+**Current State**:
+- ✅ Agent logic is already UI-agnostic (90% done thanks to Priority #10)
+- ✅ Tools system is completely decoupled
+- ✅ API client is independent
+- ✅ Main.go REPL is isolated (only 60 lines)
+- ⚠️ **One remaining coupling**: Tool progress messages use `fmt.Println` in agent.go
+
+**The Problem**:
+In `agent/agent.go` line ~82:
+```go
+if reg.Display != nil {
+    displayMsg := reg.Display(toolBlock.Input)
+    if displayMsg != "" {
+        fmt.Println(displayMsg)  // ← ONLY UI COUPLING
+    }
+}
+```
+
+This prevents the agent from being used in:
+- HTTP APIs (need to send progress via HTTP/WebSocket)
+- GUIs (need to update UI widgets)
+- Bots (need to send to Telegram/Discord/Slack)
+- Embedded contexts (library usage)
+
+**Proposed Solution**: Add callback interface using Go's options pattern
+
+**Implementation**:
+
+1. **Add callback types to agent.go**:
+```go
+// ProgressCallback receives progress messages during tool execution
+type ProgressCallback func(message string)
+
+// ErrorCallback receives errors during processing (optional, for logging)
+type ErrorCallback func(err error)
+
+type Agent struct {
+    apiClient        *api.Client
+    systemPrompt     string
+    history          []api.Message
+    progressCallback ProgressCallback  // ← NEW
+    errorCallback    ErrorCallback     // ← NEW (optional)
+}
+```
+
+2. **Add options pattern for flexibility**:
+```go
+type AgentOption func(*Agent)
+
+func WithProgressCallback(cb ProgressCallback) AgentOption {
+    return func(a *Agent) { a.progressCallback = cb }
+}
+
+func WithErrorCallback(cb ErrorCallback) AgentOption {
+    return func(a *Agent) { a.errorCallback = cb }
+}
+
+func NewAgent(apiClient *api.Client, systemPrompt string, opts ...AgentOption) *Agent {
+    agent := &Agent{
+        apiClient:    apiClient,
+        systemPrompt: systemPrompt,
+        history:      []api.Message{},
+    }
+    
+    for _, opt := range opts {
+        opt(agent)
+    }
+    
+    return agent
+}
+```
+
+3. **Update progress display in HandleMessage()**:
+```go
+// Replace:
+if displayMsg != "" {
+    fmt.Println(displayMsg)
+}
+
+// With:
+if displayMsg != "" && a.progressCallback != nil {
+    a.progressCallback(displayMsg)
+}
+```
+
+4. **Update main.go to use callback**:
+```go
+agentInstance := agent.NewAgent(
+    apiClient, 
+    prompts.SystemPrompt,
+    agent.WithProgressCallback(func(msg string) {
+        fmt.Println(msg)  // REPL prints to stdout
+    }),
+)
+```
+
+**Benefits**:
+- ✅ Agent becomes 100% UI-agnostic
+- ✅ Zero breaking changes (backward compatible with tests)
+- ✅ Enables any frontend: CLI, API, GUI, bot, library
+- ✅ Better testability (can capture progress messages in tests)
+- ✅ Idiomatic Go (options pattern is standard)
+
+**Testing Updates**:
+```go
+// In tests, can capture progress messages:
+var progressMessages []string
+agent := agent.NewAgent(
+    apiClient,
+    systemPrompt,
+    agent.WithProgressCallback(func(msg string) {
+        progressMessages = append(progressMessages, msg)
+    }),
+)
+```
+
+**Implementation Tasks**:
+1. Add callback types and options pattern to `agent/agent.go` (10 mins)
+2. Update progress display to use callback (5 mins)
+3. Update `main.go` to use callback (5 mins)
+4. Update tests to work with new pattern (10 mins)
+5. Add example in README showing callback usage (5 mins)
+6. Update progress.md with decoupling completion (5 mins)
+
+**Estimated time**: 1 hour
+
+**Priority**: Medium-High - Unlocks all future interface implementations
+
+---
+
+### 17. 🌐 HTTP REST API Interface
+**Status**: ⏳ **NOT STARTED**
+**Depends on**: Priority #16 (Complete Agent Decoupling)
+
+**Purpose**: Provide HTTP REST API for accessing claude-repl agent
+
+**Why This Matters**:
+- Access agent from web apps, mobile apps, other services
+- Session management (multiple concurrent users)
+- Stateless operation with session IDs
+- Deploy as service (Docker, Kubernetes, cloud)
+
+**API Design**:
+
+**Endpoints**:
+```
+POST /api/v1/sessions          # Create new session
+POST /api/v1/sessions/:id/messages    # Send message
+GET  /api/v1/sessions/:id/history     # Get conversation history
+DELETE /api/v1/sessions/:id   # Delete session
+GET  /api/v1/health           # Health check
+```
+
+**Example Request/Response**:
+```bash
+# Create session
+curl -X POST http://localhost:8080/api/v1/sessions \
+  -H "Authorization: Bearer YOUR_API_KEY"
+
+# Response:
+{
+  "session_id": "sess_abc123",
+  "created_at": "2026-02-13T10:00:00Z"
+}
+
+# Send message
+curl -X POST http://localhost:8080/api/v1/sessions/sess_abc123/messages \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "What files are in the current directory?"
+  }'
+
+# Response:
+{
+  "response": "Here are the files...",
+  "progress_messages": [
+    "→ Listing files: . (current directory)"
+  ]
+}
+```
+
+**Implementation Structure**:
+```
+claude-repl/
+├── cmd/
+│   ├── repl/main.go       # Current CLI REPL
+│   └── api/main.go        # NEW: HTTP API server
+├── internal/
+│   └── server/            # NEW: HTTP server package
+│       ├── server.go      # Server setup
+│       ├── handlers.go    # HTTP handlers
+│       ├── sessions.go    # Session management
+│       └── auth.go        # API key authentication
+├── agent/                 # Shared agent (decoupled)
+├── api/                   # Shared API client
+└── tools/                 # Shared tools
+```
+
+**Server Implementation**:
+```go
+// cmd/api/main.go
+package main
+
+import (
+    "log"
+    "net/http"
+    
+    "claude-repl/config"
+    "claude-repl/internal/server"
+)
+
+func main() {
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    srv := server.New(cfg)
+    
+    log.Printf("Starting HTTP API server on :8080")
+    if err := http.ListenAndServe(":8080", srv.Handler()); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+**Session Management**:
+```go
+// internal/server/sessions.go
+package server
+
+import (
+    "sync"
+    "time"
+    
+    "claude-repl/agent"
+)
+
+type Session struct {
+    ID        string
+    Agent     *agent.Agent
+    CreatedAt time.Time
+    LastUsed  time.Time
+}
+
+type SessionManager struct {
+    sessions map[string]*Session
+    mu       sync.RWMutex
+}
+
+func (sm *SessionManager) Create(agentInstance *agent.Agent) *Session {
+    // Create new session with unique ID
+}
+
+func (sm *SessionManager) Get(id string) (*Session, error) {
+    // Retrieve session by ID
+}
+
+func (sm *SessionManager) Delete(id string) {
+    // Remove session
+}
+
+func (sm *SessionManager) Cleanup() {
+    // Remove old sessions (run periodically)
+}
+```
+
+**Progress Handling**:
+```go
+// Capture progress messages during request
+type progressCapture struct {
+    messages []string
+    mu       sync.Mutex
+}
+
+func (p *progressCapture) callback(msg string) {
+    p.mu.Lock()
+    defer p.mu.Unlock()
+    p.messages = append(p.messages, msg)
+}
+
+// In handler:
+progress := &progressCapture{}
+session.Agent = agent.NewAgent(
+    apiClient,
+    prompt,
+    agent.WithProgressCallback(progress.callback),
+)
+```
+
+**Features**:
+- ✅ Session-based conversation (multiple users)
+- ✅ Progress message streaming
+- ✅ API key authentication
+- ✅ Rate limiting (optional)
+- ✅ CORS support for web clients
+- ✅ Health checks
+- ✅ Graceful shutdown
+
+**Framework Choice**:
+- **Option 1**: Standard library `net/http` (lightweight, zero dependencies)
+- **Option 2**: Echo framework (more features, middleware)
+- **Option 3**: Gin framework (fast, popular)
+
+**Recommendation**: Start with `net/http` for consistency with project philosophy (minimal dependencies).
+
+**Testing**:
+- Unit tests for handlers
+- Integration tests with test client
+- Session management tests
+- Authentication tests
+
+**Documentation**:
+- OpenAPI/Swagger spec
+- README section on API usage
+- Example clients (curl, JavaScript, Python)
+
+**Deployment**:
+```dockerfile
+# Dockerfile
+FROM golang:1.24-alpine AS builder
+WORKDIR /app
+COPY . .
+RUN go build -o api-server cmd/api/main.go
+
+FROM alpine:latest
+COPY --from=builder /app/api-server /usr/local/bin/
+EXPOSE 8080
+CMD ["api-server"]
+```
+
+**Implementation Tasks**:
+1. Create `internal/server` package structure (30 mins)
+2. Implement session management (1 hour)
+3. Implement HTTP handlers (1 hour)
+4. Add authentication (30 mins)
+5. Add progress message capture (30 mins)
+6. Write tests (1 hour)
+7. Create Dockerfile (15 mins)
+8. Write API documentation (30 mins)
+
+**Estimated time**: 5-6 hours
+
+**Priority**: Medium - Valuable but not critical for basic usage
+
+**Use Cases**:
+- Web frontend for claude-repl
+- Mobile app backend
+- CI/CD integration (API calls from scripts)
+- Multi-user deployment
+- Cloud service offering
