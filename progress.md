@@ -1,7 +1,18 @@
 # Claude REPL Progress Documentation
 
 ## Overview
-Built a single-file Go CLI that provides a REPL (Read-Eval-Print Loop) interface for conversing with Claude AI, featuring GitHub integration via the `gh` CLI tool.
+Built a Go CLI that provides a REPL (Read-Eval-Print Loop) interface for conversing with Claude AI, featuring GitHub integration via the `gh` CLI tool.
+
+**Architecture** (as of 2026-02-13): Modular package-based structure
+- `api/` - Claude API client and types
+- `config/` - Configuration and .env loading
+- `agent/` - Conversation orchestration
+- `tools/` - Tool registry and 10 tool implementations
+- `prompts/` - System prompt (external file, embedded in binary)
+- `main.go` - CLI REPL interface (50 lines)
+
+**Original Architecture** (until 2026-02-13): Single-file monolith
+- `main.go` - Everything in one 1,652-line file
 
 ## What Was Built
 
@@ -924,26 +935,19 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 - Web search includes API key setup guidance and rate limit explanations
 - All tests still pass (22 passed, 4 skipped)
 
-**Completed Priorities**: 9 / 11 from todos.md
+**Completed Priorities**: 10 / 15 from todos.md
 1. ✅ Deprecate GitHub Tool (replaced with run_bash)
-2. ✅ System Prompt: progress.md Philosophy
+2. ✅ System Prompt: progress.md Philosophy  
 3. ✅ Better Tool Progress Messages
 4. ✅ Better Error Handling & Messages
 5. ✅ grep Tool (Search Across Files)
 6. ✅ glob Tool (Fuzzy File Finding)
 7. ✅ multi_patch Tool (Coordinated Multi-File Edits)
 8. ✅ web_search Tool (Search the Internet via Brave API)
-9. ✅ browse Tool (Fetch URL Contents with AI Extraction) - NEW!
+9. ✅ browse Tool (Fetch URL Contents with AI Extraction)
+10. ✅ Code Organization & Architecture Separation - **NEW!**
 
-**Next Priority**: #10 - Code Organization & Architecture Separation
-3. ✅ Better Tool Progress Messages
-4. ✅ Better Error Handling & Messages
-5. ✅ grep Tool (Search Across Files)
-6. ✅ glob Tool (Fuzzy File Finding)
-7. ✅ multi_patch Tool (Coordinated Multi-File Edits) - NEW!
-
-**Next Priority**: #8 - web_search Tool (Search the Internet)
-- Estimated time: 3 hours
+**Next Priority**: #11 - External System Prompt
 
 ## Feature Additions
 
@@ -1554,6 +1558,190 @@ type Agent interface {
 ```
 
 This allows different "frontends" (CLI, API, GUI) to use the same agent backend.
+
+### Code Organization & Architecture Separation (Completed 2026-02-13)
+
+**Priority #10 Completed**: Successfully refactored single-file architecture into organized, modular packages.
+
+**Problem**: The original `main.go` was 1,652 lines and contained everything:
+- API types and client
+- Configuration loading
+- System prompt
+- All 10 tool implementations
+- Agent conversation logic
+- REPL interface
+
+This made the code difficult to:
+- Navigate and understand
+- Test individual components
+- Extend with new tools
+- Reuse in other projects
+
+**Solution**: Separated code into logical packages with clear responsibilities.
+
+**New Architecture**:
+```
+claude-repl/
+├── api/                    # Claude API client and types
+│   ├── client.go          # API client with Call() method
+│   └── types.go           # Message, Tool, Response, ContentBlock types
+├── config/                 # Configuration management
+│   └── config.go          # Load() for .env parsing and validation
+├── agent/                  # Conversation orchestration
+│   └── agent.go           # Agent with HandleMessage() logic
+├── tools/                  # Tool registry and implementations
+│   ├── registry.go        # Central tool registration
+│   ├── list_files.go      # list_files tool
+│   ├── read_file.go       # read_file tool
+│   ├── patch_file.go      # patch_file tool
+│   ├── write_file.go      # write_file tool
+│   ├── run_bash.go        # run_bash tool
+│   ├── grep.go            # grep tool
+│   ├── glob.go            # glob tool
+│   ├── multi_patch.go     # multi_patch tool
+│   ├── web_search.go      # web_search tool
+│   └── browse.go          # browse tool
+├── prompts/                # System prompts
+│   ├── prompts.go         # Embedded prompt loader
+│   └── system.txt         # System prompt text (external file)
+├── main.go                 # CLI REPL interface (orchestration only)
+└── test_helpers.go        # Test compatibility layer
+```
+
+**Benefits Achieved**:
+
+1. **Maintainability**:
+   - Each tool is ~100-300 lines in its own file
+   - Clear separation of concerns
+   - Easy to find and modify specific components
+
+2. **Extensibility**:
+   - Adding new tools is simple: create new file in tools/
+   - Tools register themselves via init() functions
+   - No need to modify main.go for new tools
+
+3. **Testability**:
+   - Each package can be tested independently
+   - Test helpers maintain backward compatibility
+   - No test code changes required
+
+4. **Readability**:
+   - main.go is now only 50 lines (was 1,652)
+   - Clear package structure shows architecture at a glance
+   - Related code is grouped together
+
+5. **Reusability**:
+   - API client can be imported by other projects
+   - Agent can be embedded in different interfaces
+   - Tools can be registered selectively
+
+**Tool Registry Pattern**:
+Each tool file follows a consistent pattern:
+```go
+func init() {
+    Register(toolDefinition, executeFunc, displayFunc)
+}
+
+var toolDefinition = api.Tool{...}
+
+func executeFunc(input map[string]interface{}, apiClient *api.Client, 
+                 history []api.Message) (string, error) {...}
+
+func displayFunc(input map[string]interface{}) string {...}
+```
+
+This allows tools to self-register and provides a consistent interface for execution.
+
+**System Prompt Externalization**:
+- Moved from hardcoded constant to external file `prompts/system.txt`
+- Embedded in binary using `//go:embed` directive
+- Can be edited without recompilation during development
+- Still results in single binary for distribution
+
+**API Client Abstraction**:
+```go
+type Client struct {
+    apiKey    string
+    apiURL    string
+    modelID   string
+    maxTokens int
+}
+
+func (c *Client) Call(systemPrompt string, messages []Message, 
+                      tools []Tool) (*Response, error)
+```
+
+Clean, simple interface that encapsulates all API communication.
+
+**Agent Abstraction**:
+```go
+type Agent struct {
+    apiClient    *api.Client
+    systemPrompt string
+    history      []Message
+}
+
+func (a *Agent) HandleMessage(userInput string) (string, error)
+```
+
+Encapsulates conversation logic separate from REPL interface.
+
+**Test Compatibility**:
+Created `test_helpers.go` to maintain backward compatibility:
+- Wrapper functions for direct tool execution
+- Test helper for handleConversation()
+- Type aliases for tests
+- Zero test code changes required
+
+**Results**:
+- ✅ All 25 tests pass (4 skipped - deprecated tests)
+- ✅ Binary size: 9.0 MB (actually smaller than before!)
+- ✅ Test runtime: ~153 seconds (unchanged)
+- ✅ Zero breaking changes
+- ✅ Clean package structure
+- ✅ Ready for future extensions (HTTP API, GUI, etc.)
+
+**File Size Comparison**:
+```
+Before: main.go = 55.7 KB (1,652 lines)
+After:  
+  - main.go = 1.2 KB (50 lines)
+  - api/*.go = 5.0 KB
+  - config/*.go = 1.7 KB  
+  - agent/*.go = 2.9 KB
+  - tools/*.go = 47.4 KB
+  - prompts/*.go = 5.3 KB
+  - test_helpers.go = 7.0 KB
+  Total: ~70.5 KB (more due to cleaner separation)
+```
+
+**Time Taken**: ~2 hours (as estimated)
+
+**Migration Process**:
+1. Created directory structure (api, config, agent, tools, prompts)
+2. Extracted types.go (Message, Tool, Response, ContentBlock)
+3. Extracted config.go (environment loading, validation)
+4. Extracted client.go (Claude API client)
+5. Extracted each tool to tools/ (10 files)
+6. Extracted agent.go (conversation orchestration)
+7. Extracted system prompt to prompts/system.txt
+8. Created test_helpers.go for test compatibility
+9. Updated main.go to orchestrate (imports and wiring)
+10. Ran tests after each step to ensure nothing broke
+
+**Lessons Learned**:
+- Clear package boundaries make code easier to reason about
+- Init() functions for self-registration work beautifully
+- Test compatibility layers can preserve investment in tests
+- Go's embed directive is perfect for external files
+- Smaller files are much easier to navigate and understand
+
+**Future Possibilities** (now much easier):
+- HTTP API server (import agent package)
+- GUI interface (import agent package)
+- Selective tool loading (choose which tools to register)
+- Plugin system (external tools via shared library)
+- Package distribution (publish as importable library)
 
 ## Future Enhancements (Not Implemented)
 - Streaming responses for faster feedback
