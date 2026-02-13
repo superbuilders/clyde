@@ -100,7 +100,11 @@ Or set the ENV_PATH variable to point to an existing .env file.
 ## Testing
 
 ```bash
-go test -v
+# Run all tests
+go test ./tests/... -v
+
+# Run specific test
+go test ./tests/... -v -run TestName
 ```
 
 ## Available Tools
