@@ -137,7 +137,7 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 				envPath = ".env"
 			} else {
 				// Try parent directory
-				envPath = "../coding-agent/.env"
+				envPath = "../.env"
 			}
 		}
 

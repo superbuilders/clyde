@@ -78,7 +78,7 @@ func TestWebSearchIntegration(t *testing.T) {
 		if _, err := os.Stat(".env"); err == nil {
 			envPath = ".env"
 		} else {
-			envPath = "../coding-agent/.env"
+			envPath = "../.env"
 		}
 	}
 

@@ -523,7 +523,7 @@ func TestCallClaude(t *testing.T) {
 		if _, err := os.Stat(".env"); err == nil {
 			envPath = ".env"
 		} else {
-			envPath = "../coding-agent/.env"
+			envPath = "../.env"
 		}
 	}
 
@@ -604,7 +604,7 @@ func TestHandleConversation(t *testing.T) {
 		if _, err := os.Stat(".env"); err == nil {
 			envPath = ".env"
 		} else {
-			envPath = "../coding-agent/.env"
+			envPath = "../.env"
 		}
 	}
 
@@ -697,7 +697,7 @@ func TestListFilesIntegration(t *testing.T) {
 		if _, err := os.Stat(".env"); err == nil {
 			envPath = ".env"
 		} else {
-			envPath = "../coding-agent/.env"
+			envPath = "../.env"
 		}
 	}
 
@@ -787,7 +787,7 @@ func TestReadFileIntegration(t *testing.T) {
 		if _, err := os.Stat(".env"); err == nil {
 			envPath = ".env"
 		} else {
-			envPath = "../coding-agent/.env"
+			envPath = "../.env"
 		}
 	}
 
@@ -895,7 +895,7 @@ func TestGitHubQueryIntegration(t *testing.T) {
 		if _, err := os.Stat(".env"); err == nil {
 			envPath = ".env"
 		} else {
-			envPath = "../coding-agent/.env"
+			envPath = "../.env"
 		}
 	}
 
@@ -1010,7 +1010,7 @@ func TestRunBashIntegration(t *testing.T) {
 		if _, err := os.Stat(".env"); err == nil {
 			envPath = ".env"
 		} else {
-			envPath = "../coding-agent/.env"
+			envPath = "../.env"
 		}
 	}
 
@@ -1197,7 +1197,7 @@ func TestWriteFileIntegration(t *testing.T) {
 		if _, err := os.Stat(".env"); err == nil {
 			envPath = ".env"
 		} else {
-			envPath = "../coding-agent/.env"
+			envPath = "../.env"
 		}
 	}
 
@@ -1414,7 +1414,7 @@ func TestGrepIntegration(t *testing.T) {
 		if _, err := os.Stat(".env"); err == nil {
 			envPath = ".env"
 		} else {
-			envPath = "../coding-agent/.env"
+			envPath = "../.env"
 		}
 	}
 
@@ -1758,7 +1758,7 @@ func TestGlobIntegration(t *testing.T) {
 		if _, err := os.Stat(".env"); err == nil {
 			envPath = ".env"
 		} else {
-			envPath = "../coding-agent/.env"
+			envPath = "../.env"
 		}
 	}
 
