@@ -768,40 +768,275 @@ Perfect workflow: use web_search to find pages, then browse to read them:
 ---
 
 ### 10. 📂 Code Organization & Architecture Separation
-**Purpose**: Split single-file architecture into multiple files and separate agent from CLI
+**Purpose**: Split single-file architecture into multiple files and packages
 
-**File Structure**:
+**Current Issue**: main.go is ~1,200 lines with everything mixed together
+
+**Proposed Structure**:
 ```
 claude-repl/
-├── main.go       # CLI entry point and REPL loop
-├── agent.go      # Core agent logic (API calls, tool execution)
-├── tools.go      # Tool definitions and execution functions
-├── api.go        # Claude API client code
-├── types.go      # Struct definitions
-└── ...
+├── main.go                 # CLI entry point (REPL loop, main function)
+├── config/
+│   └── config.go          # Config struct, env loading, validation
+├── api/
+│   ├── client.go          # Claude API client
+│   └── types.go           # Message, Response, ContentBlock types
+├── agent/
+│   ├── agent.go           # Core conversation/tool coordination logic
+│   └── history.go         # Conversation history management
+├── tools/
+│   ├── registry.go        # Tool registration and dispatch
+│   ├── list_files.go      # list_files tool (definition + execution)
+│   ├── read_file.go       # read_file tool
+│   ├── patch_file.go      # patch_file tool
+│   ├── write_file.go      # write_file tool
+│   ├── run_bash.go        # run_bash tool
+│   ├── grep.go            # grep tool
+│   ├── glob.go            # glob tool
+│   ├── multi_patch.go     # multi_patch tool
+│   ├── web_search.go      # web_search tool
+│   └── browse.go          # browse tool
+├── prompts/
+│   └── system.txt         # System prompt (external file)
+└── errors/
+    └── errors.go          # Custom error types and helpers
 ```
 
 **Benefits**:
-- Easier to navigate and understand
-- Better separation of concerns
-- Cleaner for contributors
-- Maintains single-binary compilation
-- **Enables agent reuse in different contexts** (API, GUI, bash, Go package)
+- **Maintainability**: Each tool in its own file (~100-200 lines)
+- **Separation of concerns**: API, agent, tools, config all separate
+- **Testability**: Easier to test individual components
+- **Extensibility**: Easy to add new tools (just add new file in tools/)
+- **Readability**: Clear structure, easier to find code
+- **Reusability**: Agent can be imported as a Go package
+- **External prompts**: System prompt in separate file (easier iteration)
+- Still compiles to single binary
 
-**Key Abstraction**:
+**Tool Pattern** (each tool file):
 ```go
-type Agent interface {
-    HandleMessage(input string) (response string, err error)
-    RegisterTool(tool Tool) error
-    GetHistory() []Message
+package tools
+
+// Tool definition (schema)
+var ListFilesTool = Tool{...}
+
+// Execution function
+func ExecuteListFiles(params map[string]interface{}) (string, error) {...}
+
+// Display message
+func DisplayListFiles(params map[string]interface{}) string {...}
+
+// Register with registry
+func init() {
+    Register(ListFilesTool, ExecuteListFiles, DisplayListFiles)
 }
 ```
 
-**Estimated time**: 3 hours
+**Migration Strategy**:
+1. Create directory structure
+2. Extract types.go (Message, Response, etc.)
+3. Extract config.go (env loading, validation)
+4. Extract api/client.go (callClaude function)
+5. Extract each tool to tools/ (one at a time, test after each)
+6. Extract agent.go (handleConversation logic)
+7. Extract prompts/system.txt (system prompt)
+8. Extract errors.go (custom error types from #12 below)
+9. Update main.go to orchestrate (import and wire up)
+10. Run full test suite after each step
+
+**Estimated time**: 6-8 hours (careful refactoring with testing)
 
 ---
 
-### 11. 📎 File Input Support (Future)
+### 11. 🗄️ External System Prompt
+**Purpose**: Move system prompt out of code and into external file
+
+**Current Issue**: 200+ line systemPrompt constant is hardcoded in main.go
+
+**Proposed Solution**:
+```
+claude-repl/
+├── prompts/
+│   └── system.txt         # System prompt as plain text file
+└── main.go                # Loads prompt at startup
+```
+
+**Implementation**:
+```go
+// Load at startup (in main or init)
+systemPrompt, err := os.ReadFile("prompts/system.txt")
+if err != nil {
+    // Fallback to embedded default
+    systemPrompt = defaultSystemPrompt
+}
+```
+
+**Benefits**:
+- **Iteration speed**: Edit prompt without recompiling
+- **Version control**: Clear diffs in git for prompt changes
+- **Experimentation**: Easy to test prompt variations
+- **Separation**: Code vs. instructions clearly separated
+- **Readability**: main.go becomes cleaner
+
+**Fallback Strategy**: Embed default prompt using `//go:embed` for single-binary distribution:
+```go
+//go:embed prompts/system.txt
+var defaultSystemPrompt string
+```
+
+**This pairs perfectly with #10**: When reorganizing code, move prompt to `prompts/system.txt`
+
+**Estimated time**: 30 minutes (simple extraction)
+
+---
+
+### 12. 🧰 Consolidated Tool Execution Framework
+**Purpose**: Eliminate duplication in tool execution pattern
+
+**Current Issue**: Each tool in handleConversation has duplicate code:
+- Parameter validation
+- Display message formatting
+- Error handling boilerplate
+- Result formatting
+
+**Proposed Solution**:
+```go
+type ToolExecutor interface {
+    Validate(params map[string]interface{}) error
+    Execute(params map[string]interface{}) (string, error)
+    DisplayMessage(params map[string]interface{}) string
+}
+
+// Generic execution in handleConversation
+for _, toolBlock := range toolUseBlocks {
+    executor := getExecutor(toolBlock.Name)
+    
+    if err := executor.Validate(toolBlock.Input); err != nil {
+        // Handle validation error
+        continue
+    }
+    
+    fmt.Println(executor.DisplayMessage(toolBlock.Input))
+    output, err := executor.Execute(toolBlock.Input)
+    // Handle result...
+}
+```
+
+**Example Tool Implementation**:
+```go
+type ReadFileTool struct{}
+
+func (t *ReadFileTool) Validate(params map[string]interface{}) error {
+    path, ok := params["path"].(string)
+    if !ok || path == "" {
+        return fmt.Errorf("read_file requires 'path' parameter")
+    }
+    return nil
+}
+
+func (t *ReadFileTool) Execute(params map[string]interface{}) (string, error) {
+    path := params["path"].(string)
+    return executeReadFile(path)
+}
+
+func (t *ReadFileTool) DisplayMessage(params map[string]interface{}) string {
+    path := params["path"].(string)
+    return fmt.Sprintf("→ Reading file: %s", path)
+}
+```
+
+**Benefits**:
+- **DRY**: Eliminate ~200 lines of duplicate validation/formatting
+- **Consistency**: All tools follow same pattern
+- **Testability**: Easy to test tool behavior in isolation
+- **Extensibility**: Add new tools by implementing interface
+
+**This pairs perfectly with #10**: Each tool file implements ToolExecutor interface
+
+**Estimated time**: 3-4 hours (refactor all 10 tools)
+
+---
+
+### 13. 🚨 Better Error Handling (Custom Error Types)
+**Purpose**: Create structured error types with suggestions and context
+
+**Current Problem**: Errors are strings with formatting, hard to test or handle programmatically
+
+**Proposed Solution**:
+```go
+// errors/errors.go
+type ToolError struct {
+    Tool        string
+    Message     string
+    Suggestions []string
+    Params      map[string]interface{}
+}
+
+func (e *ToolError) Error() string {
+    var b strings.Builder
+    b.WriteString(fmt.Sprintf("Tool '%s' error: %s\n", e.Tool, e.Message))
+    if len(e.Suggestions) > 0 {
+        b.WriteString("\nSuggestions:\n")
+        for _, s := range e.Suggestions {
+            b.WriteString(fmt.Sprintf("  - %s\n", s))
+        }
+    }
+    return b.String()
+}
+
+type ValidationError struct {
+    Field       string
+    Value       interface{}
+    Expected    string
+    Example     string
+}
+
+type APIError struct {
+    StatusCode  int
+    Message     string
+    Retry       bool
+    Suggestions []string
+}
+```
+
+**Usage Example**:
+```go
+// Instead of:
+return "", fmt.Errorf("file '%s' does not exist. Use list_files to see available files", path)
+
+// Do:
+return "", &ToolError{
+    Tool: "read_file",
+    Message: fmt.Sprintf("file '%s' does not exist", path),
+    Suggestions: []string{
+        "Use list_files to see available files",
+        fmt.Sprintf("Check if path is correct: %s", path),
+    },
+    Params: map[string]interface{}{"path": path},
+}
+```
+
+**Error Helpers**:
+```go
+func FileNotFoundError(path string) error { ... }
+func PermissionDeniedError(path string) error { ... }
+func RequiresParameterError(tool, param string) error { ... }
+func DirectoryNotFileError(path string) error { ... }
+```
+
+**Benefits**:
+- **Testability**: Can assert on error types, not string matching
+- **Consistency**: Same format across all tools
+- **Programmatic handling**: Can inspect error fields
+- **Rich context**: Structured data about what went wrong
+- **DRY**: Reuse common error helpers
+
+**Combines well with #3 from above**: Error duplication reduction
+
+**Estimated time**: 2-3 hours (define types + refactor error returns)
+
+---
+
+### 14. 📎 File Input Support (Future)
 **Purpose**: Accept files as input (text and images)
 
 **Text File Input**:
@@ -824,11 +1059,3 @@ type Agent interface {
 **Estimated time**:
 - Text file input: 2 hours
 - Image input: 4 hours (includes API changes)
-
----
-
-## Total Estimated Time Remaining: ~14-15 hours
-- Priority 8 (web_search): 3 hours
-- Priority 9 (browse): 3-4 hours
-- Priority 10 (Code Organization): 3 hours
-- Priority 11 (File Input): 6 hours (2 + 4)
