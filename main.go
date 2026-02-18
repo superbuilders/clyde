@@ -29,8 +29,14 @@ func main() {
 	// Create API client
 	apiClient := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
 
-	// Create agent with system prompt
-	agentInstance := agent.NewAgent(apiClient, prompts.SystemPrompt)
+	// Create agent with system prompt and progress callback
+	agentInstance := agent.NewAgent(
+		apiClient,
+		prompts.SystemPrompt,
+		agent.WithProgressCallback(func(msg string) {
+			fmt.Println(msg) // REPL prints progress to stdout
+		}),
+	)
 
 	// Start REPL
 	fmt.Println("Clyde - AI Coding Agent - Type 'exit' or 'quit' to exit")

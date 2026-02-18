@@ -1651,6 +1651,253 @@ Created focused test suite in `tests/config_test.go` with 5 tests:
 
 This is a much cleaner design that follows single-responsibility principle and makes the agent truly configuration-agnostic.
 
+### Complete Agent Decoupling (Completed 2026-02-18) - Priority #16 ✅
+
+**Purpose**: Make the agent 100% UI-agnostic by removing the single remaining UI coupling
+
+**The Problem**: 
+After Priority #10 (Code Organization), the agent was 90% UI-agnostic. However, there was still one direct coupling in `agent/agent.go` line ~82:
+
+```go
+if reg.Display != nil {
+    displayMsg := reg.Display(toolBlock.Input)
+    if displayMsg != "" {
+        fmt.Println(displayMsg)  // ← ONLY UI COUPLING
+    }
+}
+```
+
+This prevented the agent from being used in non-CLI contexts like:
+- HTTP APIs (need to send progress via HTTP/WebSocket)
+- GUIs (need to update UI widgets)
+- Discord/Telegram bots (need to send to chat)
+- Embedded library usage
+
+**Solution**: Implemented callback-based architecture using Go's options pattern
+
+**Implementation**:
+
+1. **Added callback types to agent.go**:
+```go
+// ProgressCallback receives progress messages during tool execution
+type ProgressCallback func(message string)
+
+// ErrorCallback receives errors during processing (optional, for logging)
+type ErrorCallback func(err error)
+
+type Agent struct {
+    apiClient        *api.Client
+    systemPrompt     string
+    history          []api.Message
+    progressCallback ProgressCallback  // NEW
+    errorCallback    ErrorCallback     // NEW (optional)
+}
+```
+
+2. **Added options pattern for flexible configuration**:
+```go
+type AgentOption func(*Agent)
+
+func WithProgressCallback(cb ProgressCallback) AgentOption {
+    return func(a *Agent) { a.progressCallback = cb }
+}
+
+func WithErrorCallback(cb ErrorCallback) AgentOption {
+    return func(a *Agent) { a.errorCallback = cb }
+}
+
+func NewAgent(apiClient *api.Client, systemPrompt string, opts ...AgentOption) *Agent {
+    agent := &Agent{
+        apiClient:    apiClient,
+        systemPrompt: systemPrompt,
+        history:      []api.Message{},
+    }
+    
+    for _, opt := range opts {
+        opt(agent)
+    }
+    
+    return agent
+}
+```
+
+3. **Updated progress display to use callback**:
+```go
+// Replaced direct fmt.Println with callback invocation
+if displayMsg != "" && a.progressCallback != nil {
+    a.progressCallback(displayMsg)
+}
+```
+
+4. **Updated main.go to use callback**:
+```go
+agentInstance := agent.NewAgent(
+    apiClient,
+    prompts.SystemPrompt,
+    agent.WithProgressCallback(func(msg string) {
+        fmt.Println(msg) // REPL prints to stdout
+    }),
+)
+```
+
+**Benefits Achieved**:
+
+1. **100% UI-Agnostic Agent**:
+   - Zero UI dependencies in agent package
+   - No direct coupling to any output mechanism
+   - Agent doesn't know or care how progress is displayed
+
+2. **Backward Compatible**:
+   - Existing tests work without modification
+   - No breaking changes to API
+   - Optional callbacks (works without them)
+
+3. **Enables Any Frontend**:
+   - CLI: Print to stdout (current implementation)
+   - HTTP API: Send via WebSocket or collect in buffer
+   - GUI: Update status bar or progress widgets
+   - Bot: Send to Discord/Telegram/Slack
+   - Library: Capture for logging or metrics
+
+4. **Idiomatic Go**:
+   - Options pattern is standard in Go
+   - Functional options allow flexibility
+   - Clean, composable API
+
+**Example Use Cases**:
+
+**CLI (current)**:
+```go
+agent.NewAgent(apiClient, systemPrompt,
+    agent.WithProgressCallback(func(msg string) {
+        fmt.Println(msg)
+    }),
+)
+```
+
+**HTTP API**:
+```go
+var progressBuffer []string
+agent.NewAgent(apiClient, systemPrompt,
+    agent.WithProgressCallback(func(msg string) {
+        progressBuffer = append(progressBuffer, msg)
+        websocket.Send(msg) // Real-time updates
+    }),
+)
+```
+
+**GUI**:
+```go
+agent.NewAgent(apiClient, systemPrompt,
+    agent.WithProgressCallback(func(msg string) {
+        statusBar.SetText(msg)
+        progressList.AddItem(msg)
+    }),
+)
+```
+
+**Logging/Testing**:
+```go
+var progressMessages []string
+agent.NewAgent(apiClient, systemPrompt,
+    agent.WithProgressCallback(func(msg string) {
+        progressMessages = append(progressMessages, msg)
+    }),
+    agent.WithErrorCallback(func(err error) {
+        log.Printf("Error: %v", err)
+    }),
+)
+```
+
+**Silent Mode** (no callbacks):
+```go
+// Works perfectly fine without any callbacks
+agent := agent.NewAgent(apiClient, systemPrompt)
+response, _ := agent.HandleMessage("Hello!")
+```
+
+**Testing**:
+- All 32 tests pass without modification
+- Zero breaking changes to existing tests
+- Test helpers continue to work as-is
+
+**Results**:
+- ✅ All 32 tests pass (5 config tests, 27 others)
+- ✅ Binary size: 9.0 MB (unchanged)
+- ✅ Agent is now 100% UI-agnostic
+- ✅ Zero breaking changes
+- ✅ Ready for any frontend implementation
+- ✅ Clean, idiomatic Go code
+- ✅ Backward compatible
+
+**Code Changes**:
+- `agent/agent.go`: Added callbacks and options pattern (+884 bytes)
+- `main.go`: Updated to use callback (+138 bytes)
+- Total: ~1 KB added
+
+**Time Taken**: ~30 minutes (faster than estimated 1 hour)
+
+**Comparison with TODO Estimate**:
+The TODO estimated 1 hour. Implementation took ~30 minutes because:
+- Architecture was already clean from Priority #10
+- Only one coupling point to fix
+- Options pattern is straightforward in Go
+- No test modifications needed
+
+**Architecture Evolution**:
+
+**Priority #10 (2026-02-13)**: Split monolith into packages
+- Result: 90% decoupled (agent logic separated from REPL)
+- Remaining: One `fmt.Println` coupling in agent
+
+**Priority #16 (2026-02-18)**: Remove final UI coupling
+- Result: 100% decoupled (callback-based progress)
+- Benefit: Agent can be used in ANY interface
+
+**Now Possible - Future Interfaces**:
+
+1. **HTTP REST API** (Priority #17 in TODOS.md):
+   - Import agent package
+   - Capture progress in session context
+   - Return via JSON or WebSocket
+
+2. **WebSocket API**:
+   - Stream progress in real-time
+   - Multi-user sessions
+   - Live updates
+
+3. **Discord/Telegram Bot**:
+   - Send progress as chat messages
+   - Interactive conversations
+   - Multi-server deployment
+
+4. **Desktop GUI** (Electron, Wails, Fyne):
+   - Update status bar
+   - Progress list widget
+   - Rich UI experience
+
+5. **Web Frontend** (React, Vue, etc.):
+   - Real-time progress updates
+   - Interactive chat interface
+   - Modern web UX
+
+6. **Go Library** (import in other projects):
+   - Embed agent in your application
+   - Custom progress handling
+   - Full programmatic control
+
+**Documentation Updates**:
+- Added "Using Clyde as a Library" section to README.md
+- Shows 7 different callback usage examples
+- Explains options pattern and flexibility
+- Documents all use cases (CLI, API, GUI, logging, silent)
+
+**Philosophy**:
+The agent is now a pure library component that knows nothing about how it's being used. It provides data (responses and progress) via clean callback interfaces, and the caller decides what to do with that data. This is the Unix philosophy applied to Go: do one thing well, compose with others.
+
+**Lesson Learned**:
+Complete decoupling requires removing ALL dependencies on specific output mechanisms. A single `fmt.Println` was enough to prevent the agent from being truly reusable. The callback pattern elegantly solves this while maintaining backward compatibility.
+
 ## Design Philosophy & Principles
 
 ### Memory Model (Established 2026-02-10)

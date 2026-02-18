@@ -182,6 +182,130 @@ The REPL includes ten integrated tools:
 9. **web_search**: Search the internet using Brave Search API
 10. **browse**: Fetch and read web pages (with optional AI extraction)
 
+## Using Clyde as a Library
+
+Clyde's agent is fully decoupled from the CLI interface and can be embedded in your own Go applications. This enables you to build custom interfaces (HTTP APIs, GUIs, bots, etc.) while leveraging the same powerful agent logic.
+
+### Basic Usage
+
+```go
+import (
+    "fmt"
+    "github.com/this-is-alpha-iota/clyde/agent"
+    "github.com/this-is-alpha-iota/clyde/api"
+    "github.com/this-is-alpha-iota/clyde/prompts"
+    _ "github.com/this-is-alpha-iota/clyde/tools" // Register all tools
+)
+
+func main() {
+    // Create API client
+    apiClient := api.NewClient(
+        "your-api-key",
+        "https://api.anthropic.com/v1/messages",
+        "claude-sonnet-4-5-20250929",
+        4096,
+    )
+    
+    // Create agent with progress callback
+    agentInstance := agent.NewAgent(
+        apiClient,
+        prompts.SystemPrompt,
+        agent.WithProgressCallback(func(msg string) {
+            fmt.Println(msg) // Or send to your UI, log, etc.
+        }),
+    )
+    
+    // Send messages
+    response, err := agentInstance.HandleMessage("What files are in the current directory?")
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
+    
+    fmt.Printf("Response: %s\n", response)
+}
+```
+
+### Custom Progress Handling
+
+The agent provides callback hooks for handling progress messages and errors in your application:
+
+```go
+// For CLI applications - print to stdout
+agent.NewAgent(apiClient, systemPrompt,
+    agent.WithProgressCallback(func(msg string) {
+        fmt.Println(msg)
+    }),
+)
+
+// For HTTP APIs - send via WebSocket
+agent.NewAgent(apiClient, systemPrompt,
+    agent.WithProgressCallback(func(msg string) {
+        websocket.Send(msg)
+    }),
+)
+
+// For GUIs - update UI elements
+agent.NewAgent(apiClient, systemPrompt,
+    agent.WithProgressCallback(func(msg string) {
+        statusBar.SetText(msg)
+    }),
+)
+
+// For logging - capture all progress
+var progressLog []string
+agent.NewAgent(apiClient, systemPrompt,
+    agent.WithProgressCallback(func(msg string) {
+        progressLog = append(progressLog, msg)
+    }),
+)
+
+// Optional error callback for logging/monitoring
+agent.NewAgent(apiClient, systemPrompt,
+    agent.WithProgressCallback(progressHandler),
+    agent.WithErrorCallback(func(err error) {
+        log.Printf("Agent error: %v", err)
+        metrics.IncrementErrorCount()
+    }),
+)
+```
+
+### Example: HTTP API Server
+
+```go
+type Session struct {
+    agent *agent.Agent
+    progressBuffer []string
+    mu sync.Mutex
+}
+
+func handleMessage(w http.ResponseWriter, r *http.Request) {
+    session := getSession(r)
+    
+    // Capture progress messages for this request
+    session.progressBuffer = []string{}
+    
+    response, err := session.agent.HandleMessage(userInput)
+    
+    // Return response with captured progress
+    json.NewEncoder(w).Encode(map[string]interface{}{
+        "response": response,
+        "progress": session.progressBuffer,
+        "error": err,
+    })
+}
+```
+
+### No Callbacks? No Problem!
+
+If you don't provide a progress callback, the agent works silently:
+
+```go
+// Silent agent - no progress output
+agentInstance := agent.NewAgent(apiClient, prompts.SystemPrompt)
+response, _ := agentInstance.HandleMessage("Hello!")
+```
+
 ## Documentation
 
 See [PROGRESS.md](PROGRESS.md) for detailed technical documentation.

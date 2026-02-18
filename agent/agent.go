@@ -7,20 +7,52 @@ import (
 	"strings"
 )
 
+// ProgressCallback receives progress messages during tool execution
+type ProgressCallback func(message string)
+
+// ErrorCallback receives errors during processing (optional, for logging)
+type ErrorCallback func(err error)
+
 // Agent handles conversation and tool execution
 type Agent struct {
-	apiClient     *api.Client
-	systemPrompt  string
-	history       []api.Message
+	apiClient        *api.Client
+	systemPrompt     string
+	history          []api.Message
+	progressCallback ProgressCallback
+	errorCallback    ErrorCallback
 }
 
-// NewAgent creates a new agent
-func NewAgent(apiClient *api.Client, systemPrompt string) *Agent {
-	return &Agent{
+// AgentOption is a functional option for configuring an Agent
+type AgentOption func(*Agent)
+
+// WithProgressCallback sets the progress callback
+func WithProgressCallback(cb ProgressCallback) AgentOption {
+	return func(a *Agent) {
+		a.progressCallback = cb
+	}
+}
+
+// WithErrorCallback sets the error callback
+func WithErrorCallback(cb ErrorCallback) AgentOption {
+	return func(a *Agent) {
+		a.errorCallback = cb
+	}
+}
+
+// NewAgent creates a new agent with optional configuration
+func NewAgent(apiClient *api.Client, systemPrompt string, opts ...AgentOption) *Agent {
+	agent := &Agent{
 		apiClient:    apiClient,
 		systemPrompt: systemPrompt,
 		history:      []api.Message{},
 	}
+	
+	// Apply options
+	for _, opt := range opts {
+		opt(agent)
+	}
+	
+	return agent
 }
 
 // HandleMessage processes a user message and returns the response
@@ -84,8 +116,8 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			// Display progress message
 			if reg.Display != nil {
 				displayMsg := reg.Display(toolBlock.Input)
-				if displayMsg != "" {
-					fmt.Println(displayMsg)
+				if displayMsg != "" && a.progressCallback != nil {
+					a.progressCallback(displayMsg)
 				}
 			}
 
