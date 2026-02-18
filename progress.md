@@ -1502,220 +1502,122 @@ formatted as an H1 heading (the top-level heading) on the page.
 
 **Purpose**: Support running claude-repl from any directory after global installation
 
-**Problem**: The original config system required `.env` in the current directory or a sibling directory, making it difficult to use after global installation with `go install`. Users had to manually set `ENV_PATH` or copy `.env` files around.
+**Problem**: The original config system required `.env` in the current directory or a sibling directory, making it difficult to use after global installation with `go install`. Configuration logic was mixed with business logic.
 
-**Solution**: Implemented multi-location config search with priority order:
+**Solution**: Clean separation of concerns with config file location determined at CLI layer
 
-**Config Search Order**:
-1. **ENV_PATH environment variable** (highest priority override)
-   - Allows users to point to any custom config location
-   - `export ENV_PATH=/path/to/custom/config`
-
-2. **`.env` in current directory** (project-specific config)
-   - Useful for development or project-specific API keys
-   - Overrides home directory config when present
-
-3. **`~/.claude-repl/config`** (recommended for global installation)
-   - Primary location for global config
-   - Works from any directory after installation
-
-4. **`~/.claude-repl`** (legacy fallback)
-   - Direct file without subdirectory
-   - Supported for backward compatibility
+**Architecture**:
+- **CLI Layer (main.go)**: Decides config file location (always `~/.claude-repl/config`)
+- **Config Package**: Simple `LoadFromFile(path)` function - agnostic to file location
+- **Tests**: Use `.env` files in their own temp directories
+- **Agent**: Receives configuration, doesn't care where it came from
 
 **Implementation**:
+
+1. **config/config.go**: Simple, focused config loading
 ```go
-func findConfigFile() (string, error) {
-    // 1. Check ENV_PATH (highest priority)
-    if envPath := os.Getenv("ENV_PATH"); envPath != "" {
-        if _, err := os.Stat(envPath); err == nil {
-            return envPath, nil
-        }
-        return "", fmt.Errorf("ENV_PATH is set to '%s' but file does not exist", envPath)
-    }
-
-    // 2. Check .env in current directory
-    if _, err := os.Stat(".env"); err == nil {
-        return ".env", nil
-    }
-
-    // 3. Check ~/.claude-repl/config
-    homeDir, err := os.UserHomeDir()
-    if err == nil {
-        configPath := filepath.Join(homeDir, ".claude-repl", "config")
-        if _, err := os.Stat(configPath); err == nil {
-            return configPath, nil
-        }
-
-        // 4. Check ~/.claude-repl (legacy)
-        legacyPath := filepath.Join(homeDir, ".claude-repl")
-        if info, err := os.Stat(legacyPath); err == nil && !info.IsDir() {
-            return legacyPath, nil
-        }
-    }
-
-    return "", nil  // No config found
+func LoadFromFile(path string) (*Config, error) {
+    // Load from specified file
+    // Validate required fields
+    // Return config or error
 }
 ```
 
+2. **main.go**: CLI layer determines config location
+```go
+func getConfigPath() string {
+    homeDir, _ := os.UserHomeDir()
+    return filepath.Join(homeDir, ".claude-repl", "config")
+}
+
+func main() {
+    configPath := getConfigPath()  // CLI decides location
+    cfg, _ := config.LoadFromFile(configPath)  // Config package just loads
+    // ... rest of app
+}
+```
+
+3. **tests**: Each test uses its own .env file
+```go
+func TestSomething(t *testing.T) {
+    tmpDir := t.TempDir()
+    configPath := filepath.Join(tmpDir, ".env")
+    // ... test with isolated config
+}
+```
+
+**Benefits**:
+
+1. **Separation of Concerns**:
+   - Config package: pure loading logic, no file location decisions
+   - CLI: handles user-facing concerns (where to find config)
+   - Agent: completely agnostic, receives config programmatically
+
+2. **Testability**:
+   - Tests use .env in temp directories
+   - No need to mock home directory
+   - Clean, isolated test environments
+
+3. **Simplicity**:
+   - Production: always `~/.claude-repl/config`
+   - Tests: always `.env` in test directory
+   - No complex priority logic or fallbacks
+
+4. **Professional**:
+   - Standard CLI tool pattern
+   - Clear error messages
+   - Works after global installation
+
 **Error Handling**:
-When no config file is found, provides helpful setup instructions:
+When config file doesn't exist, main.go provides helpful setup instructions:
 
 ```
-No configuration file found
+Configuration file not found: ~/.claude-repl/config
 
 To get started, create a config file:
 
-  mkdir -p /Users/username/.claude-repl
-  cat > /Users/username/.claude-repl/config << 'EOF'
+  mkdir -p ~/.claude-repl
+  cat > ~/.claude-repl/config << 'EOF'
 TS_AGENT_API_KEY=your-anthropic-api-key
 BRAVE_SEARCH_API_KEY=your-brave-api-key  # Optional
 EOF
 
 Get your Anthropic API key at: https://console.anthropic.com/
 Get your Brave Search API key at: https://brave.com/search/api/ (optional)
-
-Alternatively, create a .env file in your project directory for project-specific config.
 ```
 
 **Testing**:
-Created comprehensive test suite in `tests/config_test.go` with 9 tests:
-- `TestConfigLoadFromCurrentDirectory`: Verifies .env in current dir works
-- `TestConfigLoadFromHomeDirectory`: Verifies ~/.claude-repl/config works
-- `TestConfigLoadFromLegacyHomeFile`: Verifies ~/.claude-repl direct file works
-- `TestConfigLoadFromENVPATH`: Verifies ENV_PATH override works
-- `TestConfigPriorityOrder`: Verifies correct priority (local > home)
-- `TestConfigNoFileFound`: Verifies helpful error when no config exists
-- `TestConfigMissingAPIKey`: Verifies error when API key missing from config
-- `TestConfigInvalidENVPATH`: Verifies error when ENV_PATH points to non-existent file
+Created focused test suite in `tests/config_test.go` with 5 tests:
+- `TestConfigLoadFromFile`: Verifies loading from specified path
+- `TestConfigFileNotFound`: Verifies error when file doesn't exist
+- `TestConfigMissingAPIKey`: Verifies error when API key missing
 - `TestConfigDefaultValues`: Verifies config has proper defaults
-
-**Benefits**:
-
-1. **Global Installation Ready**:
-   - Works after `go install github.com/yourusername/claude-repl@latest`
-   - No need to copy config files or set environment variables
-   - Run from any directory with `claude-repl` command
-
-2. **Flexible Configuration**:
-   - Project-specific: Use `.env` in project directory
-   - User-wide: Use `~/.claude-repl/config`
-   - Custom: Use ENV_PATH for any location
-
-3. **Backward Compatible**:
-   - Existing `.env` files continue to work
-   - Legacy `~/.claude-repl` file still supported
-   - No breaking changes for current users
-
-4. **Clear Error Messages**:
-   - Exact commands shown to create config
-   - Links to get API keys
-   - Explains all config options
-
-5. **Priority System**:
-   - ENV_PATH > local .env > home config > legacy
-   - Allows per-project overrides
-   - Sensible defaults for most use cases
-
-**Use Cases**:
-
-**Global Installation**:
-```bash
-# Install globally
-go install github.com/yourusername/claude-repl@latest
-
-# Create config once
-mkdir -p ~/.claude-repl
-cat > ~/.claude-repl/config << 'EOF'
-TS_AGENT_API_KEY=your-key-here
-EOF
-
-# Use from anywhere!
-cd ~/projects/my-app
-claude-repl  # Just works!
-```
-
-**Project-Specific Config**:
-```bash
-# Use different API key for work project
-cd ~/work/project
-echo "TS_AGENT_API_KEY=work-key" > .env
-claude-repl  # Uses work key
-
-# Personal project uses home config
-cd ~/personal/project
-claude-repl  # Uses ~/.claude-repl/config
-```
-
-**Custom Config Location**:
-```bash
-# Use shared team config
-export ENV_PATH=/team/shared/claude-config
-claude-repl  # Uses team config
-```
+- `TestConfigOptionalBraveKey`: Verifies Brave API key is optional
 
 **Code Changes**:
-- `config/config.go`: Enhanced Load() function with findConfigFile() helper (+1.6 KB)
-- Better error messages for missing config and missing API keys
-- Full home directory support with path.filepath
-
-**Test Suite**:
-- `tests/config_test.go`: New test file with 9 comprehensive tests (+9.3 KB)
-- All tests pass, including environment isolation
-- Tests verify priority order and all error cases
-
-**Documentation Updates**:
-- `README.md`: New "Installation" and "Configuration" sections (+1.4 KB)
-- Explains all config locations with examples
-- Shows setup for global installation
-- Documents priority order
+- `config/config.go`: Simplified to just LoadFromFile() (-2KB, cleaner)
+- `main.go`: Added getConfigPath() and config file check (+1.3KB)
+- `tests/config_test.go`: Simplified tests (-5.6KB, focused)
+- Net change: Smaller, cleaner codebase
 
 **Results**:
-- ✅ All 27 tests pass (9 new config tests added)
+- ✅ All 32 tests pass (5 focused config tests)
 - ✅ Binary size: 9.0 MB (unchanged)
-- ✅ Zero breaking changes (backward compatible)
+- ✅ Clean separation of concerns
 - ✅ Works after global installation with `go install`
-- ✅ Clear, helpful error messages for setup
-- ✅ README updated with installation instructions
-- ✅ Full test coverage for all config scenarios
+- ✅ Clear, helpful error messages
+- ✅ No complex fallback logic
+- ✅ Agent remains configuration-agnostic
 
-**Time Taken**: ~1.5 hours (as estimated: 2-3 hours in TODO)
+**Time Taken**: ~2 hours total (1.5 hours initial + 0.5 hours refactor for clean architecture)
 
-**Implementation Highlights**:
+**Architecture Philosophy**:
+- **CLI layer**: User-facing concerns (where to find config)
+- **Config package**: Pure functions (load from path)
+- **Agent**: Business logic (receive config, do work)
+- **Tests**: Isolated environments (.env in temp dirs)
 
-1. **Clean Separation**: Config finding logic separate from loading logic
-2. **Type Safety**: Uses filepath.Join for cross-platform path handling
-3. **Error Context**: Each error case has specific, actionable message
-4. **Test Isolation**: Tests properly save/restore environment variables
-5. **Home Directory Detection**: Uses os.UserHomeDir() for portability
-
-**Impact**:
-- **Better UX**: Users can install globally and use immediately
-- **Professional**: Follows standard practices for CLI tools
-- **Flexible**: Supports all common configuration patterns
-- **Maintainable**: Clean code with comprehensive tests
-
-**Example First-Run Experience**:
-```bash
-$ go install github.com/yourusername/claude-repl@latest
-$ claude-repl
-No configuration file found
-
-To get started, create a config file:
-  mkdir -p /Users/username/.claude-repl
-  cat > /Users/username/.claude-repl/config << 'EOF'
-TS_AGENT_API_KEY=your-anthropic-api-key
-BRAVE_SEARCH_API_KEY=your-brave-api-key  # Optional
-EOF
-
-$ mkdir -p ~/.claude-repl
-$ echo "TS_AGENT_API_KEY=sk-ant-..." > ~/.claude-repl/config
-$ claude-repl
-You: Hello!
-Claude: Hello! How can I help you today?
-```
-
-Perfect! Now the config system is production-ready for global installation.
+This is a much cleaner design that follows single-responsibility principle and makes the agent truly configuration-agnostic.
 
 ## Design Philosophy & Principles
 

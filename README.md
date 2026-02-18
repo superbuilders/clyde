@@ -115,32 +115,7 @@ go build -o claude-repl
 
 ## Configuration
 
-The application looks for configuration in the following order:
-
-1. **ENV_PATH environment variable** (highest priority override)
-   ```bash
-   export ENV_PATH=/path/to/custom/config
-   claude-repl
-   ```
-
-2. **`.env` in current directory** (for project-specific config)
-   ```bash
-   # Create .env in your project directory
-   echo "TS_AGENT_API_KEY=your-key" > .env
-   claude-repl
-   ```
-
-3. **`~/.claude-repl/config`** (recommended for global installation)
-   ```bash
-   # Already created during installation (see above)
-   claude-repl  # Works from any directory!
-   ```
-
-4. **`~/.claude-repl`** (legacy format, direct file without subdirectory)
-   ```bash
-   # Supported for backward compatibility
-   echo "TS_AGENT_API_KEY=your-key" > ~/.claude-repl
-   ```
+The application uses a single configuration file at `~/.claude-repl/config`.
 
 ### Configuration File Format
 ```bash
@@ -151,6 +126,12 @@ TS_AGENT_API_KEY=sk-ant-your-key-here
 # Optional (for web_search tool)
 BRAVE_SEARCH_API_KEY=BSA-your-key-here
 ```
+
+**Why this location?**
+- Standard location for user-specific CLI configuration
+- Works from any directory after installation
+- Clean separation between production and test configurations
+- Tests use `.env` files in their own directories
 
 ## Customizing the System Prompt
 

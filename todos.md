@@ -1079,77 +1079,61 @@ Priority #4 (Better Error Handling & Messages) already achieved the goal with ex
 
 **What Was Built**:
 
-**Config Location Strategy** (priority order):
-1. **ENV_PATH environment variable** (highest priority override)
-2. **`.env` in current directory** (for local development/testing)
-3. **`~/.claude-repl/config`** (primary global config location)
-4. **`~/.claude-repl`** (legacy fallback - direct file without subdirectory)
+**Clean Architecture** (separation of concerns):
+- **CLI Layer (main.go)**: Decides config file location (always `~/.claude-repl/config`)
+- **Config Package**: Simple `LoadFromFile(path)` - agnostic to location
+- **Tests**: Use `.env` files in their own temp directories
+- **Agent**: Receives configuration programmatically, location-agnostic
 
 **Implementation**:
-- Added `findConfigFile()` helper function in `config/config.go`
-- Checks all locations in priority order
-- Returns first found config file
-- Provides helpful error message if no config found
 
-**Error Handling**:
-When no config is found, shows:
-- Exact commands to create config file
-- Links to get API keys (Anthropic, Brave Search)
-- Alternative options (project-specific .env)
+1. **config/config.go**: Pure loading function
+```go
+func LoadFromFile(path string) (*Config, error) {
+    // Load from specified file
+    // Validate required fields
+    // Return config or error
+}
+```
 
-**Testing**:
-- Created `tests/config_test.go` with 9 comprehensive tests
-- Tests all config locations (ENV_PATH, .env, ~/.claude-repl/config, ~/.claude-repl)
-- Tests priority order (local .env > home config)
-- Tests error cases (missing config, missing API key, invalid ENV_PATH)
-- Tests default values
-- All tests pass with proper environment isolation
+2. **main.go**: CLI layer handles file location
+```go
+func getConfigPath() string {
+    homeDir, _ := os.UserHomeDir()
+    return filepath.Join(homeDir, ".claude-repl", "config")
+}
+```
+
+3. **Tests**: Isolated .env files
+```go
+tmpDir := t.TempDir()
+configPath := filepath.Join(tmpDir, ".env")
+config.LoadFromFile(configPath)
+```
 
 **Benefits**:
+- ✅ Clean separation of concerns (CLI vs config vs agent)
 - ✅ Works after global installation with `go install`
-- ✅ No need to copy config files around
-- ✅ Run from any directory
-- ✅ Project-specific config overrides still work
-- ✅ Backward compatible with existing .env files
-- ✅ Clear, actionable error messages
+- ✅ Simple: production always uses `~/.claude-repl/config`
+- ✅ Testable: tests use `.env` in temp directories
+- ✅ Agent remains configuration-agnostic
+- ✅ No complex fallback logic
 
-**Documentation Updates**:
-- `README.md`: Added "Installation" and "Configuration" sections
-- Explains all config locations with examples
-- Shows setup for global installation
-- Documents priority order and use cases
+**Testing**:
+- Created `tests/config_test.go` with 5 focused tests
+- Tests loading from file, error cases, defaults
+- All tests pass with proper environment isolation
 
 **Results**:
-- ✅ All 27 tests pass (9 new config tests)
+- ✅ All 32 tests pass (5 config tests)
 - ✅ Binary size: 9.0 MB (unchanged)
-- ✅ Zero breaking changes
+- ✅ Clean, maintainable architecture
 - ✅ Production-ready for global installation
-- ✅ Professional UX for CLI tool
 
-**Time Taken**: ~1.5 hours (under estimated 2-3 hours)
+**Time Taken**: ~2 hours (1.5 initial + 0.5 refactor)
 
-**Code Changes**:
-- `config/config.go`: Enhanced with multi-location search (+1.6 KB)
-- `tests/config_test.go`: New test file (+9.3 KB)
-- `README.md`: Installation and config documentation (+1.4 KB)
-- `PROGRESS.md`: Feature documentation (+7.4 KB)
-
-**Example Usage**:
-```bash
-# Install globally
-go install github.com/yourusername/claude-repl@latest
-
-# Create config once
-mkdir -p ~/.claude-repl
-cat > ~/.claude-repl/config << 'EOF'
-TS_AGENT_API_KEY=your-key-here
-BRAVE_SEARCH_API_KEY=your-brave-key  # Optional
-EOF
-
-# Use from anywhere!
-cd ~/any/directory
-claude-repl  # Just works!
-```
+**Architecture Philosophy**:
+The config location decision belongs at the CLI layer, not in the config package. This keeps the agent and config package pure and reusable.
 
 ---
 
