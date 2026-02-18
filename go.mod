@@ -1,4 +1,4 @@
-module claude-repl
+module github.com/this-is-alpha-iota/clyde
 
 go 1.24.0
 

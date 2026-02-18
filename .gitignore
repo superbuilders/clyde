@@ -1,5 +1,5 @@
 # Binaries
-claude-repl
+clyde
 *.exe
 *.dll
 *.so
