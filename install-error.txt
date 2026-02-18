@@ -1,6 +1,0 @@
-➜  yud-app go install github.com/this-is-alpha-iota/go-coding-agent@latest > install-error.txt
-go: github.com/this-is-alpha-iota/go-coding-agent@latest: version constraints conflict:
-	github.com/this-is-alpha-iota/go-coding-agent@v0.0.0-20260218161302-cef9548d410c: parsing go.mod:
-	module declares its path as: claude-repl
-	        but was required as: github.com/this-is-alpha-iota/go-coding-agent
-
