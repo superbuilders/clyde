@@ -82,20 +82,75 @@ Goodbye!
 
 - Go 1.24+
 - GitHub CLI (`gh`) installed and authenticated
-- Anthropic API key in `.env` file
-- Brave Search API key in `.env` file (optional, for web_search tool)
+- Anthropic API key (see Configuration below)
+- Brave Search API key (optional, for web_search tool)
 
-## Environment Setup
+## Installation
 
-Create a `.env` file:
+### Option 1: Install globally (recommended for regular use)
 ```bash
-TS_AGENT_API_KEY=your-anthropic-api-key
-BRAVE_SEARCH_API_KEY=your-brave-search-api-key  # Optional: for web_search
-# Get free API key at: https://brave.com/search/api/
-# Free tier: 2,000 searches/month
+go install github.com/yourusername/claude-repl@latest
 ```
 
-Or set the ENV_PATH variable to point to an existing .env file.
+After installation, create a config file in your home directory:
+```bash
+mkdir -p ~/.claude-repl
+cat > ~/.claude-repl/config << 'EOF'
+TS_AGENT_API_KEY=your-anthropic-api-key
+BRAVE_SEARCH_API_KEY=your-brave-api-key  # Optional
+EOF
+```
+
+Get your API keys:
+- **Anthropic API**: https://console.anthropic.com/
+- **Brave Search API** (optional): https://brave.com/search/api/ - Free tier: 2,000 searches/month
+
+### Option 2: Build from source (for development)
+```bash
+git clone https://github.com/yourusername/claude-repl
+cd claude-repl
+go build -o claude-repl
+./claude-repl
+```
+
+## Configuration
+
+The application looks for configuration in the following order:
+
+1. **ENV_PATH environment variable** (highest priority override)
+   ```bash
+   export ENV_PATH=/path/to/custom/config
+   claude-repl
+   ```
+
+2. **`.env` in current directory** (for project-specific config)
+   ```bash
+   # Create .env in your project directory
+   echo "TS_AGENT_API_KEY=your-key" > .env
+   claude-repl
+   ```
+
+3. **`~/.claude-repl/config`** (recommended for global installation)
+   ```bash
+   # Already created during installation (see above)
+   claude-repl  # Works from any directory!
+   ```
+
+4. **`~/.claude-repl`** (legacy format, direct file without subdirectory)
+   ```bash
+   # Supported for backward compatibility
+   echo "TS_AGENT_API_KEY=your-key" > ~/.claude-repl
+   ```
+
+### Configuration File Format
+```bash
+# Claude REPL Configuration
+# Required
+TS_AGENT_API_KEY=sk-ant-your-key-here
+
+# Optional (for web_search tool)
+BRAVE_SEARCH_API_KEY=BSA-your-key-here
+```
 
 ## Customizing the System Prompt
 

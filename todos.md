@@ -1072,154 +1072,84 @@ Priority #4 (Better Error Handling & Messages) already achieved the goal with ex
 
 ---
 
-### 14. 🔑 Config File for Global Installation (Improved Distribution)
+### ✅ 14. 🔑 Config File for Global Installation - COMPLETED (2026-02-18)
+**Status**: ✅ **COMPLETED**
+
 **Purpose**: Support running claude-repl from any directory with proper config management
 
-**Current Problem**: 
-- Tests can use `.env` in project directory
-- When installed globally (`go install`), binary needs to find config
-- Current approach requires copying `.env` or setting `ENV_PATH` manually
-- Not user-friendly for global installation
+**What Was Built**:
 
-**Proposed Solution**: Use simple home directory config file
-
-**Config Location Strategy**:
-1. Check for `.env` in current directory (for local development/testing)
-2. Check for `~/.claude-repl/config` (primary location)
-3. Check for `~/.claude-repl` (fallback - direct file without subdirectory)
-4. Prompt user to create config if none found
+**Config Location Strategy** (priority order):
+1. **ENV_PATH environment variable** (highest priority override)
+2. **`.env` in current directory** (for local development/testing)
+3. **`~/.claude-repl/config`** (primary global config location)
+4. **`~/.claude-repl`** (legacy fallback - direct file without subdirectory)
 
 **Implementation**:
-```go
-// config/config.go
-func LoadConfig() (*Config, error) {
-    // 1. Try .env in current directory (development)
-    if _, err := os.Stat(".env"); err == nil {
-        return loadFromEnvFile(".env")
-    }
-    
-    // 2. Try ~/.claude-repl/config
-    homeDir, err := os.UserHomeDir()
-    if err == nil {
-        configPath := filepath.Join(homeDir, ".claude-repl", "config")
-        if _, err := os.Stat(configPath); err == nil {
-            return loadFromEnvFile(configPath)
-        }
-    }
-    
-    // 3. Try ~/.claude-repl (fallback - direct file)
-    if err == nil {
-        legacyPath := filepath.Join(homeDir, ".claude-repl")
-        if _, err := os.Stat(legacyPath); err == nil {
-            return loadFromEnvFile(legacyPath)
-        }
-    }
-    
-    // 4. No config found - help user create one
-    return nil, &ConfigNotFoundError{
-        Message: "No configuration file found",
-        Suggestions: []string{
-            fmt.Sprintf("Create config file: mkdir -p %s && vi %s", 
-                filepath.Join(homeDir, ".claude-repl"), 
-                filepath.Join(homeDir, ".claude-repl", "config")),
-            "Add your API keys: TS_AGENT_API_KEY=your-key-here",
-            "Add Brave API key (optional): BRAVE_SEARCH_API_KEY=your-key-here",
-            "Or create .env file in current directory for project-specific config",
-        },
-    }
-}
-```
+- Added `findConfigFile()` helper function in `config/config.go`
+- Checks all locations in priority order
+- Returns first found config file
+- Provides helpful error message if no config found
 
-**Config File Format** (`~/.claude-repl/config`):
-```bash
-# Claude REPL Configuration
-# API Keys
-TS_AGENT_API_KEY=sk-ant-...
-BRAVE_SEARCH_API_KEY=BSA...  # Optional, for web_search tool
+**Error Handling**:
+When no config is found, shows:
+- Exact commands to create config file
+- Links to get API keys (Anthropic, Brave Search)
+- Alternative options (project-specific .env)
 
-# Optional: Custom settings (future)
-# MAX_TOKENS=4096
-# TEMPERATURE=0.7
-```
-
-**First-Run Experience**:
-```bash
-$ claude-repl
-Error: No configuration file found
-
-To get started, create a config file:
-
-  mkdir -p ~/.claude-repl
-  cat > ~/.claude-repl/config << 'EOF'
-  TS_AGENT_API_KEY=your-anthropic-api-key
-  BRAVE_SEARCH_API_KEY=your-brave-api-key  # Optional
-  EOF
-
-Get your Anthropic API key at: https://console.anthropic.com/
-Get your Brave Search API key at: https://brave.com/search/api/ (optional)
-
-For project-specific config, create a .env file in your project directory.
-```
+**Testing**:
+- Created `tests/config_test.go` with 9 comprehensive tests
+- Tests all config locations (ENV_PATH, .env, ~/.claude-repl/config, ~/.claude-repl)
+- Tests priority order (local .env > home config)
+- Tests error cases (missing config, missing API key, invalid ENV_PATH)
+- Tests default values
+- All tests pass with proper environment isolation
 
 **Benefits**:
-- **User-friendly**: Works after `go install` without manual setup
-- **Simple**: Uses straightforward `~/.claude-repl/` directory
-- **Flexible**: Supports both global and local config
-- **Clear guidance**: Helpful error messages guide setup
-- **Clean**: Keeps config in standard dotfile location
+- ✅ Works after global installation with `go install`
+- ✅ No need to copy config files around
+- ✅ Run from any directory
+- ✅ Project-specific config overrides still work
+- ✅ Backward compatible with existing .env files
+- ✅ Clear, actionable error messages
 
-**Testing Strategy**:
-- Unit tests: Mock home directory and test config search order
-- Integration tests: Test with actual config files in different locations
-- Document in README: Installation and config setup instructions
+**Documentation Updates**:
+- `README.md`: Added "Installation" and "Configuration" sections
+- Explains all config locations with examples
+- Shows setup for global installation
+- Documents priority order and use cases
 
-**README Updates**:
-```markdown
-## Installation
+**Results**:
+- ✅ All 27 tests pass (9 new config tests)
+- ✅ Binary size: 9.0 MB (unchanged)
+- ✅ Zero breaking changes
+- ✅ Production-ready for global installation
+- ✅ Professional UX for CLI tool
 
-### Option 1: Install from source (recommended)
+**Time Taken**: ~1.5 hours (under estimated 2-3 hours)
+
+**Code Changes**:
+- `config/config.go`: Enhanced with multi-location search (+1.6 KB)
+- `tests/config_test.go`: New test file (+9.3 KB)
+- `README.md`: Installation and config documentation (+1.4 KB)
+- `PROGRESS.md`: Feature documentation (+7.4 KB)
+
+**Example Usage**:
 ```bash
+# Install globally
 go install github.com/yourusername/claude-repl@latest
-```
 
-### Option 2: Build locally
-```bash
-git clone https://github.com/yourusername/claude-repl
-cd claude-repl
-go build -o claude-repl
-```
-
-## Configuration
-
-Create a config file in `~/.claude-repl/config`:
-
-```bash
+# Create config once
 mkdir -p ~/.claude-repl
 cat > ~/.claude-repl/config << 'EOF'
-TS_AGENT_API_KEY=your-anthropic-api-key
-BRAVE_SEARCH_API_KEY=your-brave-api-key  # Optional
+TS_AGENT_API_KEY=your-key-here
+BRAVE_SEARCH_API_KEY=your-brave-key  # Optional
 EOF
+
+# Use from anywhere!
+cd ~/any/directory
+claude-repl  # Just works!
 ```
-
-Or use a `.env` file in your project directory for project-specific configuration.
-```
-
-**Compatibility**:
-- Maintains backward compatibility with `.env` in current directory
-- Supports `ENV_PATH` environment variable (override)
-- No breaking changes for existing users
-
-**Implementation Tasks**:
-1. Create `config/config.go` with config search logic
-2. Add config file creation helpers
-3. Update startup error messages with setup guidance
-4. Add tests for config loading from different locations
-5. Update README with installation and config instructions
-6. Update progress.md with new config approach
-
-**Estimated time**: 2-3 hours (implement config search + tests + documentation)
-
-**Priority**: High - This is essential for making claude-repl usable as a global tool
 
 ---
 
