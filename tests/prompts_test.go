@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"claude-repl/prompts"
+	"github.com/this-is-alpha-iota/clyde/prompts"
 )
 
 func TestSystemPromptLoading(t *testing.T) {

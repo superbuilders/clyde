@@ -33,8 +33,8 @@ func main() {
 	agentInstance := agent.NewAgent(apiClient, prompts.SystemPrompt)
 
 	// Start REPL
-	fmt.Println("Claude REPL - Type 'exit' or 'quit' to exit")
-	fmt.Println("============================================")
+	fmt.Println("Clyde - AI Coding Agent - Type 'exit' or 'quit' to exit")
+	fmt.Println("==========================================================")
 
 	reader := bufio.NewReader(os.Stdin)
 
@@ -66,7 +66,7 @@ func main() {
 }
 
 // getConfigPath determines the config file path for the production app
-// Always uses ~/.claude-repl/config
+// Always uses ~/.clyde/config
 func getConfigPath() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -74,11 +74,11 @@ func getConfigPath() string {
 		os.Exit(1)
 	}
 
-	configPath := filepath.Join(homeDir, ".claude-repl", "config")
+	configPath := filepath.Join(homeDir, ".clyde", "config")
 
 	// Check if config file exists, if not provide helpful error and exit
 	if _, err := os.Stat(configPath); err != nil {
-		configDir := filepath.Join(homeDir, ".claude-repl")
+		configDir := filepath.Join(homeDir, ".clyde")
 		fmt.Printf("Configuration file not found: %s\n\n", configPath)
 		fmt.Println("To get started, create a config file:")
 		fmt.Println()

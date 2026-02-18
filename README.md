@@ -1,4 +1,4 @@
-# Claude REPL
+# Clyde
 
 A single-file Go CLI that provides a REPL interface for talking to Claude AI with GitHub integration.
 
@@ -6,11 +6,11 @@ A single-file Go CLI that provides a REPL interface for talking to Claude AI wit
 
 ```bash
 # Run the REPL
-./claude-repl
+./clyde
 
 # Or build from source
-go build -o claude-repl
-./claude-repl
+go build -o clyde
+./clyde
 ```
 
 ## Features
@@ -89,13 +89,13 @@ Goodbye!
 
 ### Option 1: Install globally (recommended for regular use)
 ```bash
-go install github.com/yourusername/claude-repl@latest
+go install github.com/this-is-alpha-iota/clyde@latest
 ```
 
 After installation, create a config file in your home directory:
 ```bash
-mkdir -p ~/.claude-repl
-cat > ~/.claude-repl/config << 'EOF'
+mkdir -p ~/.clyde
+cat > ~/.clyde/config << 'EOF'
 TS_AGENT_API_KEY=your-anthropic-api-key
 BRAVE_SEARCH_API_KEY=your-brave-api-key  # Optional
 EOF
@@ -107,19 +107,19 @@ Get your API keys:
 
 ### Option 2: Build from source (for development)
 ```bash
-git clone https://github.com/yourusername/claude-repl
-cd claude-repl
-go build -o claude-repl
-./claude-repl
+git clone https://github.com/this-is-alpha-iota/clyde
+cd clyde
+go build -o clyde
+./clyde
 ```
 
 ## Configuration
 
-The application uses a single configuration file at `~/.claude-repl/config`.
+The application uses a single configuration file at `~/.clyde/config`.
 
 ### Configuration File Format
 ```bash
-# Claude REPL Configuration
+# Clyde Configuration
 # Required
 TS_AGENT_API_KEY=sk-ant-your-key-here
 
@@ -151,10 +151,10 @@ To test prompt changes:
 vim prompts/system.txt
 
 # Run without rebuilding
-./claude-repl
+./clyde
 
 # When satisfied, rebuild to embed the new prompt
-go build -o claude-repl
+go build -o clyde
 ```
 
 ## Testing

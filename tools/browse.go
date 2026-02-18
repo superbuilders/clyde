@@ -85,7 +85,7 @@ func executeBrowse(input map[string]interface{}, apiClient *api.Client, conversa
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "claude-repl/1.0 (Go HTTP Client)")
+	req.Header.Set("User-Agent", "clyde/1.0 (Go HTTP Client)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
 	resp, err := client.Do(req)

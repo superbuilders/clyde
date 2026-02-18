@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"claude-repl/config"
+	"github.com/this-is-alpha-iota/clyde/config"
 )
 
 // TestConfigLoadFromFile tests loading config from a specific file

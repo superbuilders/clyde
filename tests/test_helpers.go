@@ -1,10 +1,10 @@
 package main
 
 import (
-	"claude-repl/api"
-	"claude-repl/config"
-	"claude-repl/prompts"
-	"claude-repl/tools"
+	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/config"
+	"github.com/this-is-alpha-iota/clyde/prompts"
+	"github.com/this-is-alpha-iota/clyde/tools"
 	"os"
 	"strings"
 )
