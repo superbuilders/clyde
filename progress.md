@@ -1,4 +1,36 @@
-# Claude REPL Progress Documentation
+# Clyde Progress Documentation
+
+## Project Rename (2026-02-18)
+
+**From**: claude-repl / go-coding-agent  
+**To**: clyde
+
+**Reason**: Standardize naming across local and remote repositories. The go.mod declared `claude-repl` while GitHub repo was `go-coding-agent`, causing installation conflicts.
+
+**Changes Made**:
+1. **go.mod**: Updated module path to `github.com/this-is-alpha-iota/clyde`
+2. **All Go files**: Updated imports from `claude-repl/*` to `github.com/this-is-alpha-iota/clyde/*`
+3. **Binary name**: Changed from `claude-repl` to `clyde`
+4. **Config directory**: Changed from `~/.claude-repl/` to `~/.clyde/`
+5. **README.md**: Updated all references to use "clyde"
+6. **User-Agent**: Changed browse tool User-Agent to `clyde/1.0`
+7. **Startup banner**: Changed from "Claude REPL" to "Clyde - AI Coding Agent"
+
+**Installation Now Works**:
+```bash
+go install github.com/this-is-alpha-iota/clyde@latest
+```
+
+**Config Setup**:
+```bash
+mkdir -p ~/.clyde
+cat > ~/.clyde/config << 'EOF'
+TS_AGENT_API_KEY=your-anthropic-api-key
+BRAVE_SEARCH_API_KEY=your-brave-api-key  # Optional
+EOF
+```
+
+**Name Origin**: "Clyde" is a friendly, memorable name that fits the AI coding assistant persona.
 
 ## Overview
 Built a Go CLI that provides a REPL (Read-Eval-Print Loop) interface for conversing with Claude AI, featuring GitHub integration via the `gh` CLI tool.
