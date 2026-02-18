@@ -1081,12 +1081,12 @@ Priority #4 (Better Error Handling & Messages) already achieved the goal with ex
 - Current approach requires copying `.env` or setting `ENV_PATH` manually
 - Not user-friendly for global installation
 
-**Proposed Solution**: Use XDG Base Directory standard for config files
+**Proposed Solution**: Use simple home directory config file
 
 **Config Location Strategy**:
 1. Check for `.env` in current directory (for local development/testing)
-2. Check for `~/.config/claude-repl/config` (XDG standard on Linux/macOS)
-3. Check for `~/.claude-repl` (fallback/legacy)
+2. Check for `~/.claude-repl/config` (primary location)
+3. Check for `~/.claude-repl` (fallback - direct file without subdirectory)
 4. Prompt user to create config if none found
 
 **Implementation**:
@@ -1098,20 +1098,21 @@ func LoadConfig() (*Config, error) {
         return loadFromEnvFile(".env")
     }
     
-    // 2. Try XDG config directory
-    configDir := os.Getenv("XDG_CONFIG_HOME")
-    if configDir == "" {
-        configDir = filepath.Join(os.Getenv("HOME"), ".config")
-    }
-    configPath := filepath.Join(configDir, "claude-repl", "config")
-    if _, err := os.Stat(configPath); err == nil {
-        return loadFromEnvFile(configPath)
+    // 2. Try ~/.claude-repl/config
+    homeDir, err := os.UserHomeDir()
+    if err == nil {
+        configPath := filepath.Join(homeDir, ".claude-repl", "config")
+        if _, err := os.Stat(configPath); err == nil {
+            return loadFromEnvFile(configPath)
+        }
     }
     
-    // 3. Try legacy location
-    legacyPath := filepath.Join(os.Getenv("HOME"), ".claude-repl")
-    if _, err := os.Stat(legacyPath); err == nil {
-        return loadFromEnvFile(legacyPath)
+    // 3. Try ~/.claude-repl (fallback - direct file)
+    if err == nil {
+        legacyPath := filepath.Join(homeDir, ".claude-repl")
+        if _, err := os.Stat(legacyPath); err == nil {
+            return loadFromEnvFile(legacyPath)
+        }
     }
     
     // 4. No config found - help user create one
@@ -1119,7 +1120,8 @@ func LoadConfig() (*Config, error) {
         Message: "No configuration file found",
         Suggestions: []string{
             fmt.Sprintf("Create config file: mkdir -p %s && vi %s", 
-                filepath.Dir(configPath), configPath),
+                filepath.Join(homeDir, ".claude-repl"), 
+                filepath.Join(homeDir, ".claude-repl", "config")),
             "Add your API keys: TS_AGENT_API_KEY=your-key-here",
             "Add Brave API key (optional): BRAVE_SEARCH_API_KEY=your-key-here",
             "Or create .env file in current directory for project-specific config",
@@ -1128,7 +1130,7 @@ func LoadConfig() (*Config, error) {
 }
 ```
 
-**Config File Format** (`~/.config/claude-repl/config`):
+**Config File Format** (`~/.claude-repl/config`):
 ```bash
 # Claude REPL Configuration
 # API Keys
@@ -1147,8 +1149,8 @@ Error: No configuration file found
 
 To get started, create a config file:
 
-  mkdir -p ~/.config/claude-repl
-  cat > ~/.config/claude-repl/config << 'EOF'
+  mkdir -p ~/.claude-repl
+  cat > ~/.claude-repl/config << 'EOF'
   TS_AGENT_API_KEY=your-anthropic-api-key
   BRAVE_SEARCH_API_KEY=your-brave-api-key  # Optional
   EOF
@@ -1161,10 +1163,10 @@ For project-specific config, create a .env file in your project directory.
 
 **Benefits**:
 - **User-friendly**: Works after `go install` without manual setup
-- **Standards-compliant**: Follows XDG Base Directory specification
+- **Simple**: Uses straightforward `~/.claude-repl/` directory
 - **Flexible**: Supports both global and local config
 - **Clear guidance**: Helpful error messages guide setup
-- **Clean**: Keeps config in standard locations (not in binary's directory)
+- **Clean**: Keeps config in standard dotfile location
 
 **Testing Strategy**:
 - Unit tests: Mock home directory and test config search order
@@ -1189,11 +1191,11 @@ go build -o claude-repl
 
 ## Configuration
 
-Create a config file in `~/.config/claude-repl/config`:
+Create a config file in `~/.claude-repl/config`:
 
 ```bash
-mkdir -p ~/.config/claude-repl
-cat > ~/.config/claude-repl/config << 'EOF'
+mkdir -p ~/.claude-repl
+cat > ~/.claude-repl/config << 'EOF'
 TS_AGENT_API_KEY=your-anthropic-api-key
 BRAVE_SEARCH_API_KEY=your-brave-api-key  # Optional
 EOF
