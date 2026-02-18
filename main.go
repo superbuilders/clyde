@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"claude-repl/agent"
-	"claude-repl/api"
-	"claude-repl/config"
-	"claude-repl/prompts"
-	_ "claude-repl/tools" // Import tools to register them
+	"github.com/this-is-alpha-iota/clyde/agent"
+	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/config"
+	"github.com/this-is-alpha-iota/clyde/prompts"
+	_ "github.com/this-is-alpha-iota/clyde/tools" // Import tools to register them
 )
 
 func main() {

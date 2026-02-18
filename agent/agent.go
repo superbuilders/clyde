@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"claude-repl/api"
-	"claude-repl/tools"
+	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/tools"
 	"fmt"
 	"strings"
 )

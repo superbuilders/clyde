@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"claude-repl/api"
+	"github.com/this-is-alpha-iota/clyde/api"
 	"fmt"
 	"os"
 	"os/exec"
