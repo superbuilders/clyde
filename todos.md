@@ -1137,29 +1137,468 @@ The config location decision belongs at the CLI layer, not in the config package
 
 ---
 
-### 15. 📎 File Input Support (Future)
-**Purpose**: Accept files as input (text and images)
+### 15. 📷 Image Input Support (Multimodal)
+**Purpose**: Send images to Claude for analysis (vision capabilities)
 
-**Text File Input**:
-- Command syntax: `/attach path/to/file.txt`
-- Pipe support: `cat error.log | ./claude-repl`
-- Useful for: logs, error messages, config files, code snippets
+**Now that the agent is a decoupled library, this feature comprises two parts:**
 
-**Image Input** (multimodal):
-- Upload and analyze images
-- Use Claude's vision capabilities
-- Useful for: screenshots, diagrams, UI mockups, charts
-- Requires API changes for image content blocks
+#### Part 1: Agent Library - Image Support in API Client (4-5 hours)
+**Scope**: Update the `api` package to handle image content blocks
+
+**Image Sources to Support**:
+1. **Public URLs** (remote servers): `https://example.com/image.png`
+2. **Local filesystem**: `/path/to/screenshot.png`, `./diagram.jpg`
+3. **Base64 encoded** (already in memory)
+
+**API Changes Needed**:
+
+```go
+// api/types.go
+type ImageSource struct {
+    Type      string `json:"type"`        // "url" or "base64"
+    MediaType string `json:"media_type"`  // "image/jpeg", "image/png", "image/webp", "image/gif"
+    
+    // For type="url"
+    URL string `json:"url,omitempty"`
+    
+    // For type="base64"
+    Data string `json:"data,omitempty"`  // Base64 encoded image data
+}
+
+type ContentBlock struct {
+    Type      string       `json:"type"`                // "text", "image", "tool_use", "tool_result"
+    Text      string       `json:"text,omitempty"`      // For type="text"
+    Source    *ImageSource `json:"source,omitempty"`    // For type="image"
+    // ... existing fields for tool_use/tool_result
+}
+```
+
+**Image Loading Logic** (new helper functions):
+```go
+// api/images.go (new file)
+package api
+
+import (
+    "encoding/base64"
+    "fmt"
+    "io"
+    "net/http"
+    "os"
+    "path/filepath"
+    "strings"
+)
+
+// LoadImage loads an image from a URL or local path and returns a ContentBlock
+func LoadImage(path string) (ContentBlock, error) {
+    if isURL(path) {
+        return loadImageFromURL(path)
+    }
+    return loadImageFromFile(path)
+}
+
+func isURL(path string) bool {
+    return strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://")
+}
+
+func loadImageFromURL(url string) (ContentBlock, error) {
+    // Validate URL is accessible (HEAD request)
+    resp, err := http.Head(url)
+    if err != nil {
+        return ContentBlock{}, fmt.Errorf("failed to access image URL: %w", err)
+    }
+    defer resp.Body.Close()
+    
+    if resp.StatusCode != 200 {
+        return ContentBlock{}, fmt.Errorf("image URL returned status %d", resp.StatusCode)
+    }
+    
+    // Detect media type from Content-Type header
+    mediaType := resp.Header.Get("Content-Type")
+    if !isValidImageType(mediaType) {
+        return ContentBlock{}, fmt.Errorf("unsupported image type: %s", mediaType)
+    }
+    
+    return ContentBlock{
+        Type: "image",
+        Source: &ImageSource{
+            Type:      "url",
+            MediaType: mediaType,
+            URL:       url,
+        },
+    }, nil
+}
+
+func loadImageFromFile(path string) (ContentBlock, error) {
+    // Read file
+    data, err := os.ReadFile(path)
+    if err != nil {
+        return ContentBlock{}, fmt.Errorf("failed to read image file '%s': %w", path, err)
+    }
+    
+    // Detect media type from file extension
+    mediaType := detectMediaType(filepath.Ext(path))
+    if mediaType == "" {
+        return ContentBlock{}, fmt.Errorf("unsupported image format: %s", filepath.Ext(path))
+    }
+    
+    // Encode to base64
+    encoded := base64.StdEncoding.EncodeToString(data)
+    
+    return ContentBlock{
+        Type: "image",
+        Source: &ImageSource{
+            Type:      "base64",
+            MediaType: mediaType,
+            Data:      encoded,
+        },
+    }, nil
+}
+
+func isValidImageType(mediaType string) bool {
+    validTypes := []string{"image/jpeg", "image/png", "image/webp", "image/gif"}
+    for _, valid := range validTypes {
+        if mediaType == valid {
+            return true
+        }
+    }
+    return false
+}
+
+func detectMediaType(ext string) string {
+    switch strings.ToLower(ext) {
+    case ".jpg", ".jpeg":
+        return "image/jpeg"
+    case ".png":
+        return "image/png"
+    case ".webp":
+        return "image/webp"
+    case ".gif":
+        return "image/gif"
+    default:
+        return ""
+    }
+}
+```
+
+**Agent Changes** (agent/agent.go):
+```go
+// HandleMessageWithImages sends a message with optional images to the agent
+func (a *Agent) HandleMessageWithImages(userInput string, imagePaths []string) (string, error) {
+    // Build content blocks
+    contentBlocks := []api.ContentBlock{
+        {Type: "text", Text: userInput},
+    }
+    
+    // Add image blocks
+    for _, path := range imagePaths {
+        imageBlock, err := api.LoadImage(path)
+        if err != nil {
+            return "", fmt.Errorf("failed to load image '%s': %w", path, err)
+        }
+        contentBlocks = append(contentBlocks, imageBlock)
+    }
+    
+    // Create user message with multiple content blocks
+    userMsg := api.Message{
+        Role:    "user",
+        Content: contentBlocks,
+    }
+    
+    // ... rest of existing logic
+}
+```
+
+**Error Handling**:
+- Invalid image format (not jpeg/png/webp/gif)
+- File not found or permission denied
+- URL not accessible (404, 403, timeout)
+- File too large (>5MB per Claude limits)
+- Invalid base64 encoding
+
+**Testing**:
+- Unit tests for image loading (URL, file, base64)
+- Integration tests with real Claude API calls
+- Error handling tests (invalid format, missing file, etc.)
+
+**Estimated time**: 4-5 hours
+- 1 hour: ContentBlock and ImageSource type updates
+- 1.5 hours: Image loading logic (URL and file)
+- 1 hour: Agent integration (HandleMessageWithImages)
+- 1 hour: Testing (unit + integration)
+- 0.5 hours: Error handling and edge cases
+
+---
+
+#### Part 2: CLI Integration - Image Detection in REPL (3-4 hours)
+**Scope**: Detect and handle image paths in user input from REPL
+
+**Design Decision: Hybrid Regex Pre-filter + Query-Rewrite**
+
+**Approach: Smart Two-Stage Detection**
+1. **Stage 1 (Regex Pre-filter)**: Check if message likely contains images
+   - Fast regex scan for image extensions: `.jpg`, `.png`, `.gif`, `.webp`, `jpeg`
+   - Matches paths, URLs, or even partial mentions
+   - **Only if match found** → proceed to Stage 2
+   - **If no match** → skip to normal message handling (zero overhead)
+
+2. **Stage 2 (Query-Rewrite with Haiku)**: Extract actual image references
+   - Use fast, cheap model (Haiku 3.5: $0.25 input / $1.25 output per million tokens)
+   - Prompt: "Extract all image file paths or URLs from this message. Handle typos/misspellings."
+   - Returns: JSON array of corrected paths `["./screenshot.png", "https://..."]`
+   - Handles natural language: "look at screenshoot.png" → `["./screenshot.png"]`
+   - Can correct typos: "analze eror.jpg" → `["./error.jpg"]`
+
+**Why This Hybrid Approach is Best**:
+
+✅ **Natural UX**: No special syntax required
+- "look at screenshot.png" → works
+- "analyze this screenshoot.png" (typo) → corrects to screenshot.png
+- "compare eror1.png and error2.png" → handles both
+
+✅ **Cost-Effective**: Only runs query-rewrite when needed
+- Regex pre-filter is nearly free (microseconds)
+- Haiku call only happens if image extensions detected
+- Typical cost: ~$0.0001 per query-rewrite (negligible)
+
+✅ **Fast Enough**: Haiku is fast (~300-500ms typical)
+- Acceptable latency for image-heavy queries
+- User expects slight delay when including images anyway
+
+✅ **Robust**: Handles edge cases
+- Misspelled paths: "scrensht.png" → corrects to nearest match
+- Multiple images: extracts all mentioned files
+- Mixed URLs and local paths
+- Ambiguous mentions: "the error in screenshot" → can find "screenshot.png"
+
+✅ **Future-Proof**: LLM can improve without code changes
+- Update prompt for better extraction
+- Switch to better/faster models as available
+
+**Implementation**:
+
+**Stage 1: Regex Pre-filter** (main.go):
+```go
+import "regexp"
+
+var imageExtensionRegex = regexp.MustCompile(`(?i)\.(jpg|jpeg|png|gif|webp)\b`)
+
+func likelyContainsImages(input string) bool {
+    return imageExtensionRegex.MatchString(input)
+}
+```
+
+**Stage 2: Query-Rewrite with Haiku** (new function):
+```go
+// queryRewriteForImages uses Haiku to extract image paths from user input
+func queryRewriteForImages(input string, apiKey string) (cleanedInput string, imagePaths []string, err error) {
+    // Create a lightweight API client for Haiku
+    haikuClient := api.NewClient(
+        apiKey,
+        "https://api.anthropic.com/v1/messages",
+        "claude-3-5-haiku-20241022",  // Fast, cheap model
+        1024,  // Small max tokens for extraction
+    )
+    
+    // Prompt for image extraction
+    systemPrompt := `You are a file path extractor. Extract all image file paths or URLs from the user's message.
+Rules:
+- Return ONLY a JSON array of paths/URLs
+- Correct common typos in filenames (e.g., "screenshoot" → "screenshot")
+- Support local paths (./file.png, /path/to/file.png, file.png) and URLs (https://...)
+- If no images found, return empty array []
+- Do not include explanations, just the JSON array
+
+Examples:
+Input: "analyze screenshot.png"
+Output: ["screenshot.png"]
+
+Input: "look at eror.jpg and diagram.png"
+Output: ["error.jpg", "diagram.png"]
+
+Input: "what does https://example.com/img.png show"
+Output: ["https://example.com/img.png"]
+
+Input: "read main.go"
+Output: []`
+    
+    messages := []api.Message{
+        {
+            Role:    "user",
+            Content: []api.ContentBlock{{Type: "text", Text: input}},
+        },
+    }
+    
+    response, err := haikuClient.Call(systemPrompt, messages, nil)
+    if err != nil {
+        return input, nil, fmt.Errorf("query rewrite failed: %w", err)
+    }
+    
+    // Parse JSON array from response
+    var paths []string
+    responseText := response.Content[0].Text
+    if err := json.Unmarshal([]byte(responseText), &paths); err != nil {
+        // Fallback: if not valid JSON, try to extract from text
+        // (in case model wrapped it in explanation)
+        if jsonMatch := regexp.MustCompile(`\[.*?\]`).FindString(responseText); jsonMatch != "" {
+            json.Unmarshal([]byte(jsonMatch), &paths)
+        }
+    }
+    
+    // Remove image mentions from original input (optional - or keep them)
+    cleanedInput = input
+    for _, path := range paths {
+        // Keep the context, just note that we extracted it
+        // Don't remove from text, let Claude see the full context
+    }
+    
+    return cleanedInput, paths, nil
+}
+```
+
+**Main REPL Integration** (main.go):
+```go
+// In main REPL loop:
+userInput := getUserInput()
+
+var imagePaths []string
+var err error
+
+// Stage 1: Check if input likely contains images
+if likelyContainsImages(userInput) {
+    // Stage 2: Use Haiku to extract image paths
+    fmt.Println("🔍 Detecting images...")
+    _, imagePaths, err = queryRewriteForImages(userInput, cfg.APIKey)
+    if err != nil {
+        fmt.Printf("⚠️  Image detection failed: %v\n", err)
+        fmt.Println("Continuing without images...")
+        imagePaths = nil
+    }
+}
+
+// Send message with or without images
+if len(imagePaths) > 0 {
+    fmt.Printf("📎 Found %d image(s): %v\n", len(imagePaths), imagePaths)
+    response, err := agentInstance.HandleMessageWithImages(userInput, imagePaths)
+} else {
+    response, err := agentInstance.HandleMessage(userInput)
+}
+```
+
+**User Experience Examples**:
+
+```bash
+# Example 1: Natural language with typo
+You: look at screenshoot.png and tell me what's wrong
+🔍 Detecting images...
+📎 Found 1 image(s): [screenshot.png]
+→ Loading image: screenshot.png (125 KB)
+Claude: The screenshot shows a "nil pointer dereference" error...
+
+# Example 2: Multiple images with correction
+You: compare eror1.png and error2.png
+🔍 Detecting images...
+📎 Found 2 image(s): [error1.png error2.png]
+→ Loading image: error1.png (88 KB)
+→ Loading image: error2.png (92 KB)
+Claude: Both screenshots show similar stack traces...
+
+# Example 3: URL in natural language
+You: what's in this diagram https://example.com/arch.png?
+🔍 Detecting images...
+📎 Found 1 image(s): [https://example.com/arch.png]
+→ Loading image from URL: https://example.com/arch.png
+Claude: This is a client-server architecture diagram...
+
+# Example 4: No images (fast path, no query-rewrite)
+You: how do I fix a nil pointer error in Go?
+Claude: A nil pointer error in Go occurs when...
+(no "Detecting images..." message, went straight to response)
+
+# Example 5: File doesn't exist (graceful handling)
+You: analyze missing.png
+🔍 Detecting images...
+📎 Found 1 image(s): [missing.png]
+→ Loading image: missing.png
+⚠️  Failed to load image 'missing.png': file not found
+
+Did you mean one of these files?
+  - screenshot.png
+  - error1.png
+  - error2.png
+```
+
+**Cost Analysis**:
+- **Haiku Input**: ~50 tokens (user message) × $0.25/M = $0.0000125
+- **Haiku Output**: ~20 tokens (JSON array) × $1.25/M = $0.000025
+- **Total per query-rewrite**: ~$0.000038 (~$0.04 per 1000 image queries)
+- **Acceptable**: Most queries won't have images (zero cost via regex pre-filter)
+
+**Error Handling & Smart Suggestions**:
+```go
+func loadImageWithSuggestions(path string) (api.ContentBlock, error) {
+    block, err := api.LoadImage(path)
+    if err != nil {
+        // If file not found, suggest similar files
+        if os.IsNotExist(err) {
+            suggestions := findSimilarImageFiles(path)
+            if len(suggestions) > 0 {
+                return block, fmt.Errorf("file '%s' not found. Did you mean one of these?\n  - %s",
+                    path, strings.Join(suggestions, "\n  - "))
+            }
+        }
+        return block, err
+    }
+    return block, nil
+}
+
+func findSimilarImageFiles(target string) []string {
+    // Find image files in current directory
+    matches, _ := filepath.Glob("*.{png,jpg,jpeg,gif,webp}")
+    
+    // Sort by Levenshtein distance (typo similarity)
+    // Return top 3 matches
+    return matches[:min(3, len(matches))]
+}
+```
+
+**Testing**:
+- Unit tests for regex pre-filter (various inputs with/without images)
+- Unit tests for Haiku query-rewrite (mocked responses)
+- Integration tests with real Haiku calls
+- Test typo correction: "screenshoot.png" → "screenshot.png"
+- Test multiple images extraction
+- Test URL vs local path handling
+- Test error cases (missing files, invalid formats)
+- Test cost/performance (measure Haiku call time)
+
+**Documentation**:
+Update README.md with image usage examples:
+- Natural language image references
+- Typo handling examples
+- Multiple image support
+- URL and local path examples
+
+**Estimated time**: 3-4 hours
+- 1 hour: Regex pre-filter + Haiku query-rewrite integration
+- 1 hour: JSON parsing and path extraction from Haiku response
+- 0.5 hours: Smart error handling with suggestions
+- 0.5 hours: CLI integration and progress messages
+- 0.5 hours: Testing (unit + integration with Haiku)
+- 0.5 hours: Documentation and examples
+
+---
+
+**Total Estimated Time**: 7-9 hours (4-5 hours Part 1 + 3-4 hours Part 2)
 
 **Use Cases**:
 - "Debug this error screenshot"
 - "Convert this diagram to code"
 - "What's wrong with this UI?"
 - "Analyze this chart and summarize trends"
+- "Compare these two screenshots"
+- "Read the text from this image"
 
-**Estimated time**:
-- Text file input: 2 hours
-- Image input: 4 hours (includes API changes)
+**Dependencies**: Claude API supports images (already available in claude-sonnet-4-5)
 
 ---
 
