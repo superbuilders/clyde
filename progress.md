@@ -923,7 +923,7 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 - Impact: web_search and browse tools now work correctly in REPL
 - Tests: All tests passing
 
-**Active Tools**: 10 ✨
+**Active Tools**: 11 ✨
 1. `list_files` - Directory listings with helpful error messages
 2. `read_file` - Read file contents with size warnings and validation
 3. `patch_file` - Find/replace edits with detailed guidance for common issues
@@ -933,7 +933,8 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 7. `glob` - Find files matching patterns (fuzzy file finding)
 8. `multi_patch` - Coordinated multi-file edits with automatic rollback
 9. `web_search` - Search the internet using Brave Search API
-10. `browse` - Fetch and read web pages with optional AI extraction (NEW ✨)
+10. `browse` - Fetch and read web pages with optional AI extraction
+11. `include_file` - Include images in conversation for vision analysis (NEW ✨)
 
 **Test Suite**: Clean and comprehensive
 - 17 unit tests passing (no API key required)
@@ -975,7 +976,7 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 - Web search includes API key setup guidance and rate limit explanations
 - All tests still pass (22 passed, 4 skipped)
 
-**Completed Priorities**: 15 / 15 from todos.md ✨✨
+**Completed Priorities**: 16 / 17 from todos.md ✨✨
 1. ✅ Deprecate GitHub Tool (replaced with run_bash)
 2. ✅ System Prompt: progress.md Philosophy  
 3. ✅ Better Tool Progress Messages
@@ -991,11 +992,14 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 13. ✅ External System Prompt (Development & Production Mode)
 14. ✅ Consolidated Tool Execution Framework
 15. ✅ Config File for Global Installation (Improved Distribution)
+16. ✅ Image Input Support (Multimodal) - NEW! 🎉
 
 **Cancelled Items**: 1 ❌
 - ❌ Custom Error Types (Priority #13 in original list) - Overengineering, Priority #4 already solved this
 
-**ALL PRIORITIES COMPLETE!** 🎉
+**ALL MAIN PRIORITIES COMPLETE!** 🎉🎉
+
+Only one optional priority remains (HTTP REST API Interface - Priority #17)
 
 ## Feature Additions
 
@@ -1529,6 +1533,155 @@ domain in literature without prior coordination or asking for permission.
 The main heading on the example.com page is **"Example Domain"**. This is
 formatted as an H1 heading (the top-level heading) on the page.
 ```
+
+**Added include_file tool** (2026-02-19) - Image Support (Multimodal) ✨:
+Enables Claude to include images in conversations for vision analysis:
+- Load images from local filesystem or remote URLs
+- Supports: .jpg, .jpeg, .png, .gif, .webp
+- Images sent as base64-encoded content blocks to Claude
+- Agent decides when to include files based on user requests
+- No CLI magic - agent uses intelligence to search and verify files
+
+**Features**:
+- Uses `include_file` tool that agent can call explicitly
+- Validates file exists and is correct type before loading
+- Encodes to base64 and returns special IMAGE_LOADED marker
+- Agent recognizes marker and adds image content block to conversation
+- 5MB size limit per Claude API requirements
+- Helpful error messages for missing files, wrong types, too large
+
+**Use Cases**:
+- "Look at screenshot.png and tell me what's wrong"
+- "Analyze this error: https://example.com/error.png"
+- "What's in diagram.jpg?"
+- "Compare error1.png and error2.png"
+- Agent can search for files first: "look at the screenshot" → uses glob → includes file
+
+**Tool Behavior**:
+1. Agent receives: "analyze screenshot.png"
+2. Agent may verify with list_files or glob first
+3. Agent uses: include_file("screenshot.png")
+4. Tool loads image, encodes to base64
+5. Tool returns: "IMAGE_LOADED:image/png:125.4:<base64_data>"
+6. Agent recognizes marker and creates image content block
+7. Agent includes image in next API call to Claude
+8. Claude analyzes image with vision capabilities
+9. Agent responds with analysis
+
+**System Prompt Addition**:
+```
+File inclusion - Use include_file for:
+- "Look at [image file]" or "Analyze [image]"
+- "What's in screenshot.png?"
+- "Debug this error screenshot"
+- User mentions a specific image file to examine
+- Supports images: .jpg, .jpeg, .png, .gif, .webp
+- Works with local paths and remote URLs
+- Workflow: 1) Verify file exists with list_files/glob if unsure, 2) Use include_file
+- After including image, you can see and analyze it in the same turn
+```
+
+**Progress Message**:
+- `→ Including file: screenshot.png`
+- `→ Including file: https://example.com/diagram.png`
+
+**Implementation**:
+```go
+// tools/include_file.go
+func executeIncludeFile(input map[string]interface{}, apiClient *api.Client, 
+                        history []api.Message) (string, error) {
+    // 1. Validate path parameter
+    // 2. Check if URL or local file
+    // 3. Validate file extension (jpg, png, gif, webp)
+    // 4. Load file (http.Get for URLs, os.ReadFile for local)
+    // 5. Validate size (<5MB)
+    // 6. Encode to base64
+    // 7. Return: "IMAGE_LOADED:<media_type>:<size_kb>:<base64>"
+}
+
+// agent/agent.go - recognizes IMAGE_LOADED marker
+if strings.HasPrefix(output, "IMAGE_LOADED:") {
+    parts := strings.SplitN(output, ":", 4)
+    pendingImages = append(pendingImages, api.ContentBlock{
+        Type: "image",
+        Source: &api.ImageSource{
+            Type:      "base64",
+            MediaType: parts[1],
+            Data:      parts[3],
+        },
+    })
+}
+```
+
+**Testing Standards Maintained**:
+- Unit tests: `TestExecuteIncludeFile` (5 sub-tests)
+  - Missing/empty path parameter
+  - File not found
+  - Unsupported file type
+  - Load valid PNG image
+  - Validate base64 encoding
+- Unit tests: `TestDisplayIncludeFile` (2 sub-tests)
+  - Local file path display
+  - Remote URL display
+- Integration tests: `TestIncludeFileIntegration` (2 sub-tests)
+  - Include image and Claude analyzes it (vision works!)
+  - Handle non-existent file gracefully
+- All tests pass
+
+**API Changes**:
+Added `ImageSource` type to `api/types.go`:
+```go
+type ImageSource struct {
+    Type      string `json:"type"`        // "base64" or "url"
+    MediaType string `json:"media_type"`  // "image/jpeg", etc.
+    Data      string `json:"data,omitempty"`
+    URL       string `json:"url,omitempty"`
+}
+
+// Added to ContentBlock:
+Source *ImageSource `json:"source,omitempty"` // For type="image"
+```
+
+**Results**:
+- ✅ All 36 tests pass (130 total test runs including sub-tests)
+- ✅ Integration tests confirmed: Claude vision analysis works perfectly!
+- ✅ Binary size: 9.0 MB (unchanged)
+- ✅ System prompt: 5.1 KB (+500 bytes)
+- ✅ Claude successfully analyzes images with vision!
+- ✅ Agent intelligently searches for files when needed
+- ✅ Comprehensive error handling for edge cases
+- ✅ Clean tool-based approach (no CLI query-rewriting)
+- ✅ Test output confirms: "The image has been successfully loaded! This appears to be a very small 1x1 pixel image..."
+
+**Example Session**:
+```
+You: analyze screenshot.png
+→ Including file: screenshot.png
+Claude: I can see the screenshot shows a "nil pointer dereference" error...
+
+You: what's in that error screenshot?
+→ Searching: 'error' in current directory (*.png)
+→ Including file: error_screenshot.png
+Claude: Looking at error_screenshot.png, I can see...
+```
+
+**Time Taken**: ~4 hours (Part 1 agent library, Part 2 not needed!)
+
+**Design Decision - Agent Tool vs CLI Detection**:
+The original spec proposed CLI query-rewriting with Haiku to detect image paths. That approach failed because:
+- Query rewrite routinely missed files or didn't include correct paths
+- Added latency and cost for every message
+- Unreliable extraction from natural language
+
+The tool-based approach is **much better**:
+- Agent explicitly controls what files to include
+- Agent can search for files using existing tools (list_files, glob, grep)
+- Agent can verify existence before including
+- Agent can explain errors naturally to user
+- No guessing or query-rewriting overhead
+- Clean, deterministic behavior
+
+**Philosophy**: Let the agent use its intelligence to decide when and how to include files. Don't try to outsmart it from the CLI layer. This is cleaner, more reliable, and requires less code.
 
 ### Config File for Global Installation (Added 2026-02-18) - Priority #14 ✅
 

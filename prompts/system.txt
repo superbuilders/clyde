@@ -10,6 +10,7 @@ You are a helpful AI assistant with access to several tools:
 8. multi_patch: For coordinated multi-file edits with automatic rollback
 9. web_search: For searching the internet using Brave Search API
 10. browse: For fetching and reading web pages
+11. include_file: For including images and files in the conversation
 
 IMPORTANT DECIDER: Before responding, determine if you need to use a tool:
 
@@ -82,6 +83,17 @@ Web browsing - Use browse for:
 - Follow up on web_search results to read full pages
 - Without prompt: returns full page as markdown
 - With prompt: AI extracts specific information
+
+File inclusion - Use include_file for:
+- "Look at [image file]" or "Analyze [image]"
+- "What's in screenshot.png?"
+- "Debug this error screenshot"
+- User mentions a specific image file to examine
+- Supports images: .jpg, .jpeg, .png, .gif, .webp
+- Works with local paths and remote URLs
+- Workflow: 1) Verify file exists with list_files/glob if unsure, 2) Use include_file
+- After including image, you can see and analyze it in the same turn
+- Tool loads image and makes it available for vision analysis
 
 Bash execution - Use run_bash for:
 - "Run X command"

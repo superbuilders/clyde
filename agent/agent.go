@@ -100,6 +100,8 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 
 		// Execute tools
 		var toolResults []api.ContentBlock
+		var pendingImages []api.ContentBlock
+		
 		for _, toolBlock := range toolUseBlocks {
 			reg, err := tools.GetTool(toolBlock.Name)
 			if err != nil {
@@ -132,6 +134,30 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			} else {
 				resultContent = output
 				isError = false
+				
+				// Check for IMAGE_LOADED marker
+				if strings.HasPrefix(output, "IMAGE_LOADED:") {
+					// Parse: IMAGE_LOADED:<media_type>:<size_kb>:<base64_data>
+					parts := strings.SplitN(output, ":", 4)
+					if len(parts) == 4 {
+						mediaType := parts[1]
+						sizeKB := parts[2]
+						imageData := parts[3]
+						
+						// Store image for inclusion in this turn's response
+						pendingImages = append(pendingImages, api.ContentBlock{
+							Type: "image",
+							Source: &api.ImageSource{
+								Type:      "base64",
+								MediaType: mediaType,
+								Data:      imageData,
+							},
+						})
+						
+						// Update result content to confirmation message
+						resultContent = fmt.Sprintf("Image loaded successfully (%s, %s KB)", mediaType, sizeKB)
+					}
+				}
 			}
 
 			toolResults = append(toolResults, api.ContentBlock{
@@ -140,6 +166,11 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 				Content:   resultContent,
 				IsError:   isError,
 			})
+		}
+		
+		// If we loaded any images, add them to the tool results
+		if len(pendingImages) > 0 {
+			toolResults = append(toolResults, pendingImages...)
 		}
 
 		// Add tool results to history

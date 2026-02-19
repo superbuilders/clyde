@@ -21,6 +21,7 @@ go build -o clyde
 - ✏️ **Smart Editing**: Patch individual files or coordinate changes across multiple files
 - 🔍 **Search Tool**: Find patterns across multiple files with grep
 - 🗂️ **File Finding Tool**: Find files matching patterns with glob (fuzzy file finding)
+- 🖼️ **Vision Support**: Include images for Claude to analyze (multimodal)
 - 🔄 **Conversation Memory**: Maintains context across turns
 - ⚡ **Fast & Lightweight**: Single binary, minimal dependencies
 
@@ -73,6 +74,10 @@ Claude: [Returns search results with titles, URLs, and snippets]
 You: Browse https://pkg.go.dev/net/http and tell me about the Client type
 → Browsing: https://pkg.go.dev/net/http
 Claude: [Fetches page, converts to markdown, and explains the Client type]
+
+You: Look at screenshot.png and tell me what's wrong
+→ Including file: screenshot.png
+Claude: [Analyzes the image and identifies the error in the screenshot]
 
 You: exit
 Goodbye!
@@ -169,7 +174,7 @@ go test ./tests/... -v -run TestName
 
 ## Available Tools
 
-The REPL includes ten integrated tools:
+The REPL includes eleven integrated tools:
 
 1. **list_files**: List files and directories in any path
 2. **read_file**: Read and display file contents
@@ -181,6 +186,7 @@ The REPL includes ten integrated tools:
 8. **multi_patch**: Apply coordinated changes to multiple files with automatic rollback
 9. **web_search**: Search the internet using Brave Search API
 10. **browse**: Fetch and read web pages (with optional AI extraction)
+11. **include_file**: Include images in conversation for vision analysis
 
 ## Using Clyde as a Library
 

@@ -22,6 +22,14 @@ type Request struct {
 	Tools     []Tool    `json:"tools,omitempty"`
 }
 
+// ImageSource represents the source of an image in a content block
+type ImageSource struct {
+	Type      string `json:"type"`                // "base64" or "url"
+	MediaType string `json:"media_type"`          // "image/jpeg", "image/png", "image/webp", "image/gif"
+	Data      string `json:"data,omitempty"`      // Base64 data (for type="base64")
+	URL       string `json:"url,omitempty"`       // URL (for type="url")
+}
+
 // ContentBlock represents a block of content in a Claude response
 type ContentBlock struct {
 	Type      string                 `json:"type"`
@@ -32,6 +40,7 @@ type ContentBlock struct {
 	Content   interface{}            `json:"content,omitempty"`
 	ToolUseID string                 `json:"tool_use_id,omitempty"`
 	IsError   bool                   `json:"is_error,omitempty"`
+	Source    *ImageSource           `json:"source,omitempty"`  // For type="image"
 }
 
 // Response represents a Claude API response
