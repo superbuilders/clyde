@@ -2201,3 +2201,358 @@ CMD ["api-server"]
 - CI/CD integration (API calls from scripts)
 - Multi-user deployment
 - Cloud service offering
+
+---
+
+### 19. 🚀 CLI Mode (Non-Interactive Execution)
+**Status**: ⏳ **NOT STARTED**
+
+**Purpose**: Execute agent on a prompt without opening the REPL, similar to Claude Code's `-p` flag
+
+**Behavior**:
+When a prompt is provided via CLI arguments, clyde should:
+1. Execute the agent on that prompt
+2. Keep running until the agent completes the task
+3. Exit when done (no REPL)
+4. Print progress and final response to stdout
+5. Exit with code 0 on success, 1 on error
+
+**Use Cases**:
+```bash
+# Execute a simple task
+clyde "What files are in the current directory?"
+
+# Read prompt from file
+clyde -f prompt.txt
+cat prompt.txt | clyde
+
+# Use in scripts/automation
+clyde "Run all tests and create a summary report" > results.txt
+
+# CI/CD integration
+clyde "Review the latest commit and summarize changes"
+
+# Quick one-off queries
+clyde "What's the latest version of Go installed?"
+
+# File operations
+clyde "Create a new file called README.md with project documentation"
+
+# Code generation
+clyde "Generate a unit test for the Calculate function in math.go"
+```
+
+**CLI Interface Design**:
+
+**Chosen Approach: Positional with `-f` flag for files**
+```bash
+clyde "your prompt here"     # Direct string argument
+clyde -f prompt.txt          # Read from file
+cat prompt.txt | clyde       # Read from stdin
+```
+
+**Why This Design**:
+- Simple and intuitive for the common case (direct string)
+- `-f` flag explicit for file input (prevents ambiguity)
+- Stdin support for Unix composition
+- Consistent with common CLI tool patterns
+
+**Implementation Strategy**:
+
+**1. Update main.go to detect CLI mode**:
+```go
+func main() {
+    // Parse command line arguments
+    args := os.Args[1:]
+    
+    // Determine mode: REPL or CLI
+    if len(args) > 0 {
+        runCLIMode(args)
+    } else {
+        runREPLMode()
+    }
+}
+
+func runCLIMode(args []string) {
+    // Determine prompt source
+    var prompt string
+    var err error
+    
+    if args[0] == "-f" {
+        // Read from file
+        if len(args) < 2 {
+            fmt.Fprintln(os.Stderr, "Error: -f requires a file path")
+            fmt.Fprintln(os.Stderr, "Usage: clyde -f prompt.txt")
+            os.Exit(1)
+        }
+        prompt, err = readPromptFromFile(args[1])
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "Error reading prompt file: %v\n", err)
+            os.Exit(1)
+        }
+    } else {
+        // Check if stdin has input (pipe/redirect)
+        stat, _ := os.Stdin.Stat()
+        if (stat.Mode() & os.ModeCharDevice) == 0 {
+            // stdin is piped/redirected
+            prompt, err = readPromptFromStdin()
+            if err != nil {
+                fmt.Fprintf(os.Stderr, "Error reading from stdin: %v\n", err)
+                os.Exit(1)
+            }
+        } else {
+            // Treat all args as the prompt string
+            prompt = strings.Join(args, " ")
+        }
+    }
+    
+    if strings.TrimSpace(prompt) == "" {
+        fmt.Fprintln(os.Stderr, "Error: Empty prompt provided")
+        os.Exit(1)
+    }
+    
+    // Load config and create agent
+    cfg, err := loadConfig()
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+        os.Exit(1)
+    }
+    
+    apiClient := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+    agentInstance := agent.NewAgent(
+        apiClient,
+        prompts.SystemPrompt,
+        agent.WithProgressCallback(func(msg string) {
+            fmt.Fprintln(os.Stderr, msg) // Print progress to stderr
+        }),
+    )
+    
+    // Execute prompt
+    response, err := agentInstance.HandleMessage(prompt)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+        os.Exit(1)
+    }
+    
+    // Print response to stdout
+    fmt.Println(response)
+    os.Exit(0)
+}
+
+func runREPLMode() {
+    // Current REPL implementation
+    // ... existing code ...
+}
+
+func readPromptFromFile(path string) (string, error) {
+    content, err := os.ReadFile(path)
+    if err != nil {
+        return "", fmt.Errorf("failed to read file '%s': %w", path, err)
+    }
+    return string(content), nil
+}
+
+func readPromptFromStdin() (string, error) {
+    // Check if stdin is a pipe/redirect
+    stat, err := os.Stdin.Stat()
+    if err != nil {
+        return "", err
+    }
+    
+    if (stat.Mode() & os.ModeCharDevice) != 0 {
+        return "", fmt.Errorf("no input provided on stdin")
+    }
+    
+    content, err := io.ReadAll(os.Stdin)
+    if err != nil {
+        return "", err
+    }
+    return string(content), nil
+}
+```
+
+**2. Extract REPL code into separate function**:
+```go
+func runREPLMode() {
+    // Load config
+    configPath := getConfigPath()
+    cfg, err := config.LoadFromFile(configPath)
+    if err != nil {
+        fmt.Println(err)
+        os.Exit(1)
+    }
+    
+    // Create API client and agent
+    apiClient := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+    agentInstance := agent.NewAgent(
+        apiClient,
+        prompts.SystemPrompt,
+        agent.WithProgressCallback(func(msg string) {
+            fmt.Println(msg)
+        }),
+    )
+    
+    // Run REPL loop
+    fmt.Println("Clyde - AI Coding Agent - Type 'exit' or 'quit' to exit")
+    fmt.Println("==========================================================")
+    
+    reader := bufio.NewReader(os.Stdin)
+    for {
+        fmt.Print("\nYou: ")
+        input, err := reader.ReadString('\n')
+        if err != nil {
+            if err == io.EOF {
+                fmt.Println("\nGoodbye!")
+                break
+            }
+            fmt.Printf("Error reading input: %v\n", err)
+            continue
+        }
+        
+        input = strings.TrimSpace(input)
+        if input == "" {
+            continue
+        }
+        
+        if input == "exit" || input == "quit" {
+            fmt.Println("Goodbye!")
+            break
+        }
+        
+        response, _ := agentInstance.HandleMessage(input)
+        fmt.Printf("\nClaude: %s\n", response)
+    }
+}
+```
+
+**Output Handling**:
+- **stdout**: Final agent response (for piping/redirection)
+- **stderr**: Progress messages (doesn't interfere with output capture)
+
+This allows:
+```bash
+# Capture response only
+clyde "list files" > output.txt
+
+# See progress but capture response
+clyde "complex task" > output.txt
+# Progress messages still visible on terminal (stderr)
+
+# Capture everything
+clyde "task" > output.txt 2>&1
+
+# Silence progress, capture response
+clyde "task" 2>/dev/null > output.txt
+```
+
+**Error Handling**:
+- Exit code 0: Success
+- Exit code 1: Error (config error, API error, etc.)
+- Print errors to stderr
+- Clear error messages for common issues
+
+**Examples**:
+
+**Simple query**:
+```bash
+$ clyde "What's in the current directory?"
+→ Listing files: . (current directory)
+
+Here are the files in the current directory:
+
+total 96
+drwxr-xr-x  15 user  staff   480 Feb 19 10:00 .
+drwxr-xr-x   8 user  staff   256 Feb 18 15:30 ..
+...
+```
+
+**From file**:
+```bash
+$ cat prompt.txt
+Review the code in main.go and suggest improvements.
+Focus on error handling and readability.
+
+$ clyde -f prompt.txt
+→ Reading file: main.go
+... (agent analyzes and provides suggestions)
+```
+
+**From stdin**:
+```bash
+$ echo "What version of Go is installed?" | clyde
+→ Running bash: go version
+The installed Go version is: go1.24.0 darwin/arm64
+```
+
+**In scripts**:
+```bash
+#!/bin/bash
+# deploy.sh
+
+echo "Running tests..."
+clyde "Run all tests and create a summary" > test-summary.txt
+
+if [ $? -eq 0 ]; then
+    echo "Tests passed! Deploying..."
+    # deployment steps...
+else
+    echo "Tests failed. See test-summary.txt"
+    exit 1
+fi
+```
+
+**Benefits**:
+- ✅ Automation-friendly (scripts, CI/CD)
+- ✅ Quick one-off tasks without REPL
+- ✅ Composable with Unix tools (pipes, redirection)
+- ✅ Consistent with Claude Code UX
+- ✅ Zero breaking changes (REPL still default)
+
+**Testing Strategy**:
+1. Unit tests for argument parsing
+2. Unit tests for prompt reading (file, stdin, args)
+3. Integration tests for CLI mode execution
+4. Test error cases (missing file, empty prompt, API errors)
+5. Test output redirection scenarios
+6. Test exit codes
+
+**Documentation Updates**:
+- README.md: Add "CLI Mode" section with examples
+- Show automation use cases
+- Explain stdout/stderr separation
+- Document exit codes
+
+**Implementation Tasks**:
+1. Add argument parsing logic (30 mins)
+2. Implement prompt reading (file, stdin, args) (30 mins)
+3. Split main() into runCLIMode() and runREPLMode() (30 mins)
+4. Update output handling (progress to stderr) (15 mins)
+5. Add error handling and exit codes (30 mins)
+6. Write tests (1 hour)
+7. Update documentation (30 mins)
+
+**Estimated time**: 3-4 hours
+
+**Priority**: HIGH - Frequently requested, enables automation workflows
+
+**Comparison with Claude Code**:
+Claude Code has `-p` flag for non-interactive mode:
+```bash
+claude -p "your prompt here"
+```
+
+Our approach:
+- Simpler: no flag needed for direct string
+- `-f` for file input (clear and explicit)
+- Stdin support via pipe detection (automatic)
+- Same core behavior: execute and exit
+
+**Philosophy**:
+CLI mode makes clyde a true Unix citizen. It can be piped, redirected, scripted, and automated. The REPL is great for exploration, but automation needs direct execution.
+
+**Future Enhancements** (not in initial scope):
+- `--max-turns` flag to limit conversation length
+- `--output` flag for structured output (JSON)
+- `--quiet` flag to suppress progress messages
+- `--timeout` flag for time limits
+- `--continue` flag to resume previous session
