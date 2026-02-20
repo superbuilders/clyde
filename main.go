@@ -16,6 +16,92 @@ import (
 )
 
 func main() {
+	// Parse command line arguments to determine mode
+	args := os.Args[1:]
+
+	// Check if stdin has input (pipe/redirect)
+	stat, _ := os.Stdin.Stat()
+	hasStdinInput := (stat.Mode() & os.ModeCharDevice) == 0
+
+	// Determine mode: CLI or REPL
+	// CLI mode if: args provided OR stdin is piped
+	// REPL mode if: no args AND stdin is interactive (terminal)
+	if len(args) > 0 || hasStdinInput {
+		runCLIMode(args, hasStdinInput)
+	} else {
+		runREPLMode()
+	}
+}
+
+// runCLIMode executes the agent on a single prompt and exits
+func runCLIMode(args []string, hasStdinInput bool) {
+	// Determine prompt source
+	var prompt string
+	var err error
+
+	if len(args) > 0 && args[0] == "-f" {
+		// Read from file
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Error: -f requires a file path")
+			fmt.Fprintln(os.Stderr, "Usage: clyde -f prompt.txt")
+			os.Exit(1)
+		}
+		prompt, err = readPromptFromFile(args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading prompt file: %v\n", err)
+			os.Exit(1)
+		}
+	} else if hasStdinInput {
+		// stdin is piped/redirected
+		prompt, err = readPromptFromStdin()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading from stdin: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		// Treat all args as the prompt string
+		prompt = strings.Join(args, " ")
+	}
+
+	if strings.TrimSpace(prompt) == "" {
+		fmt.Fprintln(os.Stderr, "Error: Empty prompt provided")
+		os.Exit(1)
+	}
+
+	// Load config
+	configPath := getConfigPath()
+	cfg, err := config.LoadFromFile(configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	// Create API client
+	apiClient := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+
+	// Create agent with progress callback (print to stderr so stdout is clean)
+	agentInstance := agent.NewAgent(
+		apiClient,
+		prompts.SystemPrompt,
+		agent.WithProgressCallback(func(msg string) {
+			fmt.Fprintln(os.Stderr, msg) // Print progress to stderr
+		}),
+	)
+
+	// Execute prompt
+	response, err := agentInstance.HandleMessage(prompt)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Print response to stdout (for piping/redirection)
+	fmt.Println(response)
+	os.Exit(0)
+}
+
+// runREPLMode runs the interactive REPL
+func runREPLMode() {
 	// Determine config file location (CLI layer responsibility)
 	configPath := getConfigPath()
 
@@ -69,6 +155,24 @@ func main() {
 		response, _ := agentInstance.HandleMessage(input)
 		fmt.Printf("\nClaude: %s\n", response)
 	}
+}
+
+// readPromptFromFile reads a prompt from a file
+func readPromptFromFile(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file '%s': %w", path, err)
+	}
+	return string(content), nil
+}
+
+// readPromptFromStdin reads a prompt from stdin
+func readPromptFromStdin() (string, error) {
+	content, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", fmt.Errorf("failed to read from stdin: %w", err)
+	}
+	return string(content), nil
 }
 
 // getConfigPath determines the config file path for the production app

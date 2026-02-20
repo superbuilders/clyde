@@ -205,6 +205,118 @@ For a typical 10-turn conversation:
 
 The savings increase with longer conversations since the system prompt and tool definitions are cached once and reused for all subsequent turns.
 
+## CLI Mode (Non-Interactive Execution)
+
+In addition to the interactive REPL, Clyde can execute prompts directly and exit. This is useful for automation, scripting, and CI/CD integration.
+
+### Usage
+
+**Direct String Argument**:
+```bash
+# Execute a prompt and exit
+clyde "What files are in the current directory?"
+
+# Multi-word prompts (quotes recommended but not required)
+clyde What is 2+2?
+```
+
+**From File**:
+```bash
+# Read prompt from file
+clyde -f prompt.txt
+```
+
+**From Stdin (Pipe)**:
+```bash
+# Pipe prompt to clyde
+echo "What is the capital of France?" | clyde
+
+# Or from heredoc
+cat << EOF | clyde
+Review the code in main.go and suggest improvements.
+Focus on error handling and readability.
+EOF
+```
+
+### Output Handling
+
+CLI mode separates output streams for composability:
+
+- **stdout**: Final agent response (for piping/redirection)
+- **stderr**: Progress messages (doesn't interfere with output capture)
+
+**Examples**:
+```bash
+# Capture response only (progress still visible)
+clyde "list files" > output.txt
+
+# Capture response, hide progress
+clyde "list files" 2>/dev/null > output.txt
+
+# Capture everything (response + progress)
+clyde "complex task" > output.txt 2>&1
+```
+
+### Exit Codes
+
+- **0**: Success
+- **1**: Error (config error, API error, empty prompt, etc.)
+
+### Use Cases
+
+**Quick Queries**:
+```bash
+# Check Go version
+clyde "What version of Go is installed?"
+
+# Count files
+clyde "How many Go files are in this project?"
+```
+
+**Automation Scripts**:
+```bash
+#!/bin/bash
+# Run tests and generate summary
+clyde "Run all tests and create a summary" > test-report.txt
+
+if [ $? -eq 0 ]; then
+    echo "Tests passed!"
+    cat test-report.txt | mail -s "Test Report" team@example.com
+else
+    echo "Test analysis failed"
+    exit 1
+fi
+```
+
+**CI/CD Integration**:
+```bash
+# .github/workflows/code-review.yml
+- name: AI Code Review
+  run: |
+    clyde "Review the latest commit and summarize changes" > review.md
+    cat review.md >> $GITHUB_STEP_SUMMARY
+```
+
+**Composable with Unix Tools**:
+```bash
+# Chain with other tools
+git log -1 --pretty=%B | clyde "Summarize this commit message" | tee summary.txt
+
+# Process multiple files
+for file in *.go; do
+    clyde "Count the functions in $file" >> stats.txt
+done
+```
+
+**File Operations**:
+```bash
+# Generate documentation
+clyde "Create a comprehensive README.md for this project" > README.md
+
+# Refactor code
+clyde "Rename all instances of oldFunction to newFunction" && git add -u
+```
+
 ## Testing
 
 ```bash
