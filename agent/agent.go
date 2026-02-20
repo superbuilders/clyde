@@ -73,6 +73,14 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			return fmt.Sprintf("Error: %v", err), err
 		}
 
+		// Display cache hit information if available
+		if resp.Usage.CacheReadInputTokens > 0 && a.progressCallback != nil {
+			totalInputTokens := resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens
+			cachePercentage := float64(resp.Usage.CacheReadInputTokens) / float64(totalInputTokens) * 100
+			a.progressCallback(fmt.Sprintf("💾 Cache hit: %d tokens (%.0f%% of input)",
+				resp.Usage.CacheReadInputTokens, cachePercentage))
+		}
+
 		var assistantContent []api.ContentBlock
 		var textResponses []string
 		var toolUseBlocks []api.ContentBlock

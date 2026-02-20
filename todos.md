@@ -1776,7 +1776,210 @@ Complete decoupling requires removing ALL dependencies on specific output mechan
 
 ---
 
-### 17. 🌐 HTTP REST API Interface
+### ✅ 17. 💾 Automatic Prompt Caching - COMPLETED (2026-02-19)
+**Status**: ✅ **COMPLETED**
+
+**Purpose**: Reduce API costs and latency by caching reusable prompt content
+
+**What Is Prompt Caching?**:
+Prompt caching allows Claude API to cache and reuse parts of prompts across multiple requests, significantly reducing:
+- Processing time for repetitive prompts
+- Costs for cached content (10x cheaper: 90% discount on cached tokens)
+- Latency for multi-turn conversations
+
+**Key Information from Screenshot**:
+- Stores KV cache representations and cryptographic hashes (not raw text)
+- ZDR-type data retention compliance
+- Two approaches: **Automatic** (recommended) and **Explicit**
+
+**Automatic Caching (Recommended Approach)**:
+```json
+{
+  "model": "claude-sonnet-4",
+  "max_tokens": 1024,
+  "cache_control": {"type": "ephemeral"},  // ← Single top-level field
+  "system": "Your system prompt...",
+  "messages": [...]
+}
+```
+
+**How It Works**:
+1. Add single `cache_control` field at top level of request
+2. System automatically applies cache breakpoint to last cacheable block
+3. Moves cache breakpoint forward as conversations grow
+4. Best for multi-turn conversations where growing history should be cached
+
+**What Gets Cached** (in order):
+1. Tools (tool definitions array)
+2. System prompt
+3. Messages (conversation history)
+
+**Cache Behavior**:
+- Cache hit: ~90% cost reduction on cached tokens
+- Cache lifetime: 5 minutes (default)
+- Minimum cacheable size: 1024 tokens (smaller content not cached)
+- Cache invalidation: Any change to cached content breaks cache
+
+**Benefits for claude-repl**:
+1. **System prompt caching**: Our 5.1 KB system prompt is sent with every request
+   - Current cost: Full processing every turn
+   - With caching: 90% cheaper after first turn
+   - Savings: ~4-5 KB cached per request
+
+2. **Tool definitions caching**: All 10 tool definitions (~3-4 KB) sent every turn
+   - Current cost: Full processing every turn  
+   - With caching: 90% cheaper, processed once per session
+   - Savings: ~3-4 KB cached per request
+
+3. **Conversation history**: Grows with each turn (user + assistant messages)
+   - Current cost: Full reprocessing of entire history every turn
+   - With caching: Only new messages processed, history cached
+   - Savings: Increases linearly with conversation length
+
+**Example Savings** (10-turn conversation):
+```
+Without caching:
+  Turn 1:  10 KB system+tools + 1 KB messages = 11 KB
+  Turn 2:  10 KB system+tools + 3 KB messages = 13 KB
+  Turn 10: 10 KB system+tools + 25 KB messages = 35 KB
+  Total: ~190 KB processed
+
+With automatic caching:
+  Turn 1:  11 KB processed (10 KB cached)
+  Turn 2:  1 KB system+tools + 2 KB new messages = 3 KB processed (11 KB cached)
+  Turn 10: 1 KB system+tools + 2 KB new messages = 3 KB processed (33 KB cached)
+  Total: ~41 KB processed (80% reduction!)
+```
+
+**Implementation Design**:
+
+**Always-On Automatic Caching** (Simple & Effective)
+```go
+// api/types.go - Add cache control type
+type CacheControl struct {
+    Type string `json:"type"` // "ephemeral"
+}
+
+// api/types.go - Add to Request struct
+type Request struct {
+    Model        string           `json:"model"`
+    MaxTokens    int              `json:"max_tokens"`
+    CacheControl *CacheControl    `json:"cache_control,omitempty"` // NEW
+    System       string           `json:"system"`
+    Messages     []Message        `json:"messages"`
+    Tools        []Tool           `json:"tools,omitempty"`
+}
+
+// api/client.go - Enable in every request
+reqBody := Request{
+    Model:        cfg.Model,
+    MaxTokens:    cfg.MaxTokens,
+    CacheControl: &CacheControl{Type: "ephemeral"}, // ← Always enabled
+    System:       systemPrompt,
+    Messages:     messages,
+    Tools:        tools,
+}
+```
+
+**Benefits**:
+- ✅ Zero configuration needed
+- ✅ Immediate cost savings for all users
+- ✅ No breaking changes
+- ✅ Optimal for multi-turn conversations (our primary use case)
+- ✅ Cache automatically moves forward with conversation
+- ✅ No performance penalty (cache miss = normal behavior)
+
+**When Caching Helps Most**:
+1. ✅ Multi-turn conversations (our primary use case)
+2. ✅ Large system prompts (we have 5.1 KB)
+3. ✅ Many tool definitions (we have 10 tools)
+4. ✅ Conversations > 1024 tokens (most of ours)
+5. ✅ Rapid back-and-forth (within 5-min cache lifetime)
+
+**When Caching Helps Less**:
+1. ❌ Single-turn requests (no reuse)
+2. ❌ Tiny prompts < 1024 tokens (below minimum)
+3. ❌ Infrequent requests (cache expires after 5 min)
+4. ❌ Highly variable prompts (cache always breaks)
+
+**For claude-repl**: Caching is a **perfect fit**! Multi-turn conversations with stable system prompt and tools.
+
+**Response Handling**:
+Claude API returns cache usage metadata in response:
+```json
+{
+  "usage": {
+    "input_tokens": 1500,
+    "cache_creation_input_tokens": 1200,  // First time: tokens cached
+    "cache_read_input_tokens": 1200,      // Subsequent: tokens from cache
+    "output_tokens": 300
+  }
+}
+```
+
+**Display Cache Hits** (for transparency):
+```go
+// api/types.go - Update Usage struct
+type Usage struct {
+    InputTokens              int `json:"input_tokens"`
+    OutputTokens             int `json:"output_tokens"`
+    CacheCreationInputTokens int `json:"cache_creation_input_tokens"` // NEW
+    CacheReadInputTokens     int `json:"cache_read_input_tokens"`     // NEW
+}
+
+// agent/agent.go - Show cache hits in progress
+if response.Usage.CacheReadInputTokens > 0 {
+    if a.progressCallback != nil {
+        pct := float64(response.Usage.CacheReadInputTokens) / 
+               float64(response.Usage.InputTokens) * 100
+        a.progressCallback(fmt.Sprintf("💾 Cache hit: %d tokens (%.0f%%)", 
+            response.Usage.CacheReadInputTokens, pct))
+    }
+}
+```
+
+**Testing Strategy**:
+1. Unit tests: Verify CacheControl field is set correctly
+2. Integration tests: Make multiple requests, verify caching works
+3. Manual testing: Check API response usage fields
+4. Cost analysis: Compare costs before/after over 10+ turn conversation
+
+**Documentation Updates**:
+- README.md: Add "Prompt Caching" section explaining benefits
+- Show example savings calculation
+- Mention cache lifetime and minimum size
+- Link to Anthropic docs for details
+
+**Implementation Tasks**:
+1. Add CacheControl type to api/types.go (5 mins)
+2. Update Request struct to include cache_control field (5 mins)
+3. Update Usage struct with cache fields (5 mins)
+4. Set CacheControl in api/client.go (5 mins)
+5. Add cache hit display in agent.go (15 mins)
+6. Write tests (30 mins)
+7. Update documentation (20 mins)
+
+**Estimated time**: 1.5 hours
+
+**Priority**: HIGH - Easy win for immediate cost savings with zero downside
+
+**Expected Impact**:
+- 50-80% reduction in API costs for typical conversations
+- Faster response times (cached tokens processed ~10x faster)
+- Zero UX changes (completely transparent to users)
+- Especially impactful for power users with long sessions
+
+**Why Automatic (Not Explicit Breakpoints)**:
+Automatic caching is perfect for claude-repl because:
+- System prompt and tools are stable and should always be cached
+- Conversation history grows predictably and should be cached
+- No need for fine-grained control over what gets cached
+- Simpler implementation (no per-content-block cache_control fields)
+- Claude automatically optimizes cache placement as conversation grows
+
+---
+
+### 18. 🌐 HTTP REST API Interface
 **Status**: ⏳ **NOT STARTED**
 **Depends on**: Priority #16 (Complete Agent Decoupling)
 

@@ -30,11 +30,12 @@ func NewClient(apiKey, apiURL, modelID string, maxTokens int) *Client {
 // Call sends a request to the Claude API with the given messages and tools
 func (c *Client) Call(systemPrompt string, messages []Message, tools []Tool) (*Response, error) {
 	reqBody := Request{
-		Model:     c.modelID,
-		MaxTokens: c.maxTokens,
-		System:    systemPrompt,
-		Messages:  messages,
-		Tools:     tools,
+		Model:        c.modelID,
+		MaxTokens:    c.maxTokens,
+		CacheControl: &CacheControl{Type: "ephemeral"}, // Enable automatic prompt caching
+		System:       systemPrompt,
+		Messages:     messages,
+		Tools:        tools,
 	}
 
 	jsonData, err := json.Marshal(reqBody)

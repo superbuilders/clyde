@@ -13,13 +13,19 @@ type Tool struct {
 	InputSchema interface{} `json:"input_schema"`
 }
 
+// CacheControl represents prompt caching control
+type CacheControl struct {
+	Type string `json:"type"` // "ephemeral"
+}
+
 // Request represents a Claude API request
 type Request struct {
-	Model     string    `json:"model"`
-	MaxTokens int       `json:"max_tokens"`
-	System    string    `json:"system"`
-	Messages  []Message `json:"messages"`
-	Tools     []Tool    `json:"tools,omitempty"`
+	Model        string        `json:"model"`
+	MaxTokens    int           `json:"max_tokens"`
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
+	System       string        `json:"system"`
+	Messages     []Message     `json:"messages"`
+	Tools        []Tool        `json:"tools,omitempty"`
 }
 
 // ImageSource represents the source of an image in a content block
@@ -43,6 +49,14 @@ type ContentBlock struct {
 	Source    *ImageSource           `json:"source,omitempty"`  // For type="image"
 }
 
+// Usage represents token usage information in a response
+type Usage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+}
+
 // Response represents a Claude API response
 type Response struct {
 	ID         string         `json:"id"`
@@ -51,5 +65,5 @@ type Response struct {
 	Content    []ContentBlock `json:"content"`
 	Model      string         `json:"model"`
 	StopReason string         `json:"stop_reason"`
-	Usage      interface{}    `json:"usage,omitempty"`
+	Usage      Usage          `json:"usage"`
 }
