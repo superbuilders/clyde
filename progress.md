@@ -909,9 +909,9 @@ Created demo showing all error message improvements:
 **Philosophy**:
 Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
 
-## Current Status (2026-02-19)
+## Current Status (2026-02-23)
 
-**Latest Feature**: Priority #17 - Automatic Prompt Caching ✅ **COMPLETED** 💾
+**Latest Update**: System Prompt Enhancement - TMUX for Background Processes & Subagents ✅
 
 **What Was Completed**:
 - ✅ Implemented automatic prompt caching using Claude API's ephemeral cache control
@@ -2150,6 +2150,168 @@ CLI mode makes clyde a true Unix citizen. It can be piped, redirected, scripted,
 
 **Lesson Learned**:
 The agent's complete decoupling (Priority #16) made this feature trivial to implement. A well-architected core enables features like this to be added with minimal effort. The same agent code serves both REPL and CLI modes without any changes.
+
+### System Prompt Enhancement - TMUX for Background Processes (Added 2026-02-23)
+
+**Purpose**: Solve the persistent issue of background processes not working reliably with run_bash
+
+**The Problem**:
+Users (and the agent itself) kept trying to use the shell `&` operator to run background processes:
+```bash
+run_bash("npm start &")  # Doesn't work - process dies immediately
+run_bash("python server.py &")  # Doesn't work - no way to check output
+```
+
+The `&` operator doesn't work with `run_bash` because:
+1. The bash command exits immediately, killing background processes
+2. No way to capture output from backgrounded processes
+3. No way to check if process is still running
+4. No way to cleanly stop the process later
+
+This caused repeated issues:
+- Test servers that died before tests could run
+- Subagents that couldn't be spawned and monitored
+- Parallel processing scenarios that failed
+- Users repeatedly trying `&` despite it not working
+
+**The Solution**: Always use tmux for background processes and subagents
+
+Added comprehensive TMUX guidance to system prompt:
+
+**Key Patterns**:
+
+1. **Running servers/daemons**:
+```bash
+# Start server in detached tmux session
+run_bash("tmux new-session -d -s myserver 'npm start'")
+
+# Run tests against it
+run_bash("curl http://localhost:3000/api/test")
+
+# Clean up when done
+run_bash("tmux kill-session -t myserver")
+```
+
+2. **Long-running processes**:
+```bash
+# Start build in background
+run_bash("tmux new-session -d -s build './long-build.sh'")
+
+# Check progress later
+run_bash("tmux capture-pane -t build -p")
+```
+
+3. **Subagents** (another instance of clyde):
+```bash
+# Spawn subagent for parallel task
+run_bash("tmux new-session -d -s subagent './clyde \"analyze all go files\"'")
+
+# Get subagent output
+run_bash("tmux capture-pane -t subagent -p")
+
+# Clean up
+run_bash("tmux kill-session -t subagent")
+```
+
+4. **Parallel testing**:
+```bash
+# Start server
+run_bash("tmux new-session -d -s testserver 'npm start'")
+
+# Wait for server to be ready
+run_bash("sleep 2")
+
+# Run tests
+run_bash("npm test")
+
+# Clean up
+run_bash("tmux kill-session -t testserver")
+```
+
+**Common tmux Commands Documented**:
+- `tmux new-session -d -s <name> '<command>'` - Create detached session
+- `tmux capture-pane -t <name> -p` - Capture session output
+- `tmux kill-session -t <name>` - Terminate session
+- `tmux ls` - List active sessions
+- `tmux send-keys -t <name> '<command>' C-m` - Send commands to session
+
+**Why TMUX Works**:
+1. **Persistent**: Processes keep running after bash command exits
+2. **Observable**: Can capture output at any time with `capture-pane`
+3. **Controllable**: Can send signals, check status, kill cleanly
+4. **Composable**: Works perfectly with run_bash
+5. **Standard**: Tmux is widely available and reliable
+
+**System Prompt Changes**:
+- Added 40+ lines of tmux guidance and patterns
+- Placed CRITICAL warning at top to emphasize importance
+- Included "NEVER use & - ALWAYS use tmux" directive
+- Documented all common scenarios with examples
+- Explained why & doesn't work and why tmux does
+
+**Benefits**:
+
+1. **Solves Background Process Problem**: No more dying servers or lost output
+2. **Enables Subagents**: Can spawn parallel clyde instances reliably
+3. **Prevents User Confusion**: Clear guidance prevents repeated & attempts
+4. **Professional Solution**: Industry-standard tool (tmux) for process management
+5. **Comprehensive Examples**: Covers all common use cases
+
+**Impact**:
+- System prompt: 5.1 KB → 6.7 KB (+1.6 KB for tmux guidance)
+- Zero code changes - purely system prompt enhancement
+- Dramatically improves reliability of background operations
+- Enables new workflows (parallel processing, subagents)
+
+**Results**:
+- ✅ Clear prohibition of `&` operator
+- ✅ Comprehensive tmux patterns documented
+- ✅ Covers all common scenarios (servers, builds, subagents, tests)
+- ✅ Professional solution using industry-standard tool
+- ✅ Prevents repeated user confusion
+- ✅ Enables reliable background process workflows
+
+**Example Use Case - Integration Tests**:
+```bash
+# Old way (doesn't work):
+run_bash("python server.py &")  # Dies immediately
+run_bash("pytest test_api.py")  # Fails - no server
+
+# New way (works reliably):
+run_bash("tmux new-session -d -s testserver 'python server.py'")
+run_bash("sleep 2")  # Let server start
+run_bash("pytest test_api.py")
+run_bash("tmux kill-session -t testserver")
+```
+
+**Example Use Case - Parallel Subagents**:
+```bash
+# Spawn multiple subagents to work in parallel
+run_bash("tmux new-session -d -s agent1 './clyde \"analyze frontend\"'")
+run_bash("tmux new-session -d -s agent2 './clyde \"analyze backend\"'")
+run_bash("tmux new-session -d -s agent3 './clyde \"analyze tests\"'")
+
+# Wait for completion
+run_bash("sleep 30")
+
+# Collect results
+run_bash("tmux capture-pane -t agent1 -p > frontend-analysis.txt")
+run_bash("tmux capture-pane -t agent2 -p > backend-analysis.txt")
+run_bash("tmux capture-pane -t agent3 -p > test-analysis.txt")
+
+# Clean up
+run_bash("tmux kill-session -t agent1")
+run_bash("tmux kill-session -t agent2")
+run_bash("tmux kill-session -t agent3")
+```
+
+**Time Taken**: ~15 minutes (system prompt update + documentation)
+
+**Philosophy**:
+When a pattern repeatedly causes problems, don't just tell users what not to do - provide a robust alternative that works every time. TMUX is the right tool for process management, and explicit guidance with examples prevents confusion and enables powerful workflows.
+
+**Lesson Learned**:
+System prompt improvements are just as important as code improvements. A clear prohibition ("NEVER use &") combined with comprehensive guidance ("ALWAYS use tmux") with concrete examples prevents recurring issues and enables new capabilities.
 
 ### Config File for Global Installation (Added 2026-02-18) - Priority #14 ✅
 

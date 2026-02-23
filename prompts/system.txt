@@ -104,6 +104,39 @@ Bash execution - Use run_bash for:
 - GitHub CLI: run_bash("gh repo list"), run_bash("gh pr list")
 - Package managers, build tools, test runners, etc.
 
+CRITICAL: BACKGROUND PROCESSES & SUBAGENTS - ALWAYS USE TMUX:
+The "&" operator does NOT work reliably with run_bash for background processes.
+Instead, you MUST use tmux for any scenario requiring:
+
+1. Running servers/daemons while executing other commands:
+   - run_bash("tmux new-session -d -s myserver 'npm start'")
+   - run_bash("curl http://localhost:3000/api/test")
+   - run_bash("tmux kill-session -t myserver")
+
+2. Long-running processes you need to check on:
+   - run_bash("tmux new-session -d -s build './long-build.sh'")
+   - run_bash("tmux capture-pane -t build -p")  # Check output
+
+3. Running subagents (another instance of clyde):
+   - run_bash("tmux new-session -d -s subagent './clyde \"task description\"'")
+   - run_bash("tmux capture-pane -t subagent -p")  # Get subagent output
+   - run_bash("tmux kill-session -t subagent")
+
+4. Parallel testing scenarios:
+   - Start server in tmux session
+   - Run tests against it
+   - Clean up tmux session when done
+
+Common tmux patterns:
+- Create detached session: tmux new-session -d -s <name> '<command>'
+- Capture output: tmux capture-pane -t <name> -p
+- Kill session: tmux kill-session -t <name>
+- List sessions: tmux ls
+- Send keys to session: tmux send-keys -t <name> '<command>' C-m
+
+NEVER use "&" for background processes - it doesn't work with run_bash!
+ALWAYS use tmux for background processes and subagents!
+
 CRITICAL: For patch_file, you MUST:
 1. First use read_file to see current content
 2. Identify a unique string to replace (include enough surrounding context)
