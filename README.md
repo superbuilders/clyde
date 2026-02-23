@@ -343,6 +343,89 @@ The REPL includes eleven integrated tools:
 10. **browse**: Fetch and read web pages (with optional AI extraction)
 11. **include_file**: Include images in conversation for vision analysis
 
+## Background Processes & Subagents
+
+When you need to run background processes (like test servers) or spawn subagents for parallel work, **always use tmux** instead of the shell `&` operator.
+
+### Why Not Use `&`?
+
+The shell `&` operator doesn't work reliably with Clyde's `run_bash` tool:
+- Background processes die immediately when the bash command exits
+- No way to capture output from backgrounded processes
+- Can't check if the process is still running
+- Can't cleanly stop the process later
+
+### The Solution: Use TMUX
+
+TMUX provides a reliable way to manage background processes:
+
+**Running Test Servers**:
+```bash
+# Start server in detached tmux session
+tmux new-session -d -s testserver 'npm start'
+
+# Run your tests
+npm test
+
+# Stop server when done
+tmux kill-session -t testserver
+```
+
+**Long-Running Processes**:
+```bash
+# Start build in background
+tmux new-session -d -s build './long-build.sh'
+
+# Check progress later
+tmux capture-pane -t build -p
+```
+
+**Spawning Subagents** (parallel Clyde instances):
+```bash
+# Spawn multiple subagents for parallel work
+tmux new-session -d -s agent1 './clyde "analyze frontend"'
+tmux new-session -d -s agent2 './clyde "analyze backend"'
+
+# Collect results
+tmux capture-pane -t agent1 -p > frontend-analysis.txt
+tmux capture-pane -t agent2 -p > backend-analysis.txt
+
+# Clean up
+tmux kill-session -t agent1
+tmux kill-session -t agent2
+```
+
+**Parallel Testing**:
+```bash
+# Start server
+tmux new-session -d -s server 'python -m http.server 8000'
+
+# Wait for server to be ready
+sleep 2
+
+# Run tests
+pytest test_api.py
+
+# Clean up
+tmux kill-session -t server
+```
+
+### Common TMUX Commands
+
+- **Create detached session**: `tmux new-session -d -s <name> '<command>'`
+- **Capture session output**: `tmux capture-pane -t <name> -p`
+- **Kill session**: `tmux kill-session -t <name>`
+- **List active sessions**: `tmux ls`
+- **Send commands to session**: `tmux send-keys -t <name> '<command>' C-m`
+
+### Why TMUX Works
+
+1. **Persistent**: Processes keep running after bash command exits
+2. **Observable**: Can capture output anytime with `capture-pane`
+3. **Controllable**: Can send signals, check status, kill cleanly
+4. **Composable**: Works perfectly with run_bash
+5. **Standard**: Widely available and reliable
+
 ## Using Clyde as a Library
 
 Clyde's agent is fully decoupled from the CLI interface and can be embedded in your own Go applications. This enables you to build custom interfaces (HTTP APIs, GUIs, bots, etc.) while leveraging the same powerful agent logic.
