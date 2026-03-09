@@ -558,7 +558,68 @@ PASS - All tests completed successfully (71.1s total)
 
 ## Bugs Fixed
 
-### Bug #1: Missing `tool_use_id` in Tool Results (Fixed 2026-02-10)
+### Bug #1: max_tokens Too Low Causes Infinite Loop (Fixed 2026-03-09)
+
+**Issue**: When Claude generates large content for tool parameters (like comprehensive documents), it hits the output token limit mid-generation, resulting in incomplete tool_use blocks and infinite retry loops.
+
+**Symptoms**:
+```
+→ Writing file: /tmp/doc.md (0 bytes)
+💾 Cache hit: 4205 tokens (100% of input)
+→ Writing file: /tmp/doc.md (0 bytes)
+💾 Cache hit: 4318 tokens (100% of input)
+→ Writing file: /tmp/doc.md (0 bytes)
+[continues indefinitely...]
+```
+
+**Root Cause**:
+- `MaxTokens` was set to 4,096 (only 6.4% of model capacity)
+- When generating large content, Claude hits token limit before completing tool parameters
+- API returns `stop_reason: "max_tokens"` with incomplete tool_use block
+- The `content` field is completely MISSING (not empty, but absent)
+- Tool receives nil content and returns error
+- Claude interprets error as retryable and tries again
+- Same token limit hit again → infinite loop
+
+**Debug Findings**:
+```
+[DEBUG API] Stop reason: max_tokens          ← Truncated mid-generation
+[DEBUG API] Block 1: content_field=MISSING   ← Field never completed
+```
+
+**Fix Applied**:
+Changed `config/config.go` line 46:
+```go
+// Before
+MaxTokens: 4096,
+
+// After  
+MaxTokens: 64000, // Match industry standard (Aider) - full model capacity
+```
+
+**Industry Comparison**:
+- **Aider**: 64,000 tokens (100% of model capacity)
+- **Claude Code**: 32,000 tokens (50% of capacity)
+- **OpenCode**: 32,000 tokens (50% of capacity)
+- **Clyde (before)**: 4,096 tokens (6.4% - too low!)
+- **Clyde (after)**: 64,000 tokens (100% - matches industry leader)
+
+**Impact**:
+- 16x increase in output capacity
+- Prevents truncation during large document generation
+- No cost increase (only pay for tokens actually generated)
+- Matches best-in-class tools (Aider)
+
+**Verification**:
+Test with 5-section document generation:
+- ✅ File created successfully (17 KB, 436 lines)
+- ✅ Single write attempt (no loop)
+- ✅ Stop reason: `tool_use` (completed normally)
+
+**Lesson Learned**:
+Always match industry standards for critical configuration values. A conservative default (4,096) caused significant usability issues. Research showed all major AI coding tools use much higher limits (32K-64K). When in doubt, use the model's full capacity - there's no cost penalty for setting a higher ceiling.
+
+### Bug #2: Missing `tool_use_id` in Tool Results (Fixed 2026-02-10)
 
 **Issue**: When sending tool results back to the Claude API, the `tool_use_id` field was missing, causing a 400 error:
 ```

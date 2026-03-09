@@ -1,10 +1,11 @@
 package agent
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
-	"github.com/this-is-alpha-iota/clyde/tools"
 	"fmt"
 	"strings"
+
+	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/tools"
 )
 
 // ProgressCallback receives progress messages during tool execution

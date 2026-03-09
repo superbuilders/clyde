@@ -43,6 +43,6 @@ func LoadFromFile(path string) (*Config, error) {
 		BraveSearchAPIKey: os.Getenv("BRAVE_SEARCH_API_KEY"),
 		APIURL:            "https://api.anthropic.com/v1/messages",
 		ModelID:           "claude-sonnet-4-5-20250929",
-		MaxTokens:         4096,
+		MaxTokens:         64000, // Match industry standard (Aider) - full model capacity
 	}, nil
 }

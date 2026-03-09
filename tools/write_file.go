@@ -1,10 +1,11 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/this-is-alpha-iota/clyde/api"
 )
 
 func init() {
