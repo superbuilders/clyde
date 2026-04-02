@@ -1,1258 +1,365 @@
-# Claude REPL - TODO List
+# Clyde Progress Documentation
 
-## Priority Order (Do in this sequence)
+## Project Rename (2026-02-18)
 
-### ✅ 1. 🗑️ Deprecate GitHub Tool - COMPLETED (2026-02-10)
-**Status**: ✅ **COMPLETED**
+**From**: claude-repl / go-coding-agent  
+**To**: clyde
 
-**Rationale**: Now that we have `run_bash`, the dedicated `github_query` tool is redundant.
-- `gh` commands work perfectly via `run_bash`
-- Example: `run_bash("gh repo list")` vs `github_query("repo list")`
-- Less code to maintain
-- Consistent pattern: all external CLI tools go through bash
+**Reason**: Standardize naming across local and remote repositories. The go.mod declared `claude-repl` while GitHub repo was `go-coding-agent`, causing installation conflicts.
 
-**Action Items**:
-1. ✅ Remove `githubTool` from tools array in `callClaude()`
-2. ✅ Remove `executeGitHubCommand()` function
-3. ✅ Remove `case "github_query":` from switch statement
-4. ✅ Update system prompt to use `run_bash` with `gh` commands instead
-5. ✅ Update tests to use bash for GitHub operations
-6. ✅ Update documentation (README, progress.md)
+**Changes Made**:
+1. **go.mod**: Updated module path to `github.com/this-is-alpha-iota/clyde`
+2. **All Go files**: Updated imports from `claude-repl/*` to `github.com/this-is-alpha-iota/clyde/*`
+3. **Binary name**: Changed from `claude-repl` to `clyde`
+4. **Config directory**: Changed from `~/.claude-repl/` to `~/.clyde/`
+5. **README.md**: Updated all references to use "clyde"
+6. **User-Agent**: Changed browse tool User-Agent to `clyde/1.0`
+7. **Startup banner**: Changed from "Claude REPL" to "Clyde - AI Coding Agent"
 
-**Migration Example**:
-```
-OLD: github_query("repo list")
-NEW: run_bash("gh repo list")
+**Installation Now Works**:
+```bash
+go install github.com/this-is-alpha-iota/clyde@latest
 ```
 
-**Results**:
-- All tests pass (13 passed, 3 skipped)
-- Documentation updated
-- System prompt updated with clear guidance on using `run_bash` with `gh`
-
----
-
-### ✅ 2. 📝 System Prompt: Include progress.md Philosophy - COMPLETED (2026-02-10)
-**Status**: ✅ **COMPLETED**
-
-**Priority**: ⚠️ **CRITICAL** - Should have prevented needing to be reminded to update progress.md
-
-**Problem**: When completing Priority #1, had to be reminded separately to update progress.md. Documentation should be automatic.
-
-**Action Taken**: Updated system prompt to explicitly instruct Claude to:
-- Read `progress.md` at the start of complex tasks
-- Update `progress.md` with important learnings, bugs fixed, and design decisions
-- Treat `progress.md` as the "memory" rather than raw conversation history
-- Keep `progress.md` structured and organized (not a dump of all messages)
-- **Always update progress.md before final commit when completing tasks**
-
-**Key Additions to System Prompt**:
-```
-DOCUMENTATION & MEMORY:
-- Read progress.md at start of complex tasks to understand project history
-- Update progress.md when you:
-  * Complete a major task or milestone
-  * Discover and fix bugs
-  * Make design decisions
-  * Learn important patterns or lessons
-- Always update progress.md BEFORE the final commit
-- Keep documentation structured and curated (not a message dump)
-- progress.md is your memory - maintain it actively
+**Config Setup**:
+```bash
+mkdir -p ~/.clyde
+cat > ~/.clyde/config << 'EOF'
+TS_AGENT_API_KEY=your-anthropic-api-key
+BRAVE_SEARCH_API_KEY=your-brave-api-key  # Optional
+EOF
 ```
 
-**Real Example - Priority #1**: Should have automatically updated docs with code changes.
+**Name Origin**: "Clyde" is a friendly, memorable name that fits the AI coding assistant persona.
 
-**Real Example - Priority #2 (this task)**: Updating progress.md AND todos.md BEFORE final commit, not after being reminded!
+## Overview
+Built a Go CLI that provides a REPL (Read-Eval-Print Loop) interface for conversing with Claude AI, featuring GitHub integration via the `gh` CLI tool.
 
-**Results**:
-- ✅ System prompt: 2.1 KB → 2.8 KB (+33%)
-- ✅ All tests pass (13 passed, 3 skipped)
-- ✅ Binary rebuilt (8.0 MB)
-- ✅ Following new documentation pattern
+**Architecture** (as of 2026-02-13): Modular package-based structure
+- `api/` - Claude API client and types
+- `config/` - Configuration and .env loading
+- `agent/` - Conversation orchestration
+- `tools/` - Tool registry and 10 tool implementations
+- `prompts/` - System prompt (external file, embedded in binary)
+- `main.go` - CLI REPL interface (50 lines)
 
----
+**Original Architecture** (until 2026-02-13): Single-file monolith
+- `main.go` - Everything in one 1,652-line file
 
-### ✅ 3. 📢 Better Tool Progress Messages - COMPLETED (2026-02-10)
-**Status**: ✅ **COMPLETED**
+## What Was Built
 
-**Problem**: Generic progress messages didn't tell users what was happening:
+### Main Application (`main.go`)
+A complete Go application that includes:
+
+#### Core Features
+1. **REPL Interface**: Interactive command-line interface for natural conversation with Claude
+2. **Anthropic API Integration**: Direct HTTP client for Claude API (Sonnet 4.5 model)
+3. **Multi-Tool Support**: Five integrated tools with proper feedback:
+   - **List Files Tool**: Lists files and directories using `ls -la`
+   - **Read File Tool**: Reads and displays file contents
+   - **Patch File Tool**: Edits files using find/replace (no size limits!)
+   - **Write File Tool**: Creates new files or replaces entire file contents
+   - **Run Bash Tool**: Executes arbitrary bash commands (including `gh` for GitHub, `git` for version control, test runners, etc.)
+4. **Conversation History**: Maintains context across multiple turns
+5. **Tool Use Feedback**: Shows progress messages when using tools:
+   - "→ Listing files..."
+   - "→ Reading file..."
+   - "→ Patching file..."
+   - "→ Writing file..."
+   - "→ Running bash command..."
+
+#### Architecture Components
+- **Message Types**: User and assistant messages with support for text and tool content
+- **Tool Definitions**: Five tools with JSON schemas for list_files, read_file, patch_file, write_file, and run_bash
+- **System Prompt with Decider**: Intelligent system prompt that decides when to use each tool
+- **Tool Execution Loop**: Handles tool_use responses and continues conversation until text response
+
+#### System Prompt Decider
+The system prompt includes explicit decision logic for all tools:
 ```
-→ Reading file...
-→ Patching file...
+IMPORTANT DECIDER: Before responding, determine if you need to use a tool:
+
+GitHub questions - Use run_bash with gh commands:
+- Questions about repositories: run_bash("gh repo list")
+- Questions about pull requests: run_bash("gh pr list")
+- Questions about issues: run_bash("gh issue list")
+- User profile info: run_bash("gh api user")
+- Any GitHub queries: run_bash("gh <command>")
+
+File system questions - Use list_files for:
+- "What files are in X directory?"
+- "List files in the current folder"
+- "Show me the contents of this directory"
+
+File reading questions - Use read_file for:
+- "Show me the contents of X file"
+- "What's in X file?"
+- "Read X file"
+
+File editing questions - Use patch_file for:
+- "Add X to the file"
+- "Change X to Y in the file"
+- "Update the function to do Z"
+- "Fix the bug by changing X"
+
+File writing questions - Use write_file for:
+- "Create a new file with X content"
+- "Write X to file Y"
+- "Replace the entire contents of file Z"
+- Creating new files from scratch
+
+Bash execution - Use run_bash for:
+- "Run X command"
+- "Execute Y script"
+- "Check system information"
+- Any shell/command-line operations
+- Git operations: run_bash("git status"), run_bash("git commit -m 'message'")
+- GitHub CLI: run_bash("gh repo list"), run_bash("gh pr list")
+- Package managers, build tools, test runners, etc.
+```
+
+### Integration Tests (`main_test.go`)
+Comprehensive test suite covering:
+
+1. ~~**TestExecuteGitHubCommand**~~: REMOVED - github_query tool deprecated in favor of run_bash
+
+2. **TestExecuteListFiles**: Tests file listing execution
+   - List current directory
+   - Empty path (defaults to current)
+   - Non-existent directory (error handling)
+
+3. **TestExecuteReadFile**: Tests file reading execution
+   - Read existing file
+   - Read non-existent file (error handling)
+   - Empty path (error handling)
+
+4. **TestExecuteEditFile**: Tests file editing execution
+   - Create new file
+   - Overwrite existing file
+   - Empty path (error handling)
+   - Empty content (valid edge case)
+
+5. **TestExecuteRunBash**: Tests bash command execution
+   - Simple echo command
+   - Command with output
+   - Empty command (error handling)
+   - Invalid command (error handling)
+   - Command that exits with error
+
+6. **TestExecuteWriteFile**: Tests file writing execution
+   - Create new file
+   - Replace existing file
+   - Empty path (error handling)
+   - Write empty content
+   - Write multiline content
+
+7. **TestExecutePatchFile**: Tests patch file execution
+   - Replace unique text
+   - Old text not found (error handling)
+   - Non-unique old text (error handling)
+   - Empty old text (error handling)
+   - Delete text (empty new_text)
+
+8. **TestCallClaude**: Tests direct API calls
+   - Simple greeting response
+   - Math question response
+   - Validates API response structure
+
+9. **TestHandleConversation**: Tests full conversation flow
+   - Single-turn conversations
+   - Multi-turn conversations with memory
+   - History tracking validation
+
+10. **TestSystemPromptDecider**: Validates system prompt content
+   - Checks for required terms (tools, run_bash, gh commands)
+   - Verifies old github_query tool is NOT present
+
+11. ~~**TestGitHubTool**~~: REMOVED - github_query tool deprecated
+
+12. **TestListFilesIntegration**: Full end-to-end list_files tool test
+   - Tests complete file listing flow with actual tool use
+   - Validates tool_use block contains ID
+   - Validates tool_result block contains ToolUseID
+   - Ensures the full round-trip works with the Claude API
+
+13. **TestReadFileIntegration**: Full end-to-end read_file tool test
+   - Tests complete file reading flow with actual tool use
+   - Creates test file and validates content is read correctly
+   - Validates tool_use block contains ID
+   - Validates tool_result block contains ToolUseID
+   - Ensures the full round-trip works with the Claude API
+
+14. **TestEditFileIntegration**: Full end-to-end edit_file tool test (DEPRECATED)
+    - Tests complete file editing flow with actual tool use
+    - Creates test file and validates content is written correctly
+    - Validates tool_use block contains ID and correct input parameters
+    - Validates tool_result block contains ToolUseID
+    - Verifies the file was physically created with correct content
+    - Ensures the full round-trip works with the Claude API
+    - **NOTE**: Skipped due to edit_file being replaced by patch_file
+
+15. **TestGitHubQueryIntegration**: Full end-to-end GitHub query test using run_bash
+   - Tests complete GitHub query flow using run_bash with gh commands
+   - Validates tool_use block contains ID and command parameter
+   - Validates tool_result block contains ToolUseID
+   - Ensures the full round-trip works with the Claude API
+   - **UPDATED**: Now uses run_bash instead of deprecated github_query tool
+
+16. **TestRunBashIntegration**: Full end-to-end run_bash tool test
+    - Tests complete bash command execution flow
+    - Tests whoami command execution
+    - Tests echo command with output verification
+    - Tests error handling with exit 1 command
+    - Validates tool_use block contains ID and command parameter
+    - Validates tool_result block contains ToolUseID
+    - Ensures the full round-trip works with the Claude API
+
+17. **TestWriteFileIntegration**: Full end-to-end write_file tool test
+    - Tests creating new file with write_file tool
+    - Tests replacing existing file contents
+    - Tests writing multiline file content
+    - Validates tool_use block contains ID and correct input parameters
+    - Validates tool_result block contains ToolUseID
+    - Verifies the file was physically created/replaced with correct content
+    - Ensures the full round-trip works with the Claude API
+
+18. **TestExecuteGrep**: Unit tests for grep execution
+    - Tests searching for patterns across multiple files
+    - Tests file pattern filtering (*.go, *.md, etc.)
+    - Tests handling of no matches found
+    - Tests error cases (non-existent directories, empty patterns)
+    - Tests searching in current directory with empty path
+
+19. **TestGrepIntegration**: Full end-to-end grep tool test
+    - Tests searching for function definitions with file pattern filter
+    - Tests searching for TODO comments across all files
+    - Tests graceful handling of no matches (with helpful suggestions)
+    - Validates tool_use block contains ID and correct input parameters
+    - Validates tool_result block contains ToolUseID
+    - Verifies grep output includes file paths and line numbers
+    - Ensures the full round-trip works with the Claude API
+
+### Dependencies
+- **Minimal external dependencies**: Uses only Go standard library
+  - `net/http`: API communication
+  - `encoding/json`: JSON marshaling/unmarshaling
+  - `os/exec`: Execute gh commands
+  - `bufio`: Read user input
+
+### Environment Setup
+- Reads API key from `TS_AGENT_API_KEY` in `.env` file
+- Supports both local `.env` and `../coding-agent/.env` paths
+- Can override with `ENV_PATH` environment variable
+
+## Installation and Setup
+
+### Prerequisites
+```bash
+# Go 1.24 or later
+go version
+
+# GitHub CLI installed and authenticated
+gh auth status
+```
+
+### Build
+```bash
+cd claude-repl
+go build -o claude-repl
+```
+
+### Run Tests
+```bash
+go test -v
+```
+
+### Run the REPL
+```bash
+./claude-repl
+```
+
+## Usage Examples
+
+### Basic Conversation
+```
+You: Hello!
+Claude: Hello! How can I help you today?
+
+You: What's 5 + 3?
+Claude: 8
+```
+
+### GitHub Queries (via run_bash)
+```
+You: What repositories do I have?
 → Running bash command...
+Claude: [Lists your repositories using 'gh repo list']
+
+You: Show me my recent pull requests
+→ Running bash command...
+Claude: [Lists your PRs using 'gh pr list']
 ```
 
-**Solution**: Enhanced all tool progress messages to show context:
+### File Operations
 ```
-→ Reading file: main.go
-→ Patching file: todos.md (+353 bytes)
-→ Running bash: go test -v
-→ Listing files: . (current directory)
-→ Writing file: progress.md (42.5 KB)
-```
+You: What files are in the current directory?
+→ Listing files...
+Claude: [Shows list of files with details]
 
-**Implementation**:
-- Updated 5 display message locations in `handleConversation()`
-- Added file path display for list_files, read_file
-- Added size change display for patch_file (+/- bytes)
-- Added command display for run_bash (truncated if > 60 chars)
-- Added formatted size display for write_file (bytes/KB/MB)
+You: Read the README.md file
+→ Reading file...
+Claude: [Displays the contents of README.md]
 
-**Code Changes**:
-- Net +921 bytes in main.go
-- All display messages now context-aware
-- Maintains simplicity while adding clarity
-
-**Results**:
-- ✅ All tests pass (13 passed, 3 skipped)
-- ✅ Binary rebuilt (8.0 MB, unchanged size)
-- ✅ Better UX: users see exactly what's happening
-- ✅ Test output shows new messages in action
-
-**Verified in Test Output**:
-```
-→ Listing files: . (current directory)
-→ Reading file: test_read_file.txt
-→ Running bash: gh api user
-→ Writing file: test_write_integration_new.txt (51 bytes)
+You: Create a file called notes.txt with "Meeting at 3pm"
+→ Writing file...
+Claude: [Confirms file was created successfully]
 ```
 
----
-
-### ✅ 4. 🔧 Better Error Handling & Messages - COMPLETED (2026-02-10)
-**Status**: ✅ **COMPLETED**
-
-**Problem**: Error messages were too generic and didn't help users fix problems.
-
-**What Was Done**:
-1. ✅ Enhanced all 5 tool execution functions with detailed error messages
-2. ✅ Added context-specific guidance for common error scenarios
-3. ✅ Improved API error messages with actionable suggestions
-4. ✅ Enhanced startup error messages with setup instructions
-5. ✅ Added helpful examples to all validation errors
-
-**Error Message Improvements by Tool**:
-- **list_files**: Directory not found, permission denied, with suggestions
-- **read_file**: File not found, permission denied, directory vs file, large file warnings
-- **patch_file**: Multi-line help for text not found and non-unique text errors
-- **run_bash**: Exit code explanations (127=command not found, 126=permission denied, etc.)
-- **write_file**: Directory doesn't exist with mkdir command, large file warnings
-- **API errors**: Context-aware help for 401, 429, 400, 500+ errors
-- **Startup errors**: .env file setup instructions with examples
-
-**Examples of Improvements**:
+### Exit
 ```
-BEFORE: "old_text not found in file"
-AFTER:  Shows 3 common issues + 3 concrete suggestions
-
-BEFORE: "command failed: exit status 127"
-AFTER:  Explains exit code + provides installation/PATH troubleshooting
-
-BEFORE: "failed to read file: no such file"
-AFTER:  "file 'X' does not exist. Use list_files to see available files"
+You: exit
+Goodbye!
 ```
 
-**Impact**:
-- Better user experience (clear, actionable error messages)
-- Faster debugging (suggestions save time)
-- Educational (users learn best practices)
-- Proactive warnings (prevents errors before they happen)
-- Net +5.2 KB in main.go
-- All tests still pass (13 passed, 3 skipped)
+## Technical Details
 
-**Results**:
-- ✅ All error messages are clear and helpful
-- ✅ Context-specific suggestions provided
-- ✅ Examples included where appropriate
-- ✅ All tests pass with improved error handling
-- ✅ Verified with manual testing
+### API Configuration
+- **Endpoint**: `https://api.anthropic.com/v1/messages`
+- **Model**: `claude-sonnet-4-5-20250929`
+- **Max Tokens**: 4096
+- **API Version**: `2023-06-01`
 
-**Philosophy**: Error messages should be teachers, not just reporters.
+### Tool Schemas
 
----
-
-### ✅ 5. 🔍 grep Tool (Search Across Files) - COMPLETED (2026-02-10)
-**Status**: ✅ **COMPLETED**
-
-**Purpose**: Search for patterns across multiple files with context and line numbers.
-
-**What Was Built**:
-
-**Tool Schema**:
-```go
+#### List Files Tool
+```json
 {
-  "name": "grep",
-  "description": "Search for patterns across multiple files. Returns file paths and matching lines with context.",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "pattern": {
-        "type": "string",
-        "description": "The search pattern (can be regex)"
-      },
-      "path": {
-        "type": "string", 
-        "description": "Directory to search (defaults to current directory)"
-      },
-      "file_pattern": {
-        "type": "string",
-        "description": "Optional: filter by file pattern (e.g., '*.go', '*.md')"
-      }
-    },
-    "required": ["pattern"]
-  }
-}
-```
-
-**Implementation**:
-- Uses `grep -rnI` (recursive, line numbers, skip binary files)
-- Supports `--include` for file pattern filtering
-- Returns formatted results with match count and file count
-- Handles "no matches found" gracefully with suggestions
-- Context-aware error messages for permission issues
-
-**Use Cases**:
-- Find all references to a function/variable: `grep("func main", ".", "*.go")`
-- Search for TODO comments: `grep("TODO", ".")`
-- Find error messages in logs: `grep("error:", "logs")`
-- Locate configuration values: `grep("API_KEY", ".")`
-
-**Testing**:
-- Unit tests: `TestExecuteGrep` (7 sub-tests)
-  - Search across multiple files
-  - File pattern filtering
-  - No matches handling
-  - Error cases
-- Integration tests: `TestGrepIntegration` (3 sub-tests)
-  - Search for function definitions
-  - Search for TODO comments
-  - Handle no matches gracefully
-- All 16 tests pass (3 skipped)
-
-**System Prompt Updates**:
-Added grep decision logic to system prompt:
-```
-Search questions - Use grep for:
-- "Find all references to X"
-- "Where is function Y defined?"
-- "Search for TODO comments"
-- "Find error messages in logs"
-- "Locate all files containing X"
-- Can filter by file pattern: grep("TODO", ".", "*.go")
-```
-
-**Progress Messages**:
-- `→ Searching: 'func main' in current directory (*.go)`
-- `→ Searching: 'TODO' in . (all files)`
-
-**Code Changes**:
-- Added `grepTool` definition (24 lines)
-- Added `executeGrep()` function (94 lines)
-- Added grep case to tool execution switch (20 lines)
-- Updated system prompt (+314 bytes)
-- Added to tools array in `callClaude()`
-- Total: ~4.6 KB added to main.go
-
-**Test Suite**:
-- Added `TestExecuteGrep()` with 7 sub-tests
-- Added `TestGrepIntegration()` with 3 sub-tests
-- Total: ~9 KB added to main_test.go
-- Test runtime: +22.7 seconds (grep integration tests)
-
-**Results**:
-- ✅ All 16 tests pass (3 skipped)
-- ✅ Binary size: 8.0 MB (unchanged)
-- ✅ System prompt: 3.8 KB (+314 bytes)
-- ✅ Documentation updated (progress.md, readme.md, todos.md)
-- ✅ Comprehensive error handling and helpful messages
-- ✅ Full integration test coverage
-
-**Time Taken**: ~1 hour (as estimated!)
-
----
-
-### ✅ 6. 🗂️ glob Tool (Fuzzy File Finding) - COMPLETED (2026-02-10)
-**Status**: ✅ **COMPLETED**
-**Purpose**: Search for patterns across multiple files
-
-**Tool Schema**:
-```go
-{
-  "name": "grep",
-  "description": "Search for patterns across multiple files. Returns file paths and matching lines with context.",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "pattern": {
-        "type": "string",
-        "description": "The search pattern (can be regex)"
-      },
-      "path": {
-        "type": "string", 
-        "description": "Directory to search (defaults to current directory)"
-      },
-      "file_pattern": {
-        "type": "string",
-        "description": "Optional: filter by file pattern (e.g., '*.go', '*.md')"
-      }
-    },
-    "required": ["pattern"]
-  }
-}
-```
-
-**Use Cases**:
-- Find all references to a function/variable
-- Search for TODO comments
-- Find error messages in logs
-- Locate configuration values
-
-**Implementation**: Use `grep -rn` or `rg` (ripgrep) via bash
-
-**Estimated time**: 2 hours
-
----
-
-**Purpose**: Find files matching patterns (like `find` or `fd`)
-
-**Results**:
-- ✅ All 18 tests pass (3 skipped)
-- ✅ Binary size: 8.0 MB (unchanged)
-- ✅ System prompt: 3.9 KB (+100 bytes)
-- ✅ Documentation updated (progress.md, readme.md, todos.md)
-- ✅ Comprehensive error handling and helpful messages
-- ✅ Full integration test coverage
-- ✅ Complements grep perfectly (grep finds content, glob finds files)
-
-**Implementation**: Uses `find` command with `-name` for simple patterns, `-path` for recursive patterns. Converts `**` glob patterns to find-compatible patterns.
-
-**Time Taken**: ~1 hour (as estimated!)
-
----
-
-### ✅ 7. 📦 multi_patch Tool (Coordinated Multi-File Edits) - COMPLETED (2026-02-10)
-**Status**: ✅ **COMPLETED**
-
-**Purpose**: Apply patches to multiple files atomically with automatic rollback on failure
-
-**What Was Built**:
-
-**Tool Schema**:
-```go
-{
-  "name": "multi_patch",
-  "description": "Apply coordinated changes to multiple files atomically. Uses git for rollback if any patch fails.",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "patches": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "properties": {
-            "path": {"type": "string"},
-            "old_text": {"type": "string"},
-            "new_text": {"type": "string"}
-          }
-        },
-        "description": "Array of patches to apply"
-      }
-    },
-    "required": ["patches"]
-  }
-}
-```
-
-**Implementation Details**:
-- Parses and validates all patches before applying any
-- Checks for git availability and repository status  
-- Warns about uncommitted changes (returns early for safety)
-- Applies patches sequentially using `executePatchFile`
-- On failure: automatically rolls back using `git checkout --`
-- On success: provides summary with git commit suggestions
-- Comprehensive error handling with helpful messages
-
-**Safety Features**:
-1. **Pre-flight validation**: Checks all patch structures first
-2. **Git integration**: Detects git availability for rollback
-3. **Uncommitted changes warning**: Suggests committing first
-4. **Atomic rollback**: Restores all files if any patch fails
-5. **Clear guidance**: Next steps after success or failure
-
-**Use Cases**:
-- Refactor function name across multiple files
-- Update import paths
-- Apply consistent formatting changes
-- Coordinate breaking changes
-
-**Testing**:
-- Unit tests: `TestExecuteMultiPatch` (9 sub-tests)
-  - Single & multiple patch success
-  - Rollback on failure (verifies restoration)
-  - Missing fields validation
-  - Uncommitted changes warning
-- Integration tests: `TestMultiPatchIntegration` (2 sub-tests)
-  - Coordinated multi-file refactor
-  - Uncommitted changes handling
-- All 20 tests pass (4 skipped)
-
-**System Prompt Updates**:
-Added multi_patch decision logic:
-```
-Multi-file editing - Use multi_patch for:
-- "Rename function X to Y across all files"
-- "Update all import paths from A to B"
-- "Apply consistent changes to multiple files"
-- "Refactor code across the codebase"
-- Coordinates patches and rolls back on failure
-- Best practice: Suggest git commit before multi_patch operations
-```
-
-**Progress Message**:
-- `→ Applying multi-patch: 3 files`
-
-**Code Changes**:
-- Added `multiPatchTool` definition (~40 lines)
-- Added `executeMultiPatch()` function (~163 lines)
-- Added multi_patch case to switch statement (~7 lines)
-- Updated system prompt (+326 bytes)
-- Added to tools array in `callClaude()`
-- Total: ~5.7 KB added to main.go
-
-**Test Suite**:
-- Added `multi_patch_test.go` with 9 unit tests and 2 integration tests
-- Total: ~10 KB in separate test file
-- Test runtime: +0.17 seconds (unit tests), integration skipped without API key
-
-**Results**:
-- ✅ All 20 tests pass (4 skipped)
-- ✅ Binary size: 8.0 MB (unchanged)
-- ✅ System prompt: 4.2 KB (+326 bytes)
-- ✅ Documentation updated (progress.md, readme.md, todos.md)
-- ✅ Git-based rollback working perfectly
-- ✅ Safety warnings functioning as intended
-- ✅ Full integration test coverage
-
-**Time Taken**: ~2 hours (faster than estimated 4 hours!)
-
-**Design Decision - Early Return on Uncommitted Changes**:
-The function intentionally returns early with a warning when uncommitted changes are detected, rather than proceeding automatically. This is a safety feature that:
-- Prevents accidental loss of work
-- Encourages good git hygiene (commit before refactor)
-- Gives users conscious control
-- Can proceed by re-running after reviewing warning
-
----
-
-### ✅ 8. 🌐 web_search Tool - COMPLETED (2026-02-10)
-**Status**: ✅ **COMPLETED**
-
-**Purpose**: Search the internet for information beyond training data
-
-**Implementation Decision**: **Brave Search API**
-- Official API with generous free tier (2,000 queries/month)
-- Independent search index with good quality results
-- Privacy-focused and ToS-compliant
-- Simple REST API with structured JSON responses
-- Clear upgrade path ($5/mo for 20K queries)
-- Better than Exa AI and DuckDuckGo alternatives
-
-**Tool Schema**:
-```go
-{
-  "name": "web_search",
-  "description": "Search the internet using Brave Search API. Returns titles, URLs, and snippets. Use for current info, documentation, error solutions, package versions, and recent news.",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "query": {
-        "type": "string",
-        "description": "The search query"
-      },
-      "num_results": {
-        "type": "integer",
-        "description": "Number of results to return (1-10, default 5)",
-        "default": 5
-      }
-    },
-    "required": ["query"]
-  }
-}
-```
-
-**Configuration**:
-```bash
-# Add to .env file:
-BRAVE_SEARCH_API_KEY=your-brave-api-key-here
-
-# Get API key at: https://brave.com/search/api/
-```
-
-**Output Format**:
-```
-Found 5 results for "golang http client":
-
-1. [Go HTTP Client Documentation] - https://pkg.go.dev/net/http
-   The http package provides HTTP client and server implementations...
-
-2. [Making HTTP Requests in Go] - https://example.com
-   Learn how to make HTTP requests using Go's standard library...
-
-[... more results ...]
-```
-
-**Use Cases**:
-- Look up current API documentation: `web_search("golang 1.24 http client")`
-- Find solutions to novel errors: `web_search("go error context deadline exceeded")`
-- Check latest versions: `web_search("latest stable go version 2026")`
-- Research unfamiliar tech: `web_search("what is HTMX")`
-- Get recent news/updates: `web_search("anthropic claude api changes")`
-
-**Implementation Details**:
-1. Use Brave Search API endpoint: `https://api.search.brave.com/res/v1/web/search`
-2. Pass API key in `X-Subscription-Token` header
-3. Parse JSON response for `web.results` array
-4. Extract `title`, `url`, `description` from each result
-5. Format as numbered list with titles, URLs, and snippets
-6. Handle rate limits (429) with clear error message
-7. Handle missing API key with setup instructions
-
-**Error Handling**:
-- Missing API key: "BRAVE_SEARCH_API_KEY not found in .env. Get your free API key at https://brave.com/search/api/"
-- Rate limit (429): "Monthly search limit reached (2000/2000). Resets on [date]. Upgrade at brave.com/search/api"
-- No results: "No results found for '[query]'. Try different keywords or check spelling."
-- API errors: Show status code and error message from Brave
-
-**Testing**:
-- Unit tests: `TestExecuteWebSearch` (6 sub-tests)
-  - Successful search with results
-  - No results found
-  - Missing API key error
-  - Invalid query handling
-  - Rate limit handling
-  - API error handling
-- Integration tests: `TestWebSearchIntegration` (2 sub-tests)
-  - Search for Go documentation
-  - Search for specific error message
-
-**System Prompt Addition**:
-```
-Web search - Use web_search for:
-- "Look up the latest [technology/API]"
-- "Find documentation for [package/library]"
-- "Search for solutions to [error message]"
-- "What's the current version of [tool]?"
-- "Find recent news about [topic]"
-- Returns URLs + snippets from web search
-```
-
-**Estimated time**: 3 hours
-
-**Results**:
-- ✅ All 22 tests pass (4 skipped: deprecated edit_file tests)
-- ✅ Binary size: 8.1 MB (+0.1 MB)
-- ✅ System prompt: 4.4 KB (+200 bytes)
-- ✅ Documentation updated (progress.md, README.md, todos.md)
-- ✅ Integration tests with real Brave API calls working perfectly
-- ✅ Comprehensive error handling with helpful setup guidance
-- ✅ Privacy-focused solution (ToS-compliant, no scraping)
-- ✅ Free tier provides 2,000 searches/month
-
-**Time Taken**: 3 hours (exactly as estimated!)
-
-**Example Output**:
-```
-→ Searching web: "golang http client tutorial"
-
-Found 4 results for "golang http client tutorial":
-
-1. [Go HTTP Client Documentation] - https://pkg.go.dev/net/http
-   The http package provides HTTP client and server implementations...
-
-2. [Making HTTP Requests in Go] - https://www.digitalocean.com/...
-   Learn how to make HTTP requests using Go's standard library...
-
-3. [Practical Go Lessons] - https://www.practical-go-lessons.com/...
-   Focused on building HTTP clients with the standard library...
-
-4. [Go by Example] - https://gobyexample.com/http-clients
-   Simple, practical examples of HTTP client usage...
-```
-
----
-
-### ✅ 9. 🌐 browse Tool (Fetch URL Contents) - COMPLETED (2026-02-10)
-**Status**: ✅ **COMPLETED**
-
-**Purpose**: Fetch and read web pages, optionally extracting specific information with AI
-
-**Implementation Decision**: **Go net/http + HTML-to-Markdown library**
-- Use Go's standard `net/http` for fetching
-- Use `github.com/JohannesKaufmann/html-to-markdown` for HTML conversion
-- Optional AI processing for targeted extraction (like Claude Code's WebFetch)
-- Breaks zero-dependency principle but provides better UX
-
-**Alternative (Zero Dependencies)**: Use `run_bash` with `curl | pandoc`
-- Keeps zero Go dependencies
-- Requires pandoc installed on system
-- More brittle but aligns with "lean into standard tools" philosophy
-- Recommend: Start with library, can switch to bash approach later if desired
-
-**Tool Schema**:
-```go
-{
-  "name": "browse",
-  "description": "Fetch a URL and convert HTML to readable markdown. Optionally extract specific information using AI processing.",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "url": {
-        "type": "string",
-        "description": "The URL to fetch (HTTP/HTTPS)"
-      },
-      "prompt": {
-        "type": "string",
-        "description": "Optional: What to extract/summarize from the page. If not provided, returns the full converted markdown.",
-        "default": "Return the full page content as readable markdown"
-      },
-      "max_length": {
-        "type": "integer",
-        "description": "Maximum content length in KB (default 500, max 1000)",
-        "default": 500
-      }
-    },
-    "required": ["url"]
-  }
-}
-```
-
-**Behavior**:
-1. **Fetch**: HTTP GET with 30-second timeout
-2. **Follow redirects**: Up to 10 automatic redirects
-3. **Size check**: Reject if Content-Length > max_length
-4. **Convert HTML → Markdown**: Strip scripts/styles, keep structure
-5. **Truncate if needed**: If content > max_length after conversion
-6. **AI Processing** (optional): If prompt provided, send markdown + prompt to Claude
-7. **Return**: Either full markdown or AI-extracted info
-
-**Output Format** (without prompt):
-```markdown
-# Page Title
-
-Main content converted to markdown format...
-
-- Lists preserved
-- Links: [text](url)
-- Code blocks preserved
-- Headers maintained
-```
-
-**Output Format** (with prompt):
-```
-AI's response based on the prompt and page content
-```
-
-**Use Cases**:
-- Read full page: `browse("https://pkg.go.dev/net/http")`
-- Extract specific info: `browse("https://go.dev/doc/", "List all tutorial sections")`
-- Follow search results: `browse("https://blog.example.com/article")`
-- Summarize documentation: `browse("https://docs.example.com", "What are the main features?")`
-- Check API reference: `browse("https://api.example.com/docs")`
-
-**Implementation Details**:
-1. **HTTP Client Setup**:
-   - Set User-Agent: "claude-repl/1.0 (Go HTTP Client)"
-   - Set timeout: 30 seconds
-   - Follow redirects: http.Client.CheckRedirect (max 10)
-   - Set max response size: 1MB (configurable via max_length)
-
-2. **HTML to Markdown**:
-   - Use `html-to-markdown` library
-   - Strip: `<script>`, `<style>`, `<iframe>`, ads
-   - Keep: headings, paragraphs, lists, links, code blocks, tables
-   - Clean whitespace and normalize newlines
-
-3. **AI Processing** (if prompt provided):
-   - Truncate markdown to fit in Claude context (keep first N chars)
-   - Send to Claude API with prompt: "Given this webpage content: [markdown]\n\nUser request: [prompt]"
-   - Return Claude's response
-   - Cache conversion for repeated queries (optional v2 feature)
-
-4. **Error Handling**:
-   - Invalid URL: "Invalid URL format. Must start with http:// or https://"
-   - DNS errors: "Could not resolve domain [domain]. Check the URL."
-   - 404: "Page not found (404): [url]"
-   - 403/401: "Access denied (403). The page may require authentication."
-   - Timeout: "Request timed out after 30 seconds. The server may be slow or unreachable."
-   - Too large: "Page too large ([size]). Max allowed: [max_length]KB. Increase max_length or try a different page."
-   - Network errors: "Network error: [details]. Check your internet connection."
-
-**Configuration**:
-No additional API keys needed (uses existing Claude API key for optional AI processing)
-
-**Testing**:
-- Unit tests: `TestExecuteBrowse` (8 sub-tests)
-  - Fetch and convert valid HTML page
-  - Handle 404 errors
-  - Handle timeout (mock)
-  - Handle too-large content
-  - Handle invalid URL
-  - Handle redirect following
-  - Convert HTML to markdown correctly
-  - AI extraction with prompt (integration-like)
-- Integration tests: `TestBrowseIntegration` (3 sub-tests)
-  - Fetch real documentation page
-  - Extract specific info with prompt
-  - Handle 404 gracefully
-
-**System Prompt Addition**:
-```
-Web browsing - Use browse for:
-- "Read the page at [URL]"
-- "What does [URL] say about [topic]?"
-- "Summarize the documentation at [URL]"
-- "Extract [specific info] from [URL]"
-- Without prompt: returns full page as markdown
-- With prompt: AI extracts specific information
-```
-
-**Dependencies Added**:
-```bash
-go get github.com/JohannesKaufmann/html-to-markdown
-```
-
-**Estimated time**: 3-4 hours
-- 1 hour: Basic fetching + HTML-to-markdown conversion
-- 1 hour: Error handling + size limits + redirects
-- 1 hour: AI processing with prompt parameter
-- 1 hour: Testing (unit + integration)
-
-**Results**:
-- ✅ All 25 tests pass (4 skipped: deprecated edit_file tests)
-- ✅ Binary size: 8.1 MB (unchanged)
-- ✅ System prompt: 4.6 KB (+200 bytes)
-- ✅ Documentation updated (progress.md, README.md, todos.md)
-- ✅ Integration tests with real web pages (example.com) working perfectly
-- ✅ AI extraction with prompts working excellently
-- ✅ HTML-to-markdown conversion producing clean, readable output
-- ✅ Comprehensive error handling (404, 403, timeouts, etc.)
-- ✅ Dependency added: html-to-markdown library
-
-**Time Taken**: ~3.5 hours (on target with 3-4 hour estimate!)
-
-**Example Output** (basic fetch):
-```
-→ Browsing: https://example.com
-
-# Example Domain
-
-This domain is for use in illustrative examples in documents...
-```
-
-**Example Output** (with AI extraction):
-```
-→ Browsing: https://example.com (extract: "What is the main heading?")
-
-The main heading on the example.com page is **"Example Domain"**. This is
-formatted as an H1 heading (the top-level heading) on the page.
-```
-
-**Integration with web_search**:
-Perfect workflow: use web_search to find pages, then browse to read them:
-```
-1. web_search("golang http client tutorial") → Get URLs
-2. browse("https://pkg.go.dev/net/http") → Read full documentation
-3. browse("https://...", "List all key functions") → Extract specific info
-```
-
----
-
-### ✅ 10. 📂 Code Organization & Architecture Separation - COMPLETED (2026-02-13)
-**Status**: ✅ **COMPLETED**
-
-**Purpose**: Split single-file architecture into multiple files and packages
-
-**What Was Achieved**: Successfully refactored 1,652-line main.go into organized packages
-
-**Proposed Structure**:
-```
-claude-repl/
-├── main.go                 # CLI entry point (REPL loop, main function)
-├── config/
-│   └── config.go          # Config struct, env loading, validation
-├── api/
-│   ├── client.go          # Claude API client
-│   └── types.go           # Message, Response, ContentBlock types
-├── agent/
-│   ├── agent.go           # Core conversation/tool coordination logic
-│   └── history.go         # Conversation history management
-├── tools/
-│   ├── registry.go        # Tool registration and dispatch
-│   ├── list_files.go      # list_files tool (definition + execution)
-│   ├── read_file.go       # read_file tool
-│   ├── patch_file.go      # patch_file tool
-│   ├── write_file.go      # write_file tool
-│   ├── run_bash.go        # run_bash tool
-│   ├── grep.go            # grep tool
-│   ├── glob.go            # glob tool
-│   ├── multi_patch.go     # multi_patch tool
-│   ├── web_search.go      # web_search tool
-│   └── browse.go          # browse tool
-├── prompts/
-│   └── system.txt         # System prompt (external file)
-└── errors/
-    └── errors.go          # Custom error types and helpers
-```
-
-**Benefits**:
-- **Maintainability**: Each tool in its own file (~100-200 lines)
-- **Separation of concerns**: API, agent, tools, config all separate
-- **Testability**: Easier to test individual components
-- **Extensibility**: Easy to add new tools (just add new file in tools/)
-- **Readability**: Clear structure, easier to find code
-- **Reusability**: Agent can be imported as a Go package
-- **External prompts**: System prompt in separate file (easier iteration)
-- Still compiles to single binary
-
-**Tool Pattern** (each tool file):
-```go
-package tools
-
-// Tool definition (schema)
-var ListFilesTool = Tool{...}
-
-// Execution function
-func ExecuteListFiles(params map[string]interface{}) (string, error) {...}
-
-// Display message
-func DisplayListFiles(params map[string]interface{}) string {...}
-
-// Register with registry
-func init() {
-    Register(ListFilesTool, ExecuteListFiles, DisplayListFiles)
-}
-```
-
-**Migration Strategy**:
-1. Create directory structure
-2. Extract types.go (Message, Response, etc.)
-3. Extract config.go (env loading, validation)
-4. Extract api/client.go (callClaude function)
-5. Extract each tool to tools/ (one at a time, test after each)
-6. Extract agent.go (handleConversation logic)
-7. Extract prompts/system.txt (system prompt)
-8. Extract errors.go (custom error types from #12 below)
-9. Update main.go to orchestrate (import and wire up)
-10. Run full test suite after each step
-
-**Estimated time**: 6-8 hours (careful refactoring with testing)
-
----
-
-### ✅ 11. 🗄️ External System Prompt - COMPLETED (2026-02-13)
-**Status**: ✅ **COMPLETED**
-
-**What Was Built**: Dual-mode system prompt loading
-
-**Features Implemented**:
-1. ✅ System prompt in external file (`prompts/system.txt`)
-2. ✅ Development mode: loads from file (allows iteration without rebuild)
-3. ✅ Production mode: uses embedded version (single binary)
-4. ✅ Automatic fallback (embedded when file missing)
-5. ✅ `GetSystemPrompt()` for runtime reloading in tests
-
-**Implementation**:
-```go
-//go:embed system.txt
-var embeddedSystemPrompt string
-
-var SystemPrompt = loadSystemPrompt()
-
-func loadSystemPrompt() string {
-    // Try file first (dev mode)
-    if content, err := os.ReadFile("prompts/system.txt"); err == nil {
-        return string(content)
-    }
-    // Fallback to embedded (production)
-    return embeddedSystemPrompt
-}
-```
-
-**Benefits**:
-- Fast iteration: edit prompt and restart (no rebuild)
-- Single binary: embedded version for distribution
-- Zero breaking changes: existing code unchanged
-- Better DX: no compilation wait during prompt work
-
-**Testing**:
-- 6 new tests in `tests/prompts_test.go`
-- Tests both development and production modes
-- Tests custom prompt override capability
-- All tests pass
-
-**Documentation**:
-- Added "Customizing the System Prompt" section to README.md
-- Explains development vs production modes
-- Shows workflow for testing and finalizing prompts
-
-**Results**:
-- ✅ All tests pass (including 6 new prompt tests)
-- ✅ Binary size: 8.1 MB (unchanged)
-- ✅ Zero breaking changes
-- ✅ Significantly improved development experience
-
-**Time Taken**: ~30 minutes (as estimated!)
-
----
-
-### ✅ 12. 🧰 Consolidated Tool Execution Framework - COMPLETED (2026-02-13)
-**Status**: ✅ **COMPLETED** (as part of Priority #10)
-
-**What Was Implemented**: Function-based tool registry pattern
-
-**Implementation** (from `tools/registry.go`):
-```go
-// ExecutorFunc is a function that executes a tool
-type ExecutorFunc func(input map[string]interface{}, apiClient *api.Client, 
-                      conversationHistory []api.Message) (string, error)
-
-// DisplayFunc is a function that formats a display message for a tool
-type DisplayFunc func(input map[string]interface{}) string
-
-// Registration holds a tool registration
-type Registration struct {
-    Tool     api.Tool
-    Execute  ExecutorFunc
-    Display  DisplayFunc
-}
-
-// Register registers a tool with its executor and display functions
-func Register(tool api.Tool, execute ExecutorFunc, display DisplayFunc) {
-    Registry[tool.Name] = &Registration{
-        Tool:    tool,
-        Execute: execute,
-        Display: display,
-    }
-}
-```
-
-**Tool Pattern** (each tool file):
-```go
-func init() {
-    Register(readFileTool, executeReadFile, displayReadFile)
-}
-
-var readFileTool = api.Tool{
-    Name: "read_file",
-    Description: "...",
-    InputSchema: {...},
-}
-
-func executeReadFile(input map[string]interface{}, apiClient *api.Client, 
-                     conversationHistory []api.Message) (string, error) {
-    // Validation inline
-    path, ok := input["path"].(string)
-    if !ok || path == "" {
-        return "", fmt.Errorf("file path is required")
-    }
-    
-    // Execution
-    content, err := os.ReadFile(path)
-    return string(content), err
-}
-
-func displayReadFile(input map[string]interface{}) string {
-    path, _ := input["path"].(string)
-    return fmt.Sprintf("→ Reading file: %s", path)
-}
-```
-
-**Agent Uses Registry** (from `agent/agent.go`):
-```go
-// Get tool registration
-reg, err := tools.GetTool(toolBlock.Name)
-if err != nil {
-    // Handle unknown tool
-}
-
-// Display progress message
-if reg.Display != nil {
-    fmt.Println(reg.Display(toolBlock.Input))
-}
-
-// Execute the tool
-output, err := reg.Execute(toolBlock.Input, a.apiClient, a.history)
-```
-
-**Benefits Achieved**:
-- ✅ **DRY**: Zero duplication in agent code
-- ✅ **Consistency**: All 10 tools follow same pattern
-- ✅ **Testability**: Each tool can be tested in isolation
-- ✅ **Extensibility**: Add new tools by creating one file with init()
-- ✅ **No boilerplate**: Tools self-register via init()
-- ✅ **Type-safe**: Function signatures enforced by types
-
-**Why Function-Based vs Interface**:
-The implementation uses function-based registration instead of the interface-based approach proposed in the TODO. This is actually **better** because:
-
-1. **More flexible**: Functions are first-class in Go
-2. **Less boilerplate**: No need to create struct types for each tool
-3. **Easier to test**: Can pass mock functions directly
-4. **More idiomatic Go**: Composition over inheritance
-5. **Simpler**: Validation inline with execution (fewer moving parts)
-
-**Results**:
-- ✅ All 10 tools use consistent pattern
-- ✅ Zero tool-specific code in agent
-- ✅ Agent.HandleMessage() is generic (40 lines for all tools)
-- ✅ Adding new tools requires zero agent changes
-- ✅ All tests pass with new architecture
-
-**Completed**: 2026-02-13 (as part of Priority #10 - Code Organization)
-
-**Time Taken**: Included in Priority #10's 2-hour refactor
-
----
-
-### ❌ 13. 🚨 Custom Error Types - CANCELLED (2026-02-13)
-**Status**: ❌ **CANCELLED** - Overengineering
-
-**Original Purpose**: Create structured error types with suggestions and context
-
-**Why Cancelled**:
-
-Priority #4 (Better Error Handling & Messages) already achieved the goal with excellent, actionable error messages using simple string-based errors. Custom error types would add complexity without meaningful benefit.
-
-**Arguments Against Custom Types**:
-
-1. **Current errors are already excellent**:
-   ```go
-   fmt.Errorf("file '%s' does not exist. Use list_files to see available files", path)
-   fmt.Errorf("permission denied reading '%s'. Check file permissions", path)
-   ```
-   These are clear, actionable, and include suggestions inline.
-
-2. **No need for programmatic error handling**:
-   - Errors go directly to Claude AI (needs text, not structure)
-   - No recovery logic that would benefit from structured types
-   - Agent just passes errors to Claude for natural language explanation
-
-3. **String errors are more flexible**:
-   - Easy context inclusion: `fmt.Errorf("failed to read '%s': %w", path, err)`
-   - Natural error wrapping with `%w`
-   - No struct creation overhead for every error
-
-4. **Testing is already sufficient**:
-   - Standard Go error checking works fine
-   - Tests verify error conditions without needing type assertions
-
-5. **More code to maintain**:
-   - Would add ~300 lines of error type definitions and constructors
-   - More complex returns throughout codebase
-   - Need to handle both custom and standard errors
-
-6. **Go's philosophy**:
-   - Go favors simple errors with good messages over elaborate hierarchies
-   - Current approach is more idiomatic
-
-**When Custom Types WOULD Make Sense**:
-- Recovery logic based on error type
-- External API returning structured errors to clients
-- Error categorization for metrics/logging
-- Multi-tier system needing error propagation
-
-**But for this REPL**:
-- Errors go to Claude (needs human-readable text)
-- No recovery logic (just display and continue)
-- Simple architecture (not a distributed system)
-
-**Conclusion**: Priority #4 already solved error handling properly. Adding structured types would be overengineering without tangible benefits.
-
-**Decision Date**: 2026-02-13
-
----
-
-### ✅ 14. 🔑 Config File for Global Installation - COMPLETED (2026-02-18)
-**Status**: ✅ **COMPLETED**
-
-**Purpose**: Support running claude-repl from any directory with proper config management
-
-**What Was Built**:
-
-**Clean Architecture** (separation of concerns):
-- **CLI Layer (main.go)**: Decides config file location (always `~/.claude-repl/config`)
-- **Config Package**: Simple `LoadFromFile(path)` - agnostic to location
-- **Tests**: Use `.env` files in their own temp directories
-- **Agent**: Receives configuration programmatically, location-agnostic
-
-**Implementation**:
-
-1. **config/config.go**: Pure loading function
-```go
-func LoadFromFile(path string) (*Config, error) {
-    // Load from specified file
-    // Validate required fields
-    // Return config or error
-}
-```
-
-2. **main.go**: CLI layer handles file location
-```go
-func getConfigPath() string {
-    homeDir, _ := os.UserHomeDir()
-    return filepath.Join(homeDir, ".claude-repl", "config")
-}
-```
-
-3. **Tests**: Isolated .env files
-```go
-tmpDir := t.TempDir()
-configPath := filepath.Join(tmpDir, ".env")
-config.LoadFromFile(configPath)
-```
-
-**Benefits**:
-- ✅ Clean separation of concerns (CLI vs config vs agent)
-- ✅ Works after global installation with `go install`
-- ✅ Simple: production always uses `~/.claude-repl/config`
-- ✅ Testable: tests use `.env` in temp directories
-- ✅ Agent remains configuration-agnostic
-- ✅ No complex fallback logic
-
-**Testing**:
-- Created `tests/config_test.go` with 5 focused tests
-- Tests loading from file, error cases, defaults
-- All tests pass with proper environment isolation
-
-**Results**:
-- ✅ All 32 tests pass (5 config tests)
-- ✅ Binary size: 9.0 MB (unchanged)
-- ✅ Clean, maintainable architecture
-- ✅ Production-ready for global installation
-
-**Time Taken**: ~2 hours (1.5 initial + 0.5 refactor)
-
-**Architecture Philosophy**:
-The config location decision belongs at the CLI layer, not in the config package. This keeps the agent and config package pure and reusable.
-
----
-
-### ✅ 15. 📷 Image Input Support (Multimodal) - COMPLETED (2026-02-19)
-**Status**: ✅ **COMPLETED**
-
-**Purpose**: Send images to Claude for analysis (vision capabilities)
-
-**What Was Built**:
-
-**Tool Implementation** (`tools/include_file.go`):
-- Loads images from local filesystem or remote URLs
-- Supports: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`
-- Returns special `IMAGE_LOADED:<media_type>:<size_kb>:<base64_data>` marker
-- Agent recognizes marker and adds image content block to conversation
-- 5MB size limit per Claude API requirements
-
-**Agent Integration** (`agent/agent.go`):
-- Recognizes IMAGE_LOADED marker from tool execution
-- Parses media type and base64 data
-- Creates image content block with ImageSource
-- Appends image to tool results for Claude to analyze
-- Provides confirmation message about image loading
-
-**API Types** (`api/types.go`):
-- Added `ImageSource` struct with type, media_type, data fields
-- Updated `ContentBlock` to support image type with Source field
-- Supports both base64 and URL image sources
-
-**System Prompt** (`prompts/system.txt`):
-- Added include_file tool description
-- Provides guidance on when and how to use the tool
-- Explains workflow: verify file exists first, then include
-- Notes that images can be analyzed in the same turn
-
-**Testing** (`tests/include_file_test.go`):
-- Unit tests: `TestExecuteIncludeFile` (5 sub-tests)
-  - Missing/empty path parameter
-  - File not found
-  - Unsupported file type
-  - Load valid PNG image
-  - Validate base64 encoding
-- Unit tests: `TestDisplayIncludeFile` (2 sub-tests)
-  - Local file path display
-  - Remote URL display
-- Integration tests: `TestIncludeFileIntegration` (2 sub-tests)
-  - Include image and Claude analyzes it (vision works!)
-  - Handle non-existent file gracefully
-- **All tests pass!** ✅
-
-**Results**:
-- ✅ All 36 tests pass (130 total test runs including sub-tests)
-- ✅ Binary size: 9.0 MB (unchanged)
-- ✅ System prompt: 5.1 KB (+500 bytes for include_file section)
-- ✅ Claude successfully analyzes images with vision!
-- ✅ Agent intelligently searches for files when needed
-- ✅ Comprehensive error handling for edge cases
-- ✅ Clean tool-based approach (no CLI query-rewriting)
-
-**Use Cases**:
-```bash
-You: analyze screenshot.png
-→ Including file: screenshot.png
-Claude: I can see the screenshot shows a "nil pointer dereference" error...
-
-You: what's in that error screenshot?
-→ Searching: 'error' in current directory (*.png)
-→ Including file: error_screenshot.png
-Claude: Looking at error_screenshot.png, I can see...
-```
-
-**Time Taken**: ~4 hours (Part 1 agent library complete, Part 2 REPL needs no changes!)
-
-**Design Decision: Agent Tool Approach (Not CLI Auto-Detection)**
-
-**Why The Query-Rewrite Approach Failed**:
-The original spec (Haiku query-rewrite to auto-detect image paths) did not work well in practice:
-- Query rewrite routinely missed files or didn't include correct paths
-- Added latency and cost for every message with image extensions
-- Unreliable extraction from natural language
-- Created confusion about what the agent "saw"
-
-**New Approach: Agent Tool for File Inclusion**
-
-Instead of the CLI trying to be smart about detecting images, we give the agent a tool that lets it explicitly include local or remote files in the conversation. The agent decides when to use this tool based on the user's request.
-
-**Benefits**:
-- ✅ Agent has explicit control over what files to include
-- ✅ Agent can verify file existence before including
-- ✅ Agent can search for files using existing tools (list_files, grep, glob)
-- ✅ Works for images AND other file types (PDFs, text files, etc.)
-- ✅ No guessing or query-rewriting needed
-- ✅ Clear user feedback about what was included
-- ✅ Agent can handle errors gracefully (file not found, wrong type, etc.)
-
-**Now that the agent is a decoupled library, this feature comprises two parts:**
-
-#### Part 1: Agent Library - File Content Tool (4-5 hours)
-**Scope**: Add `include_file` tool that loads file content into the conversation
-
-**File Types to Support**:
-1. **Images** (vision): `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`
-   - Send as base64-encoded image content blocks
-2. **Documents** (future): `.pdf`, `.txt`, `.md`, `.json`, etc.
-   - Could be converted to text or sent as document content blocks
-3. **Remote URLs**: Both local paths and public URLs
-
-**Tool Definition**:
-
-```go
-{
-  "name": "include_file",
-  "description": "Include a file's contents in the conversation. For images (jpg, png, gif, webp), this sends the image to Claude for vision analysis. Can load from local filesystem or remote URLs. Use this tool when the user asks you to look at, analyze, or work with a specific file.",
+  "name": "list_files",
+  "description": "List files and directories in a specified path...",
   "input_schema": {
     "type": "object",
     "properties": {
       "path": {
         "type": "string",
-        "description": "File path (local or URL). Examples: './screenshot.png', '/tmp/diagram.jpg', 'https://example.com/image.png'"
+        "description": "The directory path to list (defaults to current directory)"
+      }
+    },
+    "required": []
+  }
+}
+```
+
+#### Read File Tool
+```json
+{
+  "name": "read_file",
+  "description": "Read the contents of a file...",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "The file path to read"
       }
     },
     "required": ["path"]
@@ -1260,1344 +367,873 @@ Instead of the CLI trying to be smart about detecting images, we give the agent 
 }
 ```
 
-**Tool Behavior**:
-
-1. **Pre-flight checks**:
-   - Verify file exists (for local paths) or URL is accessible
-   - Check file extension/content type
-   - Verify file size is within limits (<5MB for images)
-
-2. **Image handling** (jpg, jpeg, png, gif, webp):
-   - Read file or fetch from URL
-   - Encode as base64
-   - Return special response: `"IMAGE_LOADED: <base64_data>"`
-   - Agent recognizes this and adds image content block to NEXT turn
-
-3. **Other file types** (future):
-   - Read as text and return contents
-   - Could support PDF → text conversion
-   - Agent includes in conversation as text
-
-**API Changes Needed**:
-
-```go
-// api/types.go - Add image source types
-type ImageSource struct {
-    Type      string `json:"type"`        // "base64" or "url"
-    MediaType string `json:"media_type"`  // "image/jpeg", "image/png", etc.
-    Data      string `json:"data,omitempty"`  // Base64 data (for type="base64")
-    URL       string `json:"url,omitempty"`   // URL (for type="url")
-}
-
-// Update ContentBlock to support images
-type ContentBlock struct {
-    Type      string       `json:"type"`                // "text", "image", "tool_use", "tool_result"
-    Text      string       `json:"text,omitempty"`      // For type="text"
-    Source    *ImageSource `json:"source,omitempty"`    // For type="image"
-    // ... existing tool_use/tool_result fields
-}
-```
-
-**Tool Implementation** (tools/include_file.go):
-
-```go
-package tools
-
-import (
-    "encoding/base64"
-    "fmt"
-    "net/http"
-    "os"
-    "path/filepath"
-    "strings"
-    
-    "github.com/this-is-alpha-iota/clyde/api"
-)
-
-func init() {
-    Register(includeFileTool, executeIncludeFile, displayIncludeFile)
-}
-
-var includeFileTool = api.Tool{
-    Name: "include_file",
-    Description: "Include a file's contents in the conversation...",
-    InputSchema: map[string]interface{}{
-        "type": "object",
-        "properties": map[string]interface{}{
-            "path": map[string]interface{}{
-                "type":        "string",
-                "description": "File path (local or URL)",
-            },
-        },
-        "required": []string{"path"},
+#### Edit File Tool
+```json
+{
+  "name": "edit_file",
+  "description": "Edit a file by writing new content to it...",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "The file path to edit"
+      },
+      "content": {
+        "type": "string",
+        "description": "The new content to write (replaces entire file)"
+      }
     },
-}
-
-func executeIncludeFile(input map[string]interface{}, apiClient *api.Client, 
-                        history []api.Message) (string, error) {
-    path, ok := input["path"].(string)
-    if !ok || path == "" {
-        return "", fmt.Errorf("path is required. Example: include_file(\"./screenshot.png\")")
-    }
-    
-    // Determine if URL or local path
-    isURL := strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://")
-    
-    // Check file type
-    ext := strings.ToLower(filepath.Ext(path))
-    isImage := ext == ".jpg" || ext == ".jpeg" || ext == ".png" || 
-               ext == ".gif" || ext == ".webp"
-    
-    if isImage {
-        return loadImage(path, isURL)
-    }
-    
-    // For non-images, return error for now (future: support text files)
-    return "", fmt.Errorf("only image files are currently supported (.jpg, .png, .gif, .webp)")
-}
-
-func loadImage(path string, isURL bool) (string, error) {
-    var data []byte
-    var err error
-    var mediaType string
-    
-    if isURL {
-        // Fetch from URL
-        resp, err := http.Get(path)
-        if err != nil {
-            return "", fmt.Errorf("failed to fetch image from URL: %w", err)
-        }
-        defer resp.Body.Close()
-        
-        if resp.StatusCode != 200 {
-            return "", fmt.Errorf("URL returned status %d", resp.StatusCode)
-        }
-        
-        mediaType = resp.Header.Get("Content-Type")
-        data, err = io.ReadAll(resp.Body)
-        if err != nil {
-            return "", fmt.Errorf("failed to read image data: %w", err)
-        }
-    } else {
-        // Read local file
-        data, err = os.ReadFile(path)
-        if err != nil {
-            if os.IsNotExist(err) {
-                return "", fmt.Errorf("file '%s' not found. Use list_files or glob to find files", path)
-            }
-            return "", fmt.Errorf("failed to read file: %w", err)
-        }
-        
-        // Detect media type from extension
-        ext := strings.ToLower(filepath.Ext(path))
-        mediaType = detectMediaType(ext)
-    }
-    
-    // Check size (5MB limit)
-    if len(data) > 5*1024*1024 {
-        return "", fmt.Errorf("image too large (%.1f MB). Maximum is 5MB", 
-            float64(len(data))/(1024*1024))
-    }
-    
-    // Encode to base64
-    encoded := base64.StdEncoding.EncodeToString(data)
-    
-    // Return special marker that agent will recognize
-    // Format: IMAGE_LOADED:<media_type>:<base64_data>
-    return fmt.Sprintf("IMAGE_LOADED:%s:%s", mediaType, encoded), nil
-}
-
-func detectMediaType(ext string) string {
-    switch ext {
-    case ".jpg", ".jpeg":
-        return "image/jpeg"
-    case ".png":
-        return "image/png"
-    case ".webp":
-        return "image/webp"
-    case ".gif":
-        return "image/gif"
-    default:
-        return ""
-    }
-}
-
-func displayIncludeFile(input map[string]interface{}) string {
-    path, _ := input["path"].(string)
-    return fmt.Sprintf("→ Including file: %s", path)
-}
-```
-
-**Agent Integration** (agent/agent.go):
-
-The agent needs to recognize the special `IMAGE_LOADED:` response and convert it to an image content block in the next message to Claude.
-
-```go
-// In handleConversation loop, after executing include_file tool:
-
-if strings.HasPrefix(output, "IMAGE_LOADED:") {
-    // Parse: IMAGE_LOADED:<media_type>:<base64_data>
-    parts := strings.SplitN(output, ":", 3)
-    if len(parts) == 3 {
-        mediaType := parts[1]
-        imageData := parts[2]
-        
-        // Store image for next turn
-        // Add to a pending images slice or immediately include
-        pendingImage := api.ContentBlock{
-            Type: "image",
-            Source: &api.ImageSource{
-                Type:      "base64",
-                MediaType: mediaType,
-                Data:      imageData,
-            },
-        }
-        
-        // Include in the tool result or next message
-        // Option A: Include immediately in the response to Claude
-        // Option B: Store and include in next user message
-    }
-    
-    // Return confirmation to Claude
-    output = fmt.Sprintf("Image loaded successfully (%s, %.1f KB)", 
-        mediaType, float64(len(imageData))/1024)
-}
-```
-
-**System Prompt Addition**:
-```
-File inclusion - Use include_file for:
-- "Look at [file]" or "Analyze [image]"
-- "What's in screenshot.png?"
-- User mentions a specific image file to examine
-- Workflow: 1) Verify file exists with list_files/glob, 2) Use include_file
-- After including image, you can analyze/describe it in next response
-- Tool handles both local paths and URLs
-```
-
-**Error Handling**:
-- File not found → Suggest using list_files or glob first
-- Invalid format → List supported formats
-- File too large → Suggest resizing or different file
-- URL not accessible → Check URL and network
-- Permission denied → Check file permissions
-
-**Testing**:
-- Unit tests: file loading, URL loading, base64 encoding
-- Integration tests: include image and analyze with Claude
-- Error handling: missing file, wrong format, too large
-- Multiple images in one conversation
-
-**Estimated time**: 4-5 hours
-- 1 hour: Tool implementation (include_file)
-- 1 hour: API types and image content block support
-- 1 hour: Agent integration (handle IMAGE_LOADED response)
-- 1 hour: Testing (unit + integration)
-- 0.5 hours: Error handling and edge cases
-- 0.5 hours: System prompt and documentation
-
----
-
-#### Part 2: REPL - No Changes Needed! ✨
-
-**The beauty of the tool approach**: The REPL doesn't need any changes. The agent decides when to use `include_file` based on the user's natural language request.
-
-**User Experience Examples**:
-
-```bash
-# Example 1: User asks to look at an image
-You: analyze screenshot.png
-→ Listing files: . (current directory)
-→ Including file: screenshot.png
-Claude: I can see the screenshot shows a "nil pointer dereference" error...
-
-# Example 2: User doesn't remember exact filename
-You: look at the error screenshot
-→ Searching: 'error' in current directory (*.png)
-→ Including file: error_screenshot.png
-Claude: Looking at error_screenshot.png, I can see...
-
-# Example 3: User references remote URL
-You: what's in https://example.com/diagram.png
-→ Including file: https://example.com/diagram.png
-Claude: This diagram shows a client-server architecture...
-
-# Example 4: File doesn't exist - agent handles gracefully
-You: analyze missing.png
-→ Listing files: . (current directory)
-Claude: I don't see a file called missing.png in the current directory. 
-I can see these image files:
-  - screenshot.png
-  - error1.png
-  - error2.png
-Would you like me to analyze one of these?
-
-# Example 5: User says "screenshot" without extension
-You: look at the screenshot
-→ Searching: 'screenshot' in current directory (*.png, *.jpg)
-→ Including file: screenshot.png
-Claude: I can see in screenshot.png...
-```
-
-**How The Agent Decides**:
-
-The agent uses its existing intelligence to determine when to use `include_file`:
-
-1. **Direct mention**: "analyze file.png" → use include_file
-2. **Unclear filename**: "look at the error" → use grep/glob first to find it
-3. **Doesn't exist**: Agent sees list_files results, tells user file not found
-4. **Wrong type**: Agent sees error from tool, explains to user
-5. **Multiple files**: "compare error1.png and error2.png" → use include_file twice
-
-**System Prompt Guidance** (already added in Part 1):
-```
-File inclusion - Use include_file for:
-- "Look at [file]" or "Analyze [image]"
-- "What's in screenshot.png?"
-- User mentions a specific image file to examine
-- Workflow: 1) Verify file exists with list_files/glob, 2) Use include_file
-- After including image, you can analyze/describe it in next response
-```
-
-**Why This Is Better**:
-- ✅ No CLI changes needed (cleaner separation)
-- ✅ Agent can search for files before including them
-- ✅ Agent can verify existence and handle errors intelligently
-- ✅ Agent can explain issues to user in natural language
-- ✅ Works naturally with existing tools (list_files, grep, glob)
-- ✅ No regex pre-filters or query rewrites
-- ✅ No extra API calls (no Haiku overhead)
-- ✅ Agent fully in control of the workflow
-
-**Testing**: 
-Integration tests showing full workflows:
-- User asks for image → agent uses include_file → Claude analyzes
-- User asks for missing image → agent searches → tells user not found
-- User asks for "the screenshot" → agent finds it → includes it
-- User asks for multiple images → agent includes all → Claude analyzes
-
-**Estimated time**: 0 hours (no REPL changes needed!)
-
----
-
-**Total Estimated Time**: 4-5 hours (just Part 1, Part 2 needs no changes!)
-
-**Use Cases**:
-- "Debug this error screenshot" → agent uses include_file
-- "What's wrong with screenshot.png?" → agent uses include_file
-- "Compare error1.png and error2.png" → agent uses include_file twice
-- "Analyze the diagram" → agent searches with glob, then includes
-- "What's in https://example.com/chart.png" → agent includes URL
-
-**Dependencies**: Claude API supports images (already available in claude-sonnet-4-5)
-
-**Philosophy**: Let the agent use its intelligence to decide when and how to include files. Don't try to outsmart it from the CLI layer. This is cleaner, more reliable, and requires less code.
-
----
-
-### ✅ 16. 🔌 Complete Agent Decoupling (UI-Agnostic Agent) - COMPLETED (2026-02-18)
-**Status**: ✅ **COMPLETED**
-
-**Purpose**: Make the agent 100% UI-agnostic by removing the single remaining UI coupling
-
-**The Problem**:
-After Priority #10 (Code Organization), the agent was 90% UI-agnostic. However, there was still one direct coupling in `agent/agent.go` line ~82:
-
-```go
-if reg.Display != nil {
-    displayMsg := reg.Display(toolBlock.Input)
-    if displayMsg != "" {
-        fmt.Println(displayMsg)  // ← ONLY UI COUPLING
-    }
-}
-```
-
-This prevented the agent from being used in:
-- HTTP APIs (need to send progress via HTTP/WebSocket)
-- GUIs (need to update UI widgets)
-- Bots (need to send to Telegram/Discord/Slack)
-- Embedded contexts (library usage)
-
-**Solution**: Implemented callback-based architecture using Go's options pattern
-
-**Implementation**:
-
-1. **Added callback types to agent.go**:
-```go
-// ProgressCallback receives progress messages during tool execution
-type ProgressCallback func(message string)
-
-// ErrorCallback receives errors during processing (optional, for logging)
-type ErrorCallback func(err error)
-
-type Agent struct {
-    apiClient        *api.Client
-    systemPrompt     string
-    history          []api.Message
-    progressCallback ProgressCallback  // NEW
-    errorCallback    ErrorCallback     // NEW (optional)
-}
-```
-
-2. **Added options pattern for flexible configuration**:
-```go
-type AgentOption func(*Agent)
-
-func WithProgressCallback(cb ProgressCallback) AgentOption {
-    return func(a *Agent) { a.progressCallback = cb }
-}
-
-func WithErrorCallback(cb ErrorCallback) AgentOption {
-    return func(a *Agent) { a.errorCallback = cb }
-}
-
-func NewAgent(apiClient *api.Client, systemPrompt string, opts ...AgentOption) *Agent {
-    agent := &Agent{
-        apiClient:    apiClient,
-        systemPrompt: systemPrompt,
-        history:      []api.Message{},
-    }
-    
-    for _, opt := range opts {
-        opt(agent)
-    }
-    
-    return agent
-}
-```
-
-3. **Updated progress display to use callback**:
-```go
-// Replaced direct fmt.Println with callback invocation
-if displayMsg != "" && a.progressCallback != nil {
-    a.progressCallback(displayMsg)
-}
-```
-
-4. **Updated main.go to use callback**:
-```go
-agentInstance := agent.NewAgent(
-    apiClient,
-    prompts.SystemPrompt,
-    agent.WithProgressCallback(func(msg string) {
-        fmt.Println(msg) // REPL prints to stdout
-    }),
-)
-```
-
-**Benefits Achieved**:
-
-1. **100% UI-Agnostic Agent**:
-   - Zero UI dependencies in agent package
-   - No direct coupling to any output mechanism
-   - Agent doesn't know or care how progress is displayed
-
-2. **Backward Compatible**:
-   - Existing tests work without modification
-   - No breaking changes to API
-   - Optional callbacks (works without them)
-
-3. **Enables Any Frontend**:
-   - CLI: Print to stdout (current implementation)
-   - HTTP API: Send via WebSocket or collect in buffer
-   - GUI: Update status bar or progress widgets
-   - Bot: Send to Discord/Telegram/Slack
-   - Library: Capture for logging or metrics
-
-4. **Idiomatic Go**:
-   - Options pattern is standard in Go
-   - Functional options allow flexibility
-   - Clean, composable API
-
-**Example Use Cases**:
-
-**CLI (current)**:
-```go
-agent.NewAgent(apiClient, systemPrompt,
-    agent.WithProgressCallback(func(msg string) {
-        fmt.Println(msg)
-    }),
-)
-```
-
-**HTTP API**:
-```go
-var progressBuffer []string
-agent.NewAgent(apiClient, systemPrompt,
-    agent.WithProgressCallback(func(msg string) {
-        progressBuffer = append(progressBuffer, msg)
-        websocket.Send(msg) // Real-time updates
-    }),
-)
-```
-
-**GUI**:
-```go
-agent.NewAgent(apiClient, systemPrompt,
-    agent.WithProgressCallback(func(msg string) {
-        statusBar.SetText(msg)
-        progressList.AddItem(msg)
-    }),
-)
-```
-
-**Testing**:
-- All 32 tests pass without modification
-- Zero breaking changes to existing tests
-- Test helpers continue to work as-is
-
-**Results**:
-- ✅ All 32 tests pass
-- ✅ Binary size: 9.0 MB (unchanged)
-- ✅ Agent is now 100% UI-agnostic
-- ✅ Zero breaking changes
-- ✅ Ready for any frontend implementation
-- ✅ Clean, idiomatic Go code
-
-**Code Changes**:
-- `agent/agent.go`: Added callbacks and options pattern (+884 bytes)
-- `main.go`: Updated to use callback (+138 bytes)
-- `README.md`: Added "Using Clyde as a Library" section (+3.2 KB)
-- Total: ~4.2 KB added
-
-**Time Taken**: ~30 minutes (faster than estimated 1 hour)
-
-**Documentation Updates**:
-- Added "Using Clyde as a Library" section to README.md
-- Shows 7 different callback usage examples
-- Explains options pattern and flexibility
-- Documents all use cases (CLI, API, GUI, logging, silent)
-
-**Philosophy**:
-The agent is now a pure library component that knows nothing about how it's being used. It provides data (responses and progress) via clean callback interfaces, and the caller decides what to do with that data. This is the Unix philosophy applied to Go: do one thing well, compose with others.
-
-**Lesson Learned**:
-Complete decoupling requires removing ALL dependencies on specific output mechanisms. A single `fmt.Println` was enough to prevent the agent from being truly reusable. The callback pattern elegantly solves this while maintaining backward compatibility.
-
----
-
-### ✅ 17. 💾 Automatic Prompt Caching - COMPLETED (2026-02-19)
-**Status**: ✅ **COMPLETED**
-
-**Purpose**: Reduce API costs and latency by caching reusable prompt content
-
-**What Is Prompt Caching?**:
-Prompt caching allows Claude API to cache and reuse parts of prompts across multiple requests, significantly reducing:
-- Processing time for repetitive prompts
-- Costs for cached content (10x cheaper: 90% discount on cached tokens)
-- Latency for multi-turn conversations
-
-**Key Information from Screenshot**:
-- Stores KV cache representations and cryptographic hashes (not raw text)
-- ZDR-type data retention compliance
-- Two approaches: **Automatic** (recommended) and **Explicit**
-
-**Automatic Caching (Recommended Approach)**:
-```json
-{
-  "model": "claude-sonnet-4",
-  "max_tokens": 1024,
-  "cache_control": {"type": "ephemeral"},  // ← Single top-level field
-  "system": "Your system prompt...",
-  "messages": [...]
-}
-```
-
-**How It Works**:
-1. Add single `cache_control` field at top level of request
-2. System automatically applies cache breakpoint to last cacheable block
-3. Moves cache breakpoint forward as conversations grow
-4. Best for multi-turn conversations where growing history should be cached
-
-**What Gets Cached** (in order):
-1. Tools (tool definitions array)
-2. System prompt
-3. Messages (conversation history)
-
-**Cache Behavior**:
-- Cache hit: ~90% cost reduction on cached tokens
-- Cache lifetime: 5 minutes (default)
-- Minimum cacheable size: 1024 tokens (smaller content not cached)
-- Cache invalidation: Any change to cached content breaks cache
-
-**Benefits for claude-repl**:
-1. **System prompt caching**: Our 5.1 KB system prompt is sent with every request
-   - Current cost: Full processing every turn
-   - With caching: 90% cheaper after first turn
-   - Savings: ~4-5 KB cached per request
-
-2. **Tool definitions caching**: All 10 tool definitions (~3-4 KB) sent every turn
-   - Current cost: Full processing every turn  
-   - With caching: 90% cheaper, processed once per session
-   - Savings: ~3-4 KB cached per request
-
-3. **Conversation history**: Grows with each turn (user + assistant messages)
-   - Current cost: Full reprocessing of entire history every turn
-   - With caching: Only new messages processed, history cached
-   - Savings: Increases linearly with conversation length
-
-**Example Savings** (10-turn conversation):
-```
-Without caching:
-  Turn 1:  10 KB system+tools + 1 KB messages = 11 KB
-  Turn 2:  10 KB system+tools + 3 KB messages = 13 KB
-  Turn 10: 10 KB system+tools + 25 KB messages = 35 KB
-  Total: ~190 KB processed
-
-With automatic caching:
-  Turn 1:  11 KB processed (10 KB cached)
-  Turn 2:  1 KB system+tools + 2 KB new messages = 3 KB processed (11 KB cached)
-  Turn 10: 1 KB system+tools + 2 KB new messages = 3 KB processed (33 KB cached)
-  Total: ~41 KB processed (80% reduction!)
-```
-
-**Implementation Design**:
-
-**Always-On Automatic Caching** (Simple & Effective)
-```go
-// api/types.go - Add cache control type
-type CacheControl struct {
-    Type string `json:"type"` // "ephemeral"
-}
-
-// api/types.go - Add to Request struct
-type Request struct {
-    Model        string           `json:"model"`
-    MaxTokens    int              `json:"max_tokens"`
-    CacheControl *CacheControl    `json:"cache_control,omitempty"` // NEW
-    System       string           `json:"system"`
-    Messages     []Message        `json:"messages"`
-    Tools        []Tool           `json:"tools,omitempty"`
-}
-
-// api/client.go - Enable in every request
-reqBody := Request{
-    Model:        cfg.Model,
-    MaxTokens:    cfg.MaxTokens,
-    CacheControl: &CacheControl{Type: "ephemeral"}, // ← Always enabled
-    System:       systemPrompt,
-    Messages:     messages,
-    Tools:        tools,
-}
-```
-
-**Benefits**:
-- ✅ Zero configuration needed
-- ✅ Immediate cost savings for all users
-- ✅ No breaking changes
-- ✅ Optimal for multi-turn conversations (our primary use case)
-- ✅ Cache automatically moves forward with conversation
-- ✅ No performance penalty (cache miss = normal behavior)
-
-**When Caching Helps Most**:
-1. ✅ Multi-turn conversations (our primary use case)
-2. ✅ Large system prompts (we have 5.1 KB)
-3. ✅ Many tool definitions (we have 10 tools)
-4. ✅ Conversations > 1024 tokens (most of ours)
-5. ✅ Rapid back-and-forth (within 5-min cache lifetime)
-
-**When Caching Helps Less**:
-1. ❌ Single-turn requests (no reuse)
-2. ❌ Tiny prompts < 1024 tokens (below minimum)
-3. ❌ Infrequent requests (cache expires after 5 min)
-4. ❌ Highly variable prompts (cache always breaks)
-
-**For claude-repl**: Caching is a **perfect fit**! Multi-turn conversations with stable system prompt and tools.
-
-**Response Handling**:
-Claude API returns cache usage metadata in response:
-```json
-{
-  "usage": {
-    "input_tokens": 1500,
-    "cache_creation_input_tokens": 1200,  // First time: tokens cached
-    "cache_read_input_tokens": 1200,      // Subsequent: tokens from cache
-    "output_tokens": 300
+    "required": ["path", "content"]
   }
 }
 ```
 
-**Display Cache Hits** (for transparency):
-```go
-// api/types.go - Update Usage struct
-type Usage struct {
-    InputTokens              int `json:"input_tokens"`
-    OutputTokens             int `json:"output_tokens"`
-    CacheCreationInputTokens int `json:"cache_creation_input_tokens"` // NEW
-    CacheReadInputTokens     int `json:"cache_read_input_tokens"`     // NEW
-}
-
-// agent/agent.go - Show cache hits in progress
-if response.Usage.CacheReadInputTokens > 0 {
-    if a.progressCallback != nil {
-        pct := float64(response.Usage.CacheReadInputTokens) / 
-               float64(response.Usage.InputTokens) * 100
-        a.progressCallback(fmt.Sprintf("💾 Cache hit: %d tokens (%.0f%%)", 
-            response.Usage.CacheReadInputTokens, pct))
-    }
-}
-```
-
-**Testing Strategy**:
-1. Unit tests: Verify CacheControl field is set correctly
-2. Integration tests: Make multiple requests, verify caching works
-3. Manual testing: Check API response usage fields
-4. Cost analysis: Compare costs before/after over 10+ turn conversation
-
-**Documentation Updates**:
-- README.md: Add "Prompt Caching" section explaining benefits
-- Show example savings calculation
-- Mention cache lifetime and minimum size
-- Link to Anthropic docs for details
-
-**Implementation Tasks**:
-1. Add CacheControl type to api/types.go (5 mins)
-2. Update Request struct to include cache_control field (5 mins)
-3. Update Usage struct with cache fields (5 mins)
-4. Set CacheControl in api/client.go (5 mins)
-5. Add cache hit display in agent.go (15 mins)
-6. Write tests (30 mins)
-7. Update documentation (20 mins)
-
-**Estimated time**: 1.5 hours
-
-**Priority**: HIGH - Easy win for immediate cost savings with zero downside
-
-**Expected Impact**:
-- 50-80% reduction in API costs for typical conversations
-- Faster response times (cached tokens processed ~10x faster)
-- Zero UX changes (completely transparent to users)
-- Especially impactful for power users with long sessions
-
-**Why Automatic (Not Explicit Breakpoints)**:
-Automatic caching is perfect for claude-repl because:
-- System prompt and tools are stable and should always be cached
-- Conversation history grows predictably and should be cached
-- No need for fine-grained control over what gets cached
-- Simpler implementation (no per-content-block cache_control fields)
-- Claude automatically optimizes cache placement as conversation grows
-
----
-
-### 18. 🌐 HTTP REST API Interface
-**Status**: ⏳ **NOT STARTED**
-**Depends on**: Priority #16 (Complete Agent Decoupling)
-
-**Purpose**: Provide HTTP REST API for accessing claude-repl agent
-
-**Why This Matters**:
-- Access agent from web apps, mobile apps, other services
-- Session management (multiple concurrent users)
-- Stateless operation with session IDs
-- Deploy as service (Docker, Kubernetes, cloud)
-
-**API Design**:
-
-**Endpoints**:
-```
-POST /api/v1/sessions          # Create new session
-POST /api/v1/sessions/:id/messages    # Send message
-GET  /api/v1/sessions/:id/history     # Get conversation history
-DELETE /api/v1/sessions/:id   # Delete session
-GET  /api/v1/health           # Health check
-```
-
-**Example Request/Response**:
-```bash
-# Create session
-curl -X POST http://localhost:8080/api/v1/sessions \
-  -H "Authorization: Bearer YOUR_API_KEY"
-
-# Response:
+#### Patch File Tool
+```json
 {
-  "session_id": "sess_abc123",
-  "created_at": "2026-02-13T10:00:00Z"
+  "name": "patch_file",
+  "description": "Edit a file by finding and replacing text...",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "The file path to edit"
+      },
+      "old_text": {
+        "type": "string",
+        "description": "The exact text to find and replace (must be unique)"
+      },
+      "new_text": {
+        "type": "string",
+        "description": "The new text to replace old_text with"
+      }
+    },
+    "required": ["path", "old_text", "new_text"]
+  }
 }
+```
 
-# Send message
-curl -X POST http://localhost:8080/api/v1/sessions/sess_abc123/messages \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "What files are in the current directory?"
-  }'
-
-# Response:
+#### Write File Tool
+```json
 {
-  "response": "Here are the files...",
-  "progress_messages": [
-    "→ Listing files: . (current directory)"
-  ]
+  "name": "write_file",
+  "description": "Write content to a file. Creates new file or completely replaces existing file...",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "The file path to write to"
+      },
+      "content": {
+        "type": "string",
+        "description": "The complete content to write to the file"
+      }
+    },
+    "required": ["path", "content"]
+  }
 }
 ```
 
-**Implementation Structure**:
-```
-claude-repl/
-├── cmd/
-│   ├── repl/main.go       # Current CLI REPL
-│   └── api/main.go        # NEW: HTTP API server
-├── internal/
-│   └── server/            # NEW: HTTP server package
-│       ├── server.go      # Server setup
-│       ├── handlers.go    # HTTP handlers
-│       ├── sessions.go    # Session management
-│       └── auth.go        # API key authentication
-├── agent/                 # Shared agent (decoupled)
-├── api/                   # Shared API client
-└── tools/                 # Shared tools
+#### Run Bash Tool
+```json
+{
+  "name": "run_bash",
+  "description": "Execute arbitrary bash commands...",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "The bash command to execute"
+      }
+    },
+    "required": ["command"]
+  }
+}
 ```
 
-**Server Implementation**:
+#### Grep Tool
+```json
+{
+  "name": "grep",
+  "description": "Search for patterns across multiple files. Returns file paths and matching lines with context.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "pattern": {
+        "type": "string",
+        "description": "The search pattern (text or regex)"
+      },
+      "path": {
+        "type": "string",
+        "description": "Directory to search (defaults to current directory)"
+      },
+      "file_pattern": {
+        "type": "string",
+        "description": "Optional: filter by file pattern using glob syntax (e.g., '*.go', '*.md')"
+      }
+    },
+    "required": ["pattern"]
+  }
+}
+```
+
+### Conversation Flow
+1. User enters message
+2. Message added to conversation history
+3. API call made with full history and tools
+4. If response contains tool_use:
+   - Execute gh command
+   - Show "→ Running GitHub query..." to user
+   - Send tool results back to API
+   - Loop until text response received
+5. Display text response to user
+6. Update conversation history
+7. Repeat
+
+## Test Results
+```
+=== TestExecuteListFiles           PASS (0.01s)
+=== TestExecuteReadFile            PASS (0.00s)
+=== TestExecuteRunBash             PASS (0.01s)
+=== TestExecuteWriteFile           PASS (0.00s)
+=== TestExecuteGrep                PASS (0.01s) - NEW ✨
+=== TestExecutePatchFile           PASS (0.00s)
+=== TestExecuteEditFile            SKIP (deprecated)
+=== TestCallClaude                 PASS (2.21s)
+=== TestHandleConversation         PASS (8.00s)
+=== TestSystemPromptDecider        PASS (0.00s)
+=== TestListFilesIntegration       PASS (6.98s)
+=== TestReadFileIntegration        PASS (3.57s)
+=== TestEditFileIntegration        SKIP (deprecated)
+=== TestEditFileWithLargeContent   SKIP (deprecated)
+=== TestGitHubQueryIntegration     PASS (3.56s)
+=== TestRunBashIntegration         PASS (10.96s)
+=== TestWriteFileIntegration       PASS (12.51s)
+=== TestGrepIntegration            PASS (22.73s) - NEW ✨
+
+PASS - All tests completed successfully (71.1s total)
+16 tests passed, 3 tests skipped
+```
+
+## Files Created
+1. `main.go` (20.8 KB) - Main application with 6 tools (grep added!)
+2. `main_test.go` (50+ KB) - Comprehensive test suite with 16 active tests
+3. `go.mod` - Go module definition
+4. `claude-repl` - Compiled binary (8.0 MB)
+5. `.env` - API key configuration
+6. `PROGRESS.md` - This documentation
+7. `README.md` - Project readme
+8. `todos.md` - Priority task list
+
+## Key Design Decisions
+
+### Single File Architecture
+- Both the application logic fits in one file for simplicity
+- Easy to understand and modify
+- No complex project structure needed
+
+### Minimal Dependencies
+- Uses only Go standard library
+- No external packages for API calls (native HTTP client)
+- Reduces dependency management complexity
+
+### Tool Feedback
+- Simple "→ Running GitHub query..." message with ellipses
+- Non-intrusive but informative
+- Matches the user's requirement for simple progress updates
+
+### GitHub Tool Design
+- Accepts gh commands without 'gh' prefix for cleaner syntax
+- Uses os/exec to run commands directly
+- Returns both stdout and stderr for comprehensive results
+
+### Error Handling
+- API errors displayed to user with status codes
+- Tool execution errors returned to Claude for natural language explanation
+- File reading errors provide helpful guidance
+
+## Bugs Fixed
+
+### Bug #1: max_tokens Too Low Causes Infinite Loop (Fixed 2026-03-09)
+
+**Issue**: When Claude generates large content for tool parameters (like comprehensive documents), it hits the output token limit mid-generation, resulting in incomplete tool_use blocks and infinite retry loops.
+
+**Symptoms**:
+```
+→ Writing file: /tmp/doc.md (0 bytes)
+💾 Cache hit: 4205 tokens (100% of input)
+→ Writing file: /tmp/doc.md (0 bytes)
+💾 Cache hit: 4318 tokens (100% of input)
+→ Writing file: /tmp/doc.md (0 bytes)
+[continues indefinitely...]
+```
+
+**Root Cause**:
+- `MaxTokens` was set to 4,096 (only 6.4% of model capacity)
+- When generating large content, Claude hits token limit before completing tool parameters
+- API returns `stop_reason: "max_tokens"` with incomplete tool_use block
+- The `content` field is completely MISSING (not empty, but absent)
+- Tool receives nil content and returns error
+- Claude interprets error as retryable and tries again
+- Same token limit hit again → infinite loop
+
+**Debug Findings**:
+```
+[DEBUG API] Stop reason: max_tokens          ← Truncated mid-generation
+[DEBUG API] Block 1: content_field=MISSING   ← Field never completed
+```
+
+**Fix Applied**:
+Changed `config/config.go` line 46:
 ```go
-// cmd/api/main.go
-package main
+// Before
+MaxTokens: 4096,
 
-import (
-    "log"
-    "net/http"
-    
-    "claude-repl/config"
-    "claude-repl/internal/server"
-)
-
-func main() {
-    cfg, err := config.Load()
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    srv := server.New(cfg)
-    
-    log.Printf("Starting HTTP API server on :8080")
-    if err := http.ListenAndServe(":8080", srv.Handler()); err != nil {
-        log.Fatal(err)
-    }
-}
+// After  
+MaxTokens: 64000, // Match industry standard (Aider) - full model capacity
 ```
 
-**Session Management**:
-```go
-// internal/server/sessions.go
-package server
+**Industry Comparison**:
+- **Aider**: 64,000 tokens (100% of model capacity)
+- **Claude Code**: 32,000 tokens (50% of capacity)
+- **OpenCode**: 32,000 tokens (50% of capacity)
+- **Clyde (before)**: 4,096 tokens (6.4% - too low!)
+- **Clyde (after)**: 64,000 tokens (100% - matches industry leader)
 
-import (
-    "sync"
-    "time"
-    
-    "claude-repl/agent"
-)
+**Impact**:
+- 16x increase in output capacity
+- Prevents truncation during large document generation
+- No cost increase (only pay for tokens actually generated)
+- Matches best-in-class tools (Aider)
 
-type Session struct {
-    ID        string
-    Agent     *agent.Agent
-    CreatedAt time.Time
-    LastUsed  time.Time
-}
+**Verification**:
+Test with 5-section document generation:
+- ✅ File created successfully (17 KB, 436 lines)
+- ✅ Single write attempt (no loop)
+- ✅ Stop reason: `tool_use` (completed normally)
 
-type SessionManager struct {
-    sessions map[string]*Session
-    mu       sync.RWMutex
-}
+**Lesson Learned**:
+Always match industry standards for critical configuration values. A conservative default (4,096) caused significant usability issues. Research showed all major AI coding tools use much higher limits (32K-64K). When in doubt, use the model's full capacity - there's no cost penalty for setting a higher ceiling.
 
-func (sm *SessionManager) Create(agentInstance *agent.Agent) *Session {
-    // Create new session with unique ID
-}
+### Bug #2: Missing `tool_use_id` in Tool Results (Fixed 2026-02-10)
 
-func (sm *SessionManager) Get(id string) (*Session, error) {
-    // Retrieve session by ID
-}
-
-func (sm *SessionManager) Delete(id string) {
-    // Remove session
-}
-
-func (sm *SessionManager) Cleanup() {
-    // Remove old sessions (run periodically)
-}
+**Issue**: When sending tool results back to the Claude API, the `tool_use_id` field was missing, causing a 400 error:
+```
+API error (status 400): {"type":"error","error":{"type":"invalid_request_error",
+"message":"messages.4.content.0.tool_result.tool_use_id: Field required"}}
 ```
 
-**Progress Handling**:
-```go
-// Capture progress messages during request
-type progressCapture struct {
-    messages []string
-    mu       sync.Mutex
-}
+**Root Cause**:
+- The `ContentBlock` struct only had an `ID` field that mapped to `"id"` in JSON
+- When creating tool results, the code used `ID: toolBlock.ID` (line 195)
+- The Claude API requires `"tool_use_id"` for tool results, not `"id"`
 
-func (p *progressCapture) callback(msg string) {
-    p.mu.Lock()
-    defer p.mu.Unlock()
-    p.messages = append(p.messages, msg)
-}
+**Fix Applied**:
+1. Added `ToolUseID` field to `ContentBlock` struct with JSON tag `"tool_use_id,omitempty"` (line 55)
+2. Changed tool result creation to use `ToolUseID: toolBlock.ID` instead of `ID: toolBlock.ID` (line 195)
 
-// In handler:
-progress := &progressCapture{}
-session.Agent = agent.NewAgent(
-    apiClient,
-    prompt,
-    agent.WithProgressCallback(progress.callback),
-)
+**Why Tests Didn't Catch This**:
+The original test suite had a critical gap: **no test actually triggered the GitHub tool**. All tests either:
+- Used non-GitHub queries that didn't trigger tool use
+- Tested components in isolation without the full API round-trip
+- Only validated static configuration (tool definition, system prompt)
+
+**Test Improvements**:
+Added `TestGitHubQueryIntegration` which:
+- Asks a GitHub-related question that triggers tool use
+- Validates the full round-trip: question → tool_use → tool_result → final response
+- Explicitly checks for `tool_use` blocks with IDs
+- Explicitly checks for `tool_result` blocks with `ToolUseID`
+- Would have caught this bug immediately since the API rejects malformed tool results
+
+**Lesson Learned**:
+Integration tests must exercise the actual user workflows, not just individual components. A test suite that passes 100% but never tests the critical path is worse than no tests at all—it creates false confidence. Always ensure your tests cover the "happy path" that users will actually execute.
+
+## Tool Deprecations
+
+### GitHub Query Tool (Deprecated 2026-02-10)
+
+**Removed**: The dedicated `github_query` tool has been deprecated and removed from the codebase.
+
+**Rationale**: 
+- Redundant with `run_bash` tool
+- `gh` commands work perfectly via `run_bash`
+- Example: `run_bash("gh repo list")` vs `github_query("repo list")`
+- Less code to maintain
+- Consistent pattern: all external CLI tools go through bash
+
+**Migration**:
+```
+OLD: github_query("repo list")
+NEW: run_bash("gh repo list")
+
+OLD: github_query("pr list")  
+NEW: run_bash("gh pr list")
+
+OLD: github_query("api user")
+NEW: run_bash("gh api user")
 ```
 
-**Features**:
-- ✅ Session-based conversation (multiple users)
-- ✅ Progress message streaming
-- ✅ API key authentication
-- ✅ Rate limiting (optional)
-- ✅ CORS support for web clients
-- ✅ Health checks
-- ✅ Graceful shutdown
+**Changes Made**:
+1. ✅ Removed `githubTool` from tools array in `callClaude()`
+2. ✅ Removed `executeGitHubCommand()` function
+3. ✅ Removed `case "github_query":` from switch statement
+4. ✅ Updated system prompt to use `run_bash` with `gh` commands
+5. ✅ Updated tests to use bash for GitHub operations
+6. ✅ Updated documentation (README, progress.md)
 
-**Framework Choice**:
-- **Option 1**: Standard library `net/http` (lightweight, zero dependencies)
-- **Option 2**: Echo framework (more features, middleware)
-- **Option 3**: Gin framework (fast, popular)
+**Test Updates**:
+- Removed `TestExecuteGitHubCommand` (no longer needed)
+- Removed `TestGitHubTool` (tool no longer exists)
+- Updated `TestSystemPromptDecider` to check for `run_bash` and `gh` instead of `github_query`
+- Updated `TestGitHubQueryIntegration` to expect `run_bash` tool usage with `gh` commands
 
-**Recommendation**: Start with `net/http` for consistency with project philosophy (minimal dependencies).
+All tests pass: 13 tests passed, 3 skipped (deprecated edit_file tests), 47.47s total.
 
-**Testing**:
-- Unit tests for handlers
-- Integration tests with test client
-- Session management tests
-- Authentication tests
+**Impact & Results**:
+- **Code reduction**: Net -56 lines (197 removed, 141 added)
+- **Simplified architecture**: 5 tools instead of 6
+- **Improved consistency**: All CLI tools now use run_bash
+- **Better flexibility**: Can use any gh command without pre-definition
+- **Test coverage maintained**: All 13 active tests pass
+- **Binary size**: 8.0 MB (optimized)
+- **Zero breaking changes**: Migration path is straightforward
 
-**Documentation**:
-- OpenAPI/Swagger spec
-- README section on API usage
-- Example clients (curl, JavaScript, Python)
+**Commit**: `844ac68` - Deprecate github_query tool in favor of run_bash
 
-**Deployment**:
-```dockerfile
-# Dockerfile
-FROM golang:1.24-alpine AS builder
-WORKDIR /app
-COPY . .
-RUN go build -o api-server cmd/api/main.go
+### System Prompt Enhancement: progress.md Philosophy (Added 2026-02-10)
 
-FROM alpine:latest
-COPY --from=builder /app/api-server /usr/local/bin/
-EXPOSE 8080
-CMD ["api-server"]
+**Priority #2 Completed**: Added comprehensive documentation and memory model instructions to system prompt.
+
+**Problem**: The AI had to be reminded to update progress.md after completing Priority #1. This should have been automatic.
+
+**Solution**: Enhanced system prompt with explicit instructions about documentation and memory management:
+
+**Key Additions**:
+1. **Read progress.md at start** of complex tasks to understand project history
+2. **Update progress.md when**:
+   - Completing major tasks/milestones
+   - Discovering and fixing bugs
+   - Making design decisions
+   - Learning important patterns
+3. **Always update progress.md BEFORE final commit** - Don't wait to be reminded
+4. **Keep documentation structured** - Not a message dump, but curated synthesis
+5. **Treat progress.md as memory** - It persists across conversations
+
+**Impact**:
+- System prompt expanded from 2.1 KB to 2.8 KB
+- AI now has clear guidance on documentation practices
+- Should proactively maintain progress.md going forward
+- Aligns with Memory Model philosophy established earlier
+
+**Example Instructions Added**:
+```
+DOCUMENTATION & MEMORY:
+When working on tasks, especially complex ones:
+1. Read progress.md at the start...
+2. Update progress.md when you...
+3. Always update progress.md BEFORE the final commit...
+4. Keep progress.md structured and curated...
+5. Treat progress.md as YOUR memory...
 ```
 
-**Implementation Tasks**:
-1. Create `internal/server` package structure (30 mins)
-2. Implement session management (1 hour)
-3. Implement HTTP handlers (1 hour)
-4. Add authentication (30 mins)
-5. Add progress message capture (30 mins)
-6. Write tests (1 hour)
-7. Create Dockerfile (15 mins)
-8. Write API documentation (30 mins)
+**Lesson**: Meta-documentation instructions are just as important as tool instructions. The AI needs to know not just *what* to do, but *when* and *why* to document.
 
-**Estimated time**: 5-6 hours
+### Better Tool Progress Messages (Added 2026-02-10)
 
-**Priority**: Medium - Valuable but not critical for basic usage
+**Priority #3 Completed**: Enhanced all tool progress messages to show context and relevant parameters.
 
-**Use Cases**:
-- Web frontend for claude-repl
-- Mobile app backend
-- CI/CD integration (API calls from scripts)
-- Multi-user deployment
-- Cloud service offering
+**Problem**: Generic progress messages like "→ Reading file..." didn't tell users which file or what was happening.
 
----
+**Solution**: Updated each tool's display message to include relevant context:
 
-### ✅ 19. 🚀 CLI Mode (Non-Interactive Execution) - COMPLETED (2026-02-19)
-**Status**: ✅ **COMPLETED**
-
-**Purpose**: Execute agent on a prompt without opening the REPL, similar to Claude Code's `-p` flag
-
-**What Was Built**:
-
-Successfully implemented three modes of CLI execution:
-1. **Direct string**: `clyde "your prompt here"`
-2. **From file**: `clyde -f prompt.txt`
-3. **From stdin**: `cat prompt.txt | clyde`
-
-**Key Features**:
-- Stdin detection: automatically enters CLI mode when stdin is piped
-- Output separation: response goes to stdout, progress to stderr
-- Exit codes: 0 for success, 1 for errors
-- Zero breaking changes: REPL still default when no args provided
-
-**Testing**:
-- 8 comprehensive tests covering all modes and error cases
-- All tests pass (28.6s total)
-- Manual testing verified all use cases
-
-**Results**:
-- ✅ All 8 CLI mode tests pass
-- ✅ All existing tests pass (no regressions)
-- ✅ README.md updated with CLI Mode section
-- ✅ Automation-friendly (scripts, CI/CD)
-- ✅ Unix composable (pipes, redirection)
-- ✅ Exit codes work correctly
-
-**Use Cases Enabled**:
-```bash
-# Quick queries
-clyde "What version of Go is installed?"
-
-# Automation
-clyde "Run all tests and create summary" > report.txt
-
-# CI/CD integration
-clyde "Review latest commit" > review.md
-
-# Unix composition
-git log -1 | clyde "Summarize this commit"
+**Before**:
+```
+→ Listing files...
+→ Reading file...
+→ Patching file...
+→ Running bash command...
+→ Writing file...
 ```
 
-**Time Taken**: ~2.5 hours (faster than 3-4 hour estimate!)
-
----
-
-**Behavior**:
-When a prompt is provided via CLI arguments, clyde should:
-1. Execute the agent on that prompt
-2. Keep running until the agent completes the task
-3. Exit when done (no REPL)
-4. Print progress and final response to stdout
-5. Exit with code 0 on success, 1 on error
-
-**Use Cases**:
-```bash
-# Execute a simple task
-clyde "What files are in the current directory?"
-
-# Read prompt from file
-clyde -f prompt.txt
-cat prompt.txt | clyde
-
-# Use in scripts/automation
-clyde "Run all tests and create a summary report" > results.txt
-
-# CI/CD integration
-clyde "Review the latest commit and summarize changes"
-
-# Quick one-off queries
-clyde "What's the latest version of Go installed?"
-
-# File operations
-clyde "Create a new file called README.md with project documentation"
-
-# Code generation
-clyde "Generate a unit test for the Calculate function in math.go"
+**After**:
 ```
-
-**CLI Interface Design**:
-
-**Chosen Approach: Positional with `-f` flag for files**
-```bash
-clyde "your prompt here"     # Direct string argument
-clyde -f prompt.txt          # Read from file
-cat prompt.txt | clyde       # Read from stdin
-```
-
-**Why This Design**:
-- Simple and intuitive for the common case (direct string)
-- `-f` flag explicit for file input (prevents ambiguity)
-- Stdin support for Unix composition
-- Consistent with common CLI tool patterns
-
-**Implementation Strategy**:
-
-**1. Update main.go to detect CLI mode**:
-```go
-func main() {
-    // Parse command line arguments
-    args := os.Args[1:]
-    
-    // Determine mode: REPL or CLI
-    if len(args) > 0 {
-        runCLIMode(args)
-    } else {
-        runREPLMode()
-    }
-}
-
-func runCLIMode(args []string) {
-    // Determine prompt source
-    var prompt string
-    var err error
-    
-    if args[0] == "-f" {
-        // Read from file
-        if len(args) < 2 {
-            fmt.Fprintln(os.Stderr, "Error: -f requires a file path")
-            fmt.Fprintln(os.Stderr, "Usage: clyde -f prompt.txt")
-            os.Exit(1)
-        }
-        prompt, err = readPromptFromFile(args[1])
-        if err != nil {
-            fmt.Fprintf(os.Stderr, "Error reading prompt file: %v\n", err)
-            os.Exit(1)
-        }
-    } else {
-        // Check if stdin has input (pipe/redirect)
-        stat, _ := os.Stdin.Stat()
-        if (stat.Mode() & os.ModeCharDevice) == 0 {
-            // stdin is piped/redirected
-            prompt, err = readPromptFromStdin()
-            if err != nil {
-                fmt.Fprintf(os.Stderr, "Error reading from stdin: %v\n", err)
-                os.Exit(1)
-            }
-        } else {
-            // Treat all args as the prompt string
-            prompt = strings.Join(args, " ")
-        }
-    }
-    
-    if strings.TrimSpace(prompt) == "" {
-        fmt.Fprintln(os.Stderr, "Error: Empty prompt provided")
-        os.Exit(1)
-    }
-    
-    // Load config and create agent
-    cfg, err := loadConfig()
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
-        os.Exit(1)
-    }
-    
-    apiClient := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
-    agentInstance := agent.NewAgent(
-        apiClient,
-        prompts.SystemPrompt,
-        agent.WithProgressCallback(func(msg string) {
-            fmt.Fprintln(os.Stderr, msg) // Print progress to stderr
-        }),
-    )
-    
-    // Execute prompt
-    response, err := agentInstance.HandleMessage(prompt)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        os.Exit(1)
-    }
-    
-    // Print response to stdout
-    fmt.Println(response)
-    os.Exit(0)
-}
-
-func runREPLMode() {
-    // Current REPL implementation
-    // ... existing code ...
-}
-
-func readPromptFromFile(path string) (string, error) {
-    content, err := os.ReadFile(path)
-    if err != nil {
-        return "", fmt.Errorf("failed to read file '%s': %w", path, err)
-    }
-    return string(content), nil
-}
-
-func readPromptFromStdin() (string, error) {
-    // Check if stdin is a pipe/redirect
-    stat, err := os.Stdin.Stat()
-    if err != nil {
-        return "", err
-    }
-    
-    if (stat.Mode() & os.ModeCharDevice) != 0 {
-        return "", fmt.Errorf("no input provided on stdin")
-    }
-    
-    content, err := io.ReadAll(os.Stdin)
-    if err != nil {
-        return "", err
-    }
-    return string(content), nil
-}
-```
-
-**2. Extract REPL code into separate function**:
-```go
-func runREPLMode() {
-    // Load config
-    configPath := getConfigPath()
-    cfg, err := config.LoadFromFile(configPath)
-    if err != nil {
-        fmt.Println(err)
-        os.Exit(1)
-    }
-    
-    // Create API client and agent
-    apiClient := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
-    agentInstance := agent.NewAgent(
-        apiClient,
-        prompts.SystemPrompt,
-        agent.WithProgressCallback(func(msg string) {
-            fmt.Println(msg)
-        }),
-    )
-    
-    // Run REPL loop
-    fmt.Println("Clyde - AI Coding Agent - Type 'exit' or 'quit' to exit")
-    fmt.Println("==========================================================")
-    
-    reader := bufio.NewReader(os.Stdin)
-    for {
-        fmt.Print("\nYou: ")
-        input, err := reader.ReadString('\n')
-        if err != nil {
-            if err == io.EOF {
-                fmt.Println("\nGoodbye!")
-                break
-            }
-            fmt.Printf("Error reading input: %v\n", err)
-            continue
-        }
-        
-        input = strings.TrimSpace(input)
-        if input == "" {
-            continue
-        }
-        
-        if input == "exit" || input == "quit" {
-            fmt.Println("Goodbye!")
-            break
-        }
-        
-        response, _ := agentInstance.HandleMessage(input)
-        fmt.Printf("\nClaude: %s\n", response)
-    }
-}
-```
-
-**Output Handling**:
-- **stdout**: Final agent response (for piping/redirection)
-- **stderr**: Progress messages (doesn't interfere with output capture)
-
-This allows:
-```bash
-# Capture response only
-clyde "list files" > output.txt
-
-# See progress but capture response
-clyde "complex task" > output.txt
-# Progress messages still visible on terminal (stderr)
-
-# Capture everything
-clyde "task" > output.txt 2>&1
-
-# Silence progress, capture response
-clyde "task" 2>/dev/null > output.txt
-```
-
-**Error Handling**:
-- Exit code 0: Success
-- Exit code 1: Error (config error, API error, etc.)
-- Print errors to stderr
-- Clear error messages for common issues
-
-**Examples**:
-
-**Simple query**:
-```bash
-$ clyde "What's in the current directory?"
 → Listing files: . (current directory)
-
-Here are the files in the current directory:
-
-total 96
-drwxr-xr-x  15 user  staff   480 Feb 19 10:00 .
-drwxr-xr-x   8 user  staff   256 Feb 18 15:30 ..
-...
-```
-
-**From file**:
-```bash
-$ cat prompt.txt
-Review the code in main.go and suggest improvements.
-Focus on error handling and readability.
-
-$ clyde -f prompt.txt
 → Reading file: main.go
-... (agent analyzes and provides suggestions)
+→ Patching file: todos.md (+353 bytes)
+→ Running bash: go test -v
+→ Writing file: progress.md (42.5 KB)
 ```
 
-**From stdin**:
-```bash
-$ echo "What version of Go is installed?" | clyde
-→ Running bash: go version
-The installed Go version is: go1.24.0 darwin/arm64
+**Implementation Details**:
+1. **list_files**: Shows path, with special handling for current directory
+2. **read_file**: Shows the file path being read
+3. **patch_file**: Shows file path and size change (+/- bytes)
+4. **run_bash**: Shows the command (truncated if > 60 chars)
+5. **write_file**: Shows file path and formatted size (bytes/KB/MB)
+
+**Code Changes**:
+- Updated 5 display message locations in `handleConversation()`
+- Added size formatting for write_file (bytes → KB → MB)
+- Added command truncation for long bash commands
+- Net change: +921 bytes in main.go
+
+**Impact**:
+- Users can see exactly what's happening at a glance
+- Better transparency without being verbose
+- Helps with debugging when operations take time
+- All tests still pass (13 passed, 3 skipped)
+
+**Example Output from Tests**:
+```
+→ Listing files: . (current directory)
+→ Reading file: test_read_file.txt
+→ Running bash: gh api user
+→ Writing file: test_write_integration_new.txt (51 bytes)
+→ Writing file: progress.md (42.5 KB)
 ```
 
-**In scripts**:
-```bash
-#!/bin/bash
-# deploy.sh
+### Better Error Handling & Messages (Added 2026-02-10)
 
-echo "Running tests..."
-clyde "Run all tests and create a summary" > test-summary.txt
+**Priority #4 Completed**: Comprehensive error handling improvements with helpful, context-aware error messages.
 
-if [ $? -eq 0 ]; then
-    echo "Tests passed! Deploying..."
-    # deployment steps...
-else
-    echo "Tests failed. See test-summary.txt"
-    exit 1
-fi
+**Problem**: Error messages were too generic and didn't help users understand what went wrong or how to fix it:
+```
+BAD:  "failed to list files: exit status 2"
+BAD:  "failed to read file: no such file"
+BAD:  "old_text not found in file"
+BAD:  "command failed: exit status 127"
 ```
 
-**Benefits**:
-- ✅ Automation-friendly (scripts, CI/CD)
-- ✅ Quick one-off tasks without REPL
-- ✅ Composable with Unix tools (pipes, redirection)
-- ✅ Consistent with Claude Code UX
-- ✅ Zero breaking changes (REPL still default)
-
-**Testing Strategy**:
-1. Unit tests for argument parsing
-2. Unit tests for prompt reading (file, stdin, args)
-3. Integration tests for CLI mode execution
-4. Test error cases (missing file, empty prompt, API errors)
-5. Test output redirection scenarios
-6. Test exit codes
-
-**Documentation Updates**:
-- README.md: Add "CLI Mode" section with examples
-- Show automation use cases
-- Explain stdout/stderr separation
-- Document exit codes
-
-**Implementation Tasks**:
-1. Add argument parsing logic (30 mins)
-2. Implement prompt reading (file, stdin, args) (30 mins)
-3. Split main() into runCLIMode() and runREPLMode() (30 mins)
-4. Update output handling (progress to stderr) (15 mins)
-5. Add error handling and exit codes (30 mins)
-6. Write tests (1 hour)
-7. Update documentation (30 mins)
-
-**Estimated time**: 3-4 hours
-
-**Priority**: HIGH - Frequently requested, enables automation workflows
-
-**Comparison with Claude Code**:
-Claude Code has `-p` flag for non-interactive mode:
-```bash
-claude -p "your prompt here"
-```
-
-Our approach:
-- Simpler: no flag needed for direct string
-- `-f` for file input (clear and explicit)
-- Stdin support via pipe detection (automatic)
-- Same core behavior: execute and exit
+**Solution**: Enhanced all tool execution functions with detailed, helpful error messages that:
+1. Explain what went wrong clearly
+2. Provide context about the error
+3. Suggest concrete steps to fix the problem
+4. Include examples where helpful
 
 **Philosophy**:
-CLI mode makes clyde a true Unix citizen. It can be piped, redirected, scripted, and automated. The REPL is great for exploration, but automation needs direct execution.
+Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
 
-**Future Enhancements** (not in initial scope):
-- `--max-turns` flag to limit conversation length
-- `--output` flag for structured output (JSON)
-- `--quiet` flag to suppress progress messages
-- `--timeout` flag for time limits
-- `--continue` flag to resume previous session
+## Current Status (2026-02-23)
+
+**Latest Update**: System Prompt Enhancement - TMUX for Background Processes & Subagents ✅
+
+**Active Tools**: 11 ✨
+1. `list_files` - Directory listings with helpful error messages
+2. `read_file` - Read file contents with size warnings and validation
+3. `patch_file` - Find/replace edits with detailed guidance for common issues
+4. `write_file` - Create/replace files with safety warnings for large files
+5. `run_bash` - Execute any bash command with exit code explanations
+6. `grep` - Search for patterns across multiple files with context
+7. `glob` - Find files matching patterns (fuzzy file finding)
+8. `multi_patch` - Coordinated multi-file edits with automatic rollback
+9. `web_search` - Search the internet using Brave Search API
+10. `browse` - Fetch and read web pages with optional AI extraction
+11. `include_file` - Include images in conversation for vision analysis
+
+**Test Suite**: Clean and comprehensive
+- 17 unit tests passing (no API key required)
+- 10 integration tests skipped (require API keys for Claude/Brave APIs)
+- Total runtime: ~17 seconds (unit tests only)
+- Full integration coverage for all tools (when API keys present)
+- No flaky tests, no deprecated tests
+- Zero build errors or test compilation issues
+
+**Completed Priorities**: 19 / 19 from original todos.md ✨✨✨
+
+**ALL MAIN PRIORITIES COMPLETE!** 🎉🎉🎉
+
+## Design Philosophy & Principles
+
+### Memory Model (Established 2026-02-10)
+**Decision**: Do NOT implement traditional message history persistence.
+
+**Philosophy**: Message history compaction is the wrong abstraction for coding agents. Curated documentation > raw chat logs.
+
+### Error Handling Philosophy (Established 2026-02-10)
+- Helpful error messages > raw debug output
+- Suggest solutions, not just report failures
+- Fail fast with clear guidance
+- Automatic error recovery (no user confirmation required)
+
+### Tool Design Philosophy (Established 2026-02-10)
+- Each tool does one thing well
+- Compose tools for complex operations
+- Clear feedback for all operations
+- **Lean into standard tools**: Use bash for git, gh CLI, etc. rather than custom wrappers
+
+## TUI Spec Written
+
+Created `docs/tui.md` — a comprehensive terminal UI specification covering:
+
+- **5 log levels** (silent → quiet → normal → verbose → debug) controlling display verbosity
+- **Color scheme** with theme-aware ANSI colors (bold cyan for user, bold green for agent, bold yellow for tools, dim for secondary content, dim magenta for thinking, red for debug)
+- **Thinking traces** — enable Claude API `thinking` parameter by default; display at normal level (truncated) and above
+- **Tool output bodies** — shown at normal level and above with newline separation (not just the `→` progress line)
+- **Truncation rules** — 25 lines for tool output, 50 for thinking, 2000 chars/line; all removed at verbose
+- **Loading spinner** — braille dots (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`), 2 frames/symbol at 60fps (~30 symbols/sec), on second-to-last terminal line
+- **Prompt line** — git branch + dirty indicator + context window % + `You:` label
+- **Text input** — cursor movement, multiline support, no length limit (replacing raw `bufio.NewReader`)
+- **Cache display** — moved to verbose/debug only, shown as fraction; context % on prompt line instead
+
+## Compaction Spec Written
+
+Created `docs/compaction.md` — a pre-spec discussion document covering agentic multi-step compaction, smarter tool-result summarization, git-centric state tracking, preserving the initial user message verbatim, a history search tool, feeding recent context into the summarizer, and automatic trigger strategy.
+
+---
+
+# TODO — User Stories
+
+Stories are ordered by implementation priority. TUI stories come first (they improve the daily experience for every session), followed by compaction stories (which unlock reliable long-running autonomous missions).
+
+---
+
+## TUI Stories
+
+Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6), then the heaviest feature work last (7–8).
+
+---
+
+### TUI-1: Log Level Infrastructure & CLI Flags
+
+**As a** user running Clyde in CLI or TUI mode,
+**I want** to control the verbosity of output via `--silent`, `-q`/`--quiet`, `-v`/`--verbose`, and `--debug` flags,
+**so that** I see exactly the amount of detail I need for my workflow (scripting, normal use, debugging).
+
+**Depends on**: nothing (foundation)
+
+**Acceptance Criteria**:
+- [ ] A `LogLevel` type is defined with five values: Silent, Quiet, Normal, Verbose, Debug.
+- [ ] CLI argument parsing recognizes `--silent`, `-q`/`--quiet`, (no flag = Normal), `-v`/`--verbose`, `--debug`.
+- [ ] The parsed log level is threaded into the agent via `AgentOption` (e.g., `WithLogLevel`).
+- [ ] The progress callback receives the log level and can gate output accordingly.
+- [ ] At Silent level, nothing is printed to stdout or stderr (side-effects only).
+- [ ] At Quiet level, only `→` tool progress lines and the final agent response are printed.
+- [ ] At Normal level, tool output bodies and thinking traces are also printed (truncated per TUI-7).
+- [ ] At Verbose level, all truncation is removed.
+- [ ] At Debug level, additional harness diagnostics (token counts, latency, request/response sizes) are printed.
+- [ ] Existing REPL and CLI mode tests still pass.
+- [ ] New unit tests verify flag parsing for all five levels.
+- [ ] New unit tests verify that the correct content is emitted (or suppressed) at each level, using a captured output buffer.
+
+---
+
+### TUI-2: Color Scheme & Themed Output
+
+**As a** user with either a dark or light terminal theme,
+**I want** conversation output to be color-coded (bold cyan for `You:`, bold green for `Claude:`, bold yellow for tool labels, dim for secondary content, dim magenta for thinking, red for debug),
+**so that** I can visually scan a long session and immediately distinguish user input, agent responses, tool activity, thinking traces, and debug information.
+
+**Depends on**: nothing (foundation)
+
+**Acceptance Criteria**:
+- [ ] A `colors` or `style` package is created with helper functions for each semantic style (e.g., `UserLabel()`, `AgentLabel()`, `ToolLabel()`, `Dim()`, `ThinkingStyle()`, `DebugStyle()`).
+- [ ] Helpers emit ANSI escape codes. They use named ANSI colors (cyan, green, yellow, magenta, red) and the dim/faint attribute — never hardcoded RGB or black/white.
+- [ ] A `NO_COLOR` or `TERM=dumb` environment variable disables all color output (standard convention).
+- [ ] The `You:` label is rendered in bold cyan; user input text is default foreground.
+- [ ] The `Claude:` label is rendered in bold green; agent response text is default foreground.
+- [ ] Tool `→` progress lines use bold yellow for the tool name portion.
+- [ ] Tool output bodies are rendered in dim/faint.
+- [ ] Thinking trace text is rendered in dim magenta, prefixed with `💭`.
+- [ ] Debug-level lines are rendered in red.
+- [ ] Body text (user input, agent response) is always default foreground for readability.
+- [ ] Unit tests verify that styled output contains expected ANSI codes when color is enabled, and contains no ANSI codes when `NO_COLOR` is set.
+- [ ] Manual visual verification on at least one dark and one light terminal theme (documented in PR description).
+
+---
+
+### TUI-3: Loading Spinner
+
+**As a** user in TUI/REPL mode,
+**I want** a smooth animated spinner on the second-to-last terminal line while the agent is working,
+**so that** I have visual feedback that Clyde is processing and I can see what operation is in progress.
+
+**Depends on**: TUI-1 (log level gating)
+
+**Acceptance Criteria**:
+- [ ] A `spinner` package is created that renders braille dot animation (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`).
+- [ ] The spinner runs at 1/60s frame delay with 2 frames per symbol (~30 symbols/second).
+- [ ] The spinner occupies the second-to-last terminal line and is redrawn in place (ANSI cursor control).
+- [ ] The spinner line shows the current operation text (e.g., `⠹ Patching file: agent.go...`).
+- [ ] When an operation completes, the spinner clears and the permanent `→` progress line is appended to scrollback above.
+- [ ] **Persistence rule**: any text shown on the spinner line also appears in the permanent scrollback log — the spinner is a live preview, not a replacement.
+- [ ] The spinner does not appear in CLI mode (progress goes directly to stderr as permanent lines).
+- [ ] The spinner does not appear at Silent log level.
+- [ ] The spinner integrates cleanly with the input line below it (no visual glitches or overwriting).
+- [ ] Unit tests verify spinner frame sequence and timing.
+- [ ] Unit tests verify spinner start/stop lifecycle (content appears and clears correctly).
+- [ ] Manual verification that the spinner animates smoothly and doesn't corrupt the terminal (documented in PR).
+
+---
+
+### TUI-4: Prompt Line (Git Branch, Context %, Input Label)
+
+**As a** user in REPL mode,
+**I want** the input prompt to show the current git branch (with dirty indicator), context window usage percentage, and the `You:` label,
+**so that** I always know my repo state and how much context capacity remains without checking manually.
+
+**Depends on**: TUI-2 (bold cyan for `You:` label)
+
+**Acceptance Criteria**:
+- [ ] The prompt line format is: `<branch><dirty> <context%> You: ` (e.g., `main* 12% You: `).
+- [ ] Git branch is obtained via `git rev-parse --abbrev-ref HEAD`. If detached HEAD, show short hash. If not a git repo, omit git info entirely.
+- [ ] Dirty indicator (`*`) is present when `git status --porcelain` returns non-empty output.
+- [ ] Context window usage is calculated as `(total_input_tokens_last_turn / model_context_window_size) * 100` and displayed as a compact integer percentage (e.g., `12%`).
+- [ ] The `You:` label is styled in bold cyan per TUI-2.
+- [ ] Git info is refreshed on each prompt render.
+- [ ] In CLI mode, there is no prompt line.
+- [ ] Unit tests verify prompt formatting for: clean repo, dirty repo, detached HEAD, non-git directory, various context percentages (0%, 50%, 99%).
+- [ ] Unit tests verify git info is omitted when not in a git repo.
+
+---
+
+### TUI-5: Rich Text Input (Cursor Movement, Multiline, History)
+
+**As a** user in REPL mode,
+**I want** full readline-like input editing with cursor movement, multiline input, and history recall,
+**so that** I can efficiently compose and edit prompts without the limitations of raw `bufio.NewReader`.
+
+**Depends on**: TUI-3, TUI-4 (must integrate with spinner line and prompt line)
+
+**Acceptance Criteria**:
+- [ ] Replace `bufio.NewReader(os.Stdin)` with a Go terminal input library (e.g., `chzyer/readline`, `peterh/liner`, or `charmbracelet/bubbletea`).
+- [ ] Left/right arrow keys move the cursor within the input line.
+- [ ] Home/End keys jump to start/end of input.
+- [ ] Enter submits the input.
+- [ ] A key combination (Shift+Enter, Alt+Enter, or Ctrl+J) inserts a newline for multiline input.
+- [ ] Up/down arrow keys recall previous inputs (session-level history).
+- [ ] There is no artificial length limit on input.
+- [ ] The input widget integrates with the spinner line above it without visual conflicts.
+- [ ] The chosen library is documented in `progress.md` with rationale for the selection.
+- [ ] Unit tests verify that input submission, multiline insertion, and history recall work correctly (may require mock terminal or integration-style tests).
+- [ ] Existing REPL tests and CLI mode tests still pass (CLI mode does not use the input widget).
+
+---
+
+### TUI-6: Cache Display Rework (Verbose/Debug Only)
+
+**As a** user,
+**I want** cache hit information to only appear at Verbose and Debug levels (not cluttering Normal output),
+**so that** my terminal stays clean during normal use while I can still inspect caching behavior when debugging.
+
+**Depends on**: TUI-1 (log levels), TUI-2 (colors), TUI-4 (context % on prompt line)
+
+**Acceptance Criteria**:
+- [ ] The current `💾 Cache hit: 3715 tokens (100% of input)` message is suppressed at Silent, Quiet, and Normal levels.
+- [ ] At Verbose level, cache info is displayed as a token fraction: `💾 Cache: 3715/4102 tokens`.
+- [ ] At Debug level, cache info includes additional detail: `💾 Cache: 3715/4102 tokens | Creation: 387 tokens | Context: 12% (4102/128000)`.
+- [ ] The context window percentage is surfaced on the prompt line (TUI-4), replacing the cache message as the primary "how full is my context?" indicator at Normal level.
+- [ ] Unit tests verify cache display format at Verbose and Debug levels.
+- [ ] Unit tests verify cache display is suppressed at Normal, Quiet, and Silent levels.
+- [ ] Existing cache tests continue to pass.
+
+---
+
+### TUI-7: Thinking Traces — API Integration, Truncation & Display
+
+**As a** user of Clyde,
+**I want** the agent to request and display Claude's thinking traces by default, truncated to reasonable limits at Normal verbosity,
+**so that** I can understand *why* the agent is making decisions without my terminal being flooded with huge thinking blocks.
+
+**Depends on**: TUI-1 (log levels), TUI-2 (dim magenta styling)
+
+This story delivers the truncation engine *and* thinking traces together as one user-visible feature. The truncation functions (line limits, character limits, verbose bypass) are built here and reused by TUI-8 (tool output bodies).
+
+**Acceptance Criteria — Truncation Engine**:
+- [ ] A `truncate` package or set of functions is created with configurable line and character limits.
+- [ ] Thinking traces are truncated to 50 lines at Normal level, with `... (N more lines)` appended.
+- [ ] Tool output bodies are truncated to 25 lines at Normal level, with `... (N more lines)` appended. (Exercised in TUI-8, but the function is built and unit-tested here.)
+- [ ] Any single line exceeding 2000 characters is truncated with `...` appended.
+- [ ] At Verbose and Debug levels, all truncation is disabled (functions pass through unmodified).
+- [ ] Single-line bash commands and search queries are **never** truncated at Normal level (the existing 60-char and 50-char truncation in display functions is removed).
+- [ ] Multi-line bash commands follow the standard 25-line truncation.
+- [ ] Unit tests verify truncation at exact boundary conditions (24 lines → no truncation, 25 lines → no truncation, 26 lines → truncated to 25 + overflow message).
+- [ ] Unit tests verify character truncation at 2000 chars.
+- [ ] Unit tests verify truncation is bypassed at Verbose level.
+- [ ] Unit tests verify single-line commands are never truncated.
+
+**Acceptance Criteria — Thinking Traces**:
+- [ ] The `api.Request` struct gains a `Thinking` field (`*ThinkingConfig`) with `Type` ("enabled") and `BudgetTokens` (int).
+- [ ] The `api.Client.Call()` method includes the `thinking` parameter in every request by default, with a configurable `budget_tokens` (default 8192).
+- [ ] `budget_tokens` is configurable via `~/.clyde/config` (e.g., `THINKING_BUDGET_TOKENS=8192`).
+- [ ] A `--no-think` CLI flag disables thinking entirely (omits the parameter from requests).
+- [ ] The `api.Response` correctly parses `thinking` content blocks from Claude's response.
+- [ ] The agent extracts thinking blocks and forwards them via a new `ThinkingCallback` (or extends the existing `ProgressCallback`).
+- [ ] At Normal level: thinking is displayed truncated (50-line limit), in dim magenta, prefixed with `💭`.
+- [ ] At Verbose/Debug: thinking is displayed in full with no truncation.
+- [ ] At Silent/Quiet: thinking is suppressed.
+- [ ] Unit tests verify the `thinking` parameter is included in serialized requests.
+- [ ] Unit tests verify thinking blocks are correctly parsed from mock API responses.
+- [ ] Integration test confirms a real API call returns thinking blocks and they are displayed (truncated at Normal, full at Verbose).
+
+---
+
+### TUI-8: Tool Output Bodies Display
+
+**As a** user of Clyde at Normal verbosity or higher,
+**I want** to see the actual output of tool calls (file listings, grep results, bash output, etc.) displayed below the `→` progress line,
+**so that** I can follow along with what the agent is seeing without having to re-run commands myself.
+
+**Depends on**: TUI-1 (log levels), TUI-2 (dim styling), TUI-7 (truncation engine)
+
+**Acceptance Criteria**:
+- [ ] After each tool execution, the tool's output string is forwarded via callback alongside the progress message.
+- [ ] At Normal level: tool output bodies are displayed in dim text, separated from surrounding content by blank lines above and below, truncated per TUI-7's 25-line limit.
+- [ ] At Verbose/Debug: tool output is displayed in full with no truncation.
+- [ ] At Quiet level: only the `→` progress line is shown; tool output body is suppressed.
+- [ ] At Silent level: nothing is shown.
+- [ ] The agent's callback interface supports both progress messages and tool output bodies (either via a second callback or by distinguishing message types).
+- [ ] Unit tests verify tool output is emitted at Normal/Verbose/Debug and suppressed at Quiet/Silent, using a captured output buffer.
+- [ ] Integration test with a real tool call (e.g., `list_files`) confirms output body appears in the log.
+
+---
+
+## Compaction Stories
+
+---
+
+### CMP-1: Conversation Token Counting & Automatic Compaction Trigger
+
+**As a** user running a long autonomous session,
+**I want** Clyde to automatically detect when the context window is nearly full and trigger compaction,
+**so that** my session continues seamlessly without hitting context limits or crashing.
+
+**Acceptance Criteria**:
+- [ ] A token counting mechanism is implemented that tracks total input tokens from the most recent API response's `usage.input_tokens` field.
+- [ ] A configurable `reserve_tokens` threshold is defined (default ~16,000 tokens), settable via `~/.clyde/config` (`RESERVE_TOKENS=16000`).
+- [ ] Before each API call, the agent checks if `total_input_tokens > (context_window_size - reserve_tokens)`.
+- [ ] When the threshold is exceeded, compaction is triggered automatically before sending the next message.
+- [ ] Compaction produces a summary (initially a stub/simple implementation — detailed summarization is CMP-2).
+- [ ] After compaction, the conversation history is replaced with: system prompt + original user message (verbatim) + compaction summary + recent kept messages.
+- [ ] The agent continues the conversation seamlessly after compaction.
+- [ ] A progress message is displayed: `🗜️ Compacting conversation history...`.
+- [ ] There is no manual `/compact` command — compaction is always automatic.
+- [ ] Unit tests verify trigger fires at the correct threshold.
+- [ ] Unit tests verify the original user message is preserved verbatim after compaction.
+- [ ] Unit tests verify conversation continues successfully after compaction.
+- [ ] Integration test with a real (or mocked) multi-turn conversation that hits the threshold and compacts.
+
+---
+
+### CMP-2: Agentic Multi-Step Compaction Workflow
+
+**As a** long-running autonomous agent,
+**I want** compaction to be performed as a multi-step agentic workflow (not a single LLM call),
+**so that** the resulting handoff document is high-fidelity, structured, and reads like a developer status update — not a lossy summary.
+
+**Acceptance Criteria**:
+- [ ] Compaction is implemented as an internal multi-phase workflow with distinct steps:
+  1. **Goal/constraint extraction**: Identify the original mission, constraints, and acceptance criteria.
+  2. **Decision capture**: Extract key decisions made, alternatives considered, and rationale.
+  3. **File-state analysis**: Summarize current state of modified/created files (referencing git, per CMP-4).
+  4. **Tool-result synthesis**: Summarize significant tool outputs (per CMP-3).
+  5. **Handoff drafting**: Produce a structured Markdown handoff document.
+- [ ] Each phase uses a focused prompt running on the strongest available model with generous token budget.
+- [ ] The final handoff document is structured Markdown with clear sections (Goal, Constraints, Progress, Decisions, Current State, Next Steps, Critical Context).
+- [ ] The handoff document replaces the summarized portion of conversation history.
+- [ ] All intermediate phase outputs are logged internally for debugging (viewable at Debug level).
+- [ ] A progress message is displayed for each phase (e.g., `🗜️ Compaction: extracting decisions...`).
+- [ ] Unit tests verify each phase produces expected output structure from mock inputs.
+- [ ] Unit tests verify the final handoff document contains all required sections.
+- [ ] Integration test with a real multi-turn conversation produces a coherent, readable handoff.
+- [ ] The handoff quality is manually reviewed and documented in the PR (compare to single-call summarization).
+
+---
+
+### CMP-3: Intelligent Tool-Result Summarization
+
+**As a** long-running agent whose conversation contains large tool outputs,
+**I want** oversized tool results to be intelligently summarized (not hard-truncated) during compaction,
+**so that** critical details in the tail of tool outputs are preserved rather than chopped at an arbitrary character limit.
+
+**Acceptance Criteria**:
+- [ ] A configurable size threshold for tool output summarization is defined (default: 2000 characters).
+- [ ] During compaction, any tool output exceeding the threshold is passed to a dedicated LLM summarizer call.
+- [ ] The summarizer receives the original user prompt + the two most recent kept messages as anchoring context.
+- [ ] The summarizer decides what to keep verbatim, what to condense, and what to drop — it does NOT enforce a fixed output length.
+- [ ] The summarized output includes a metadata note: `[Summarized: original N chars → M chars]`.
+- [ ] Under extreme token pressure, the system falls back to hard truncation (configurable fallback).
+- [ ] Tool outputs below the threshold are kept as-is (no unnecessary summarization).
+- [ ] Unit tests verify summarization is triggered only for outputs exceeding the threshold.
+- [ ] Unit tests verify the metadata note is present in summarized outputs.
+- [ ] Unit tests verify fallback to truncation under token pressure.
+- [ ] Integration test with a real large tool output (e.g., a big `grep` result) produces a meaningful summary.
+
+---
+
+### CMP-4: Git-Centric State Tracking
+
+**As a** coding agent operating in a git repository,
+**I want** compaction to reference git state (commit SHAs, branch, status) instead of accumulating raw diffs,
+**so that** the handoff document is always accurate and compact, with git as the single source of truth.
+
+**Acceptance Criteria**:
+- [ ] At each compaction point, the agent captures: current commit SHA, branch name, short commit message (if any), and a one-line "what changed since last compaction" note.
+- [ ] The handoff document's "Current State" section references the commit SHA and lets git handle detailed diffs.
+- [ ] No cumulative raw-diff or modified-files lists are carried forward across compactions (unlike Pi's approach).
+- [ ] A post-compaction hook optionally runs `git status` to verify repo cleanliness, appending warnings if uncommitted changes exist.
+- [ ] If the working directory is not a git repo, this step is skipped gracefully and the handoff notes "not a git repo."
+- [ ] Unit tests verify git state capture produces expected format (SHA, branch, message).
+- [ ] Unit tests verify graceful handling in a non-git directory.
+- [ ] Unit tests verify no raw diffs are accumulated across multiple compaction cycles.
+- [ ] Integration test in a real git repo verifies correct SHA and branch after a compaction.
+
+---
+
+### CMP-5: Preserve Initial User Message Verbatim
+
+**As a** user who provides a detailed mission-statement prompt (like a Jira ticket),
+**I want** the original first message to be preserved verbatim through any number of compactions,
+**so that** the agent never loses sight of the full original spec, even in very long sessions.
+
+**Acceptance Criteria**:
+- [ ] The first user message in any conversation is tagged as `sacred` / `pinned` in the conversation history.
+- [ ] During compaction, the first user message is always placed immediately after the system prompt and before any compaction summary — in full, unmodified.
+- [ ] The first user message is included verbatim in every summarization pass so the handoff document always references the original ask.
+- [ ] The first user message is never truncated, rephrased, or dropped, even under extreme token pressure.
+- [ ] In any "full history" or debug view, the first message is visually marked (e.g., `📌 Original Mission`).
+- [ ] Unit tests verify the first message survives 1, 2, and 5 compaction cycles unchanged.
+- [ ] Unit tests verify the first message appears before the compaction summary in the post-compaction history.
+- [ ] Unit tests verify it is included in the summarizer's input for every compaction phase.
+
+---
+
+### CMP-6: History Search Tool (Agent-Only)
+
+**As a** long-running autonomous agent,
+**I want** a tool to search the full raw conversation log (even content that has been compacted away),
+**so that** I can retrieve specific details from earlier in the session when the handoff summary isn't sufficient.
+
+**Acceptance Criteria**:
+- [ ] The entire conversation is persisted as a flat, plaintext, append-only log file (one entry per turn, with timestamps and role markers).
+- [ ] A new internal tool `search_history` is registered in the tool registry (available to the agent but NOT listed in the user-facing system prompt as a user-invocable tool).
+- [ ] The tool accepts a `query` parameter (string) and an optional `max_results` parameter (int, default 10).
+- [ ] The tool searches the log using `grep`-style pattern matching and returns results with timestamps, turn numbers, and short context snippets.
+- [ ] Results are concise enough that the agent can decide whether to pull full turns back into context.
+- [ ] The tool works correctly before any compaction has occurred (searches current conversation) and after compaction (searches the full historical log).
+- [ ] The log file is stored in a session-specific location (e.g., `~/.clyde/sessions/<session_id>.log`).
+- [ ] Unit tests verify log entries are appended correctly with proper formatting.
+- [ ] Unit tests verify search returns expected results for known patterns.
+- [ ] Unit tests verify search works both pre- and post-compaction.
+- [ ] Integration test with a real multi-turn conversation: compact, then search for a detail from an early turn and verify it is found.
+
+---
+
+### CMP-7: Feed Recent Context into the Summarizer
+
+**As a** long-running agent undergoing compaction,
+**I want** the summarizer to see the messages that will remain in context after compaction,
+**so that** the handoff document is coherent with the kept messages and explicitly bridges any open threads.
+
+**Acceptance Criteria**:
+- [ ] During the multi-step compaction workflow (CMP-2), the last 1–2 full kept turns are included as extra context in every summarization phase.
+- [ ] The final handoff drafter is explicitly instructed to call out any open threads or decisions that bridge the summary and the kept messages.
+- [ ] The extra context is kept small (just enough for continuity) and does not significantly increase summarization token usage.
+- [ ] A configurable flag can disable this behavior for maximum token savings (`COMPACT_INCLUDE_RECENT_CONTEXT=false`).
+- [ ] Unit tests verify recent context is included in summarizer input.
+- [ ] Unit tests verify the flag disables inclusion when set to false.
+- [ ] Integration test verifies the handoff document references or bridges content from the kept messages.

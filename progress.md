@@ -3565,6 +3565,10 @@ Not every problem needs a complex solution. The string-based approach with excel
 
 **Date**: 2026-02-13
 
+## Todos Consolidation (2025-07-10)
+
+Concatenated the full `progress.md` history into `todos.md` and replaced the old completed-task-heavy todo list with user stories derived from `docs/tui.md` and `docs/compaction.md`. TUI stories (TUI-1 through TUI-9) are ordered first; compaction stories (CMP-1 through CMP-7) follow. Each story is a complete shippable unit of work with acceptance criteria that include testing.
+
 ## TUI Spec Written
 
 Created `docs/tui.md` — a comprehensive terminal UI specification covering:
