@@ -3565,6 +3565,26 @@ Not every problem needs a complex solution. The string-based approach with excel
 
 **Date**: 2026-02-13
 
+## TUI Spec Written
+
+Created `docs/tui.md` — a comprehensive terminal UI specification covering:
+
+- **5 log levels** (silent → quiet → normal → verbose → debug) controlling display verbosity
+- **Color scheme** with theme-aware ANSI colors (bold cyan for user, bold green for agent, bold yellow for tools, dim for secondary content, dim magenta for thinking, red for debug)
+- **Thinking traces** — enable Claude API `thinking` parameter by default; display at normal level (truncated) and above
+- **Tool output bodies** — shown at normal level and above with newline separation (not just the `→` progress line)
+- **Truncation rules** — 25 lines for tool output, 50 for thinking, 2000 chars/line; all removed at verbose
+- **Loading spinner** — braille dots (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`), 2 frames/symbol at 60fps (~30 symbols/sec), on second-to-last terminal line
+- **Prompt line** — git branch + dirty indicator + context window % + `You:` label
+- **Text input** — cursor movement, multiline support, no length limit (replacing raw `bufio.NewReader`)
+- **Cache display** — moved to verbose/debug only, shown as fraction; context % on prompt line instead
+
+Key design principle: CLI and TUI output should be nearly identical (scrolling log). Redraws only in input line and spinner line. Spinner content must be mirrored in permanent log.
+
+Spinner prototype in `spinner_proto.py` — selected braille set at 1/60s frame delay, 2 frames/symbol.
+
+**Date**: 2025-07-10
+
 ## Future Enhancements (Not Implemented)
 - Streaming responses for faster feedback
 - Configuration file for model selection and parameters
