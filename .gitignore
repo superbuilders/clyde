@@ -1,5 +1,7 @@
 # Binaries
 clyde
+audit/audit
+audit-cli
 *.exe
 *.dll
 *.so
