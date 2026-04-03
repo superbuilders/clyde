@@ -970,9 +970,91 @@ Created demo showing all error message improvements:
 **Philosophy**:
 Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
 
-## Current Status (2026-04-02)
+## Current Status (2026-04-03)
 
-**Latest Update**: TUI-4: Prompt Line (Git Branch, Context %, Input Label) ✅
+**Latest Update**: TUI-5: Rich Text Input (readline-based input widget) ✅
+
+### TUI-5: Rich Text Input (Completed 2026-04-03)
+
+**Story**: Replace basic `bufio.NewReader` with full readline-like input editing in REPL mode.
+
+**Library Choice**: `chzyer/readline` v1.5.1
+
+**Why chzyer/readline**:
+- Pure Go, no CGO dependencies
+- Mature and well-tested (used by many Go CLI tools)
+- Built-in multiline support via examples
+- ANSI-colored prompt support
+- History persistence (file-backed)
+- Custom stdin/stdout/stderr for testing
+- Cursor movement, Home/End, word navigation all built-in
+- Much simpler than charmbracelet/bubbletea (which is a full TUI framework, overkill for a readline)
+- More feature-complete than peterh/liner
+
+**Implementation**:
+
+1. **New `input` package** (`input/input.go`):
+   - `Reader` struct wraps `readline.Instance`
+   - `Config` struct: Prompt, HistoryFile, Stdin/Stdout/Stderr overrides
+   - `New(cfg)`: Creates reader with readline config, session history, 1000-entry limit
+   - `ReadLine()`: Reads single-line or multiline input
+   - `SetPrompt(s)`: Updates prompt (called each iteration for git/context refresh)
+   - `Close()`: Cleanup readline instance
+   - `Stdout()/Stderr()`: Safe writers for output while readline is active
+   - `IsMultiline()/AccumulatedLines()`: Test accessors
+   
+2. **Multiline input via backslash continuation**:
+   - End a line with `\` to continue on the next line
+   - Continuation prompt shows `  > ` (indented)
+   - Final line (no backslash) assembles all lines with `\n`
+   - History saves the assembled multiline block as one entry
+   - Ctrl+C during multiline discards the partial input
+
+3. **History**:
+   - File-backed at `~/.clyde/history` (1000 entry limit)
+   - Manual save (not auto) — saves after full input assembly
+   - Empty/whitespace-only inputs not saved to history
+   - Multiline inputs saved as the assembled block
+   - Up/down arrows recall previous inputs
+
+4. **REPL integration** (`main.go`):
+   - Replaced `bufio.NewReader(os.Stdin)` loop with `input.Reader`
+   - Dynamic prompt via `reader.SetPrompt()` each iteration
+   - Graceful fallback: `runREPLBasicMode()` if readline init fails
+   - Banner updated to show multiline hint
+   - CLI mode completely unaffected (no input widget used)
+
+5. **Capabilities provided by chzyer/readline** (free with the library):
+   - Left/right arrow: cursor movement within line
+   - Home/End: jump to start/end of line
+   - Ctrl+A/Ctrl+E: start/end of line (Emacs bindings)
+   - Ctrl+W: delete word backward
+   - Ctrl+K: kill to end of line
+   - Ctrl+U: kill entire line
+   - Alt+B/Alt+F: word backward/forward
+   - Ctrl+R: reverse history search
+   - No artificial input length limit
+
+**Test Coverage**: 23 tests in `input/input_test.go`:
+- Single-line input, empty line, EOF handling
+- Multiple successive reads
+- Multiline backslash continuation (2-line, 3-line, only-backslash, 20-line)
+- History persistence (saved to file, empty/whitespace excluded, multiline as block)
+- SetPrompt updates, Close idempotency
+- Stdout/Stderr writer accessibility
+- State accessors (IsMultiline, AccumulatedLines)
+- Long input (3000 chars, no truncation)
+- Sequential single + multiline alternation
+
+**Files Changed**:
+- `input/input.go` (new, ~6KB) — readline wrapper
+- `input/input_test.go` (new, ~17KB) — 23 unit tests
+- `main.go` — replaced bufio loop, added fallback, import input package
+- `go.mod` / `go.sum` — added `github.com/chzyer/readline` v1.5.1
+- `todos.md` — marked TUI-5 as done
+- `progress.md` — documented library choice and implementation
+
+**Previous Update**: TUI-4: Prompt Line (Git Branch, Context %, Input Label) ✅
 
 ### TUI-4: Prompt Line (Completed 2026-04-02)
 

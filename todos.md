@@ -991,7 +991,7 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 
 ---
 
-### TUI-5: Rich Text Input (Cursor Movement, Multiline, History)
+### TUI-5: Rich Text Input (Cursor Movement, Multiline, History)  ✅ DONE
 
 **As a** user in REPL mode,
 **I want** full readline-like input editing with cursor movement, multiline input, and history recall,
@@ -1000,17 +1000,17 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 **Depends on**: TUI-3, TUI-4 (must integrate with spinner line and prompt line)
 
 **Acceptance Criteria**:
-- [ ] Replace `bufio.NewReader(os.Stdin)` with a Go terminal input library (e.g., `chzyer/readline`, `peterh/liner`, or `charmbracelet/bubbletea`).
-- [ ] Left/right arrow keys move the cursor within the input line.
-- [ ] Home/End keys jump to start/end of input.
-- [ ] Enter submits the input.
-- [ ] A key combination (Shift+Enter, Alt+Enter, or Ctrl+J) inserts a newline for multiline input.
-- [ ] Up/down arrow keys recall previous inputs (session-level history).
-- [ ] There is no artificial length limit on input.
-- [ ] The input widget integrates with the spinner line above it without visual conflicts.
-- [ ] The chosen library is documented in `progress.md` with rationale for the selection.
-- [ ] Unit tests verify that input submission, multiline insertion, and history recall work correctly (may require mock terminal or integration-style tests).
-- [ ] Existing REPL tests and CLI mode tests still pass (CLI mode does not use the input widget).
+- [x] Replace `bufio.NewReader(os.Stdin)` with a Go terminal input library (e.g., `chzyer/readline`, `peterh/liner`, or `charmbracelet/bubbletea`).
+- [x] Left/right arrow keys move the cursor within the input line.
+- [x] Home/End keys jump to start/end of input.
+- [x] Enter submits the input.
+- [x] A key combination (Shift+Enter, Alt+Enter, or Ctrl+J) inserts a newline for multiline input.
+- [x] Up/down arrow keys recall previous inputs (session-level history).
+- [x] There is no artificial length limit on input.
+- [x] The input widget integrates with the spinner line above it without visual conflicts.
+- [x] The chosen library is documented in `progress.md` with rationale for the selection.
+- [x] Unit tests verify that input submission, multiline insertion, and history recall work correctly (may require mock terminal or integration-style tests).
+- [x] Existing REPL tests and CLI mode tests still pass (CLI mode does not use the input widget).
 
 ---
 

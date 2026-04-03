@@ -11,6 +11,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/agent"
 	"github.com/this-is-alpha-iota/clyde/api"
 	"github.com/this-is-alpha-iota/clyde/config"
+	"github.com/this-is-alpha-iota/clyde/input"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
 	"github.com/this-is-alpha-iota/clyde/prompt"
 	"github.com/this-is-alpha-iota/clyde/prompts"
@@ -185,38 +186,62 @@ func runREPLMode(level loglevel.Level) {
 
 	// Start REPL
 	fmt.Println("Clyde - AI Coding Agent - Type 'exit' or 'quit' to exit")
+	fmt.Println("  Multiline: end a line with \\ to continue on the next line")
 	fmt.Println("==========================================================")
 
-	reader := bufio.NewReader(os.Stdin)
+	// Create rich text input reader (readline-based).
+	// Provides cursor movement, history recall, and multiline input.
+	homeDir, _ := os.UserHomeDir()
+	historyFile := ""
+	if homeDir != "" {
+		historyFile = filepath.Join(homeDir, ".clyde", "history")
+	}
+
+	// Build the initial prompt
+	gitInfo := prompt.GetGitInfo()
+	initialPrompt := "\n" + prompt.FormatPrompt(gitInfo, -1)
+
+	reader, err := input.New(input.Config{
+		Prompt:      initialPrompt,
+		HistoryFile: historyFile,
+	})
+	if err != nil {
+		// Fall back to basic bufio reader if readline fails
+		fmt.Fprintf(os.Stderr, "Warning: Rich input unavailable (%v), using basic input\n", err)
+		runREPLBasicMode(level, apiClient, sp, cfg)
+		return
+	}
+	defer reader.Close()
 
 	// contextPercent starts at -1 (no data yet) until the first API response
 	contextPercent := -1
 
 	for {
-		// Refresh git info on each prompt render
+		// Refresh git info and update prompt on each iteration
 		gitInfo := prompt.GetGitInfo()
-		fmt.Print("\n" + prompt.FormatPrompt(gitInfo, contextPercent))
-		input, err := reader.ReadString('\n')
+		reader.SetPrompt("\n" + prompt.FormatPrompt(gitInfo, contextPercent))
+
+		userInput, err := reader.ReadLine()
 		if err != nil {
 			if err == io.EOF {
 				fmt.Println("\nGoodbye!")
 				break
 			}
-			fmt.Printf("Error reading input: %v\n", err)
+			// ErrInterrupt (Ctrl+C) — just show a new prompt
 			continue
 		}
 
-		input = strings.TrimSpace(input)
-		if input == "" {
+		userInput = strings.TrimSpace(userInput)
+		if userInput == "" {
 			continue
 		}
 
-		if input == "exit" || input == "quit" {
+		if userInput == "exit" || userInput == "quit" {
 			fmt.Println("Goodbye!")
 			break
 		}
 
-		response, _ := agentInstance.HandleMessage(input)
+		response, _ := agentInstance.HandleMessage(userInput)
 
 		// Ensure spinner is stopped before printing the response
 		// (handles edge case where tool emits → but no output body)
@@ -231,6 +256,101 @@ func runREPLMode(level loglevel.Level) {
 		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
 
 		// Update context percentage for next prompt
+		usage := agentInstance.LastUsage()
+		totalInput := usage.InputTokens + usage.CacheReadInputTokens
+		contextPercent = prompt.CalculateContextPercent(totalInput, cfg.ContextWindowSize)
+	}
+}
+
+// runREPLBasicMode is the fallback REPL when readline is unavailable.
+// It uses bufio.NewReader for basic line input without cursor movement
+// or history recall. This ensures Clyde can still run on systems where
+// readline initialization fails.
+func runREPLBasicMode(level loglevel.Level, apiClient *api.Client, sp *spinner.Spinner, cfg *config.Config) {
+	var lastProgressMsg string
+
+	agentInstance := agent.NewAgent(
+		apiClient,
+		prompts.SystemPrompt,
+		agent.WithLogLevel(level),
+		agent.WithSpinnerCallback(func(start bool, message string) {
+			if level == loglevel.Silent {
+				return
+			}
+			if start {
+				sp.Start(message)
+			} else {
+				if sp.IsActive() {
+					sp.Stop()
+				}
+			}
+		}),
+		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
+			switch lvl {
+			case loglevel.Quiet:
+				lastProgressMsg = msg
+				if level != loglevel.Silent {
+					sp.Start(spinner.FormatSpinnerMessage(msg))
+				}
+			case loglevel.Normal:
+				if sp.IsActive() {
+					sp.Stop()
+				}
+				if lastProgressMsg != "" {
+					fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
+					lastProgressMsg = ""
+				}
+				fmt.Println(styleMessage(lvl, msg))
+			default:
+				if sp.IsActive() {
+					sp.Stop()
+					if lastProgressMsg != "" {
+						fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
+						lastProgressMsg = ""
+					}
+				}
+				fmt.Println(styleMessage(lvl, msg))
+			}
+		}),
+	)
+
+	reader := bufio.NewReader(os.Stdin)
+	contextPercent := -1
+
+	for {
+		gitInfo := prompt.GetGitInfo()
+		fmt.Print("\n" + prompt.FormatPrompt(gitInfo, contextPercent))
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				fmt.Println("\nGoodbye!")
+				break
+			}
+			fmt.Printf("Error reading input: %v\n", err)
+			continue
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if line == "exit" || line == "quit" {
+			fmt.Println("Goodbye!")
+			break
+		}
+
+		response, _ := agentInstance.HandleMessage(line)
+
+		if sp.IsActive() {
+			sp.Stop()
+		}
+		if lastProgressMsg != "" {
+			fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
+			lastProgressMsg = ""
+		}
+
+		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
+
 		usage := agentInstance.LastUsage()
 		totalInput := usage.InputTokens + usage.CacheReadInputTokens
 		contextPercent = prompt.CalculateContextPercent(totalInput, cfg.ContextWindowSize)
