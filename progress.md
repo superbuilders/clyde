@@ -972,7 +972,57 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-04-03)
 
-**Latest Update**: TUI-5 bugfix — extra newline on every keystroke ✅
+**Latest Update**: TUI-6: Cache Display Rework ✅
+
+### TUI-6: Cache Display Rework (Completed 2026-04-03)
+
+**Story**: Cache hit info cluttered Normal output. Move to Verbose/Debug only, with the context window % on the prompt line (TUI-4) serving as the primary "how full is my context?" indicator at Normal level.
+
+**Changes Made**:
+
+1. **`agent/agent.go`**:
+   - Added `contextWindowSize int` field to Agent struct
+   - Added `WithContextWindowSize(size int) AgentOption` for configuring context window
+   - Changed cache display from old format (`💾 Cache hit: N tokens (M% of input)`) to:
+     - **Verbose**: `💾 Cache: 3715/4102 tokens` (token fraction)
+     - **Debug**: `💾 Cache: 3715/4102 tokens | Creation: 387 tokens | Context: 2% (4102/200000)` (detailed)
+   - Cache messages suppressed at Silent, Quiet, Normal (already was Verbose threshold)
+   - At Debug level, both Verbose *and* Debug cache lines are emitted (Debug sees everything Verbose sees)
+   - Context percentage in Debug format is clamped to 100% for very large conversations
+   - If contextWindowSize is 0 (not configured), the `Context:` portion is omitted from Debug output
+
+2. **`main.go`**: 
+   - Added `agent.WithContextWindowSize(cfg.ContextWindowSize)` to all three agent creation sites (CLI mode, REPL mode, basic fallback mode)
+
+3. **New test file `tests/cache_display_test.go`** (7 tests, 17 subtests):
+   - `TestCacheDisplaySuppressedAtNormal`: Verifies cache suppressed at Silent/Quiet/Normal (3 subtests)
+   - `TestCacheDisplayVerboseFormat`: Integration test verifying fraction format at Verbose (requires API key)
+   - `TestCacheDisplayDebugFormat`: Integration test verifying detailed format at Debug (requires API key)
+   - `TestCacheDisplayFormatUnit`: Pure unit tests for exact format strings (5 subtests):
+     - `verbose_format`: Verifies `"💾 Cache: 3715/4102 tokens"`
+     - `debug_format_with_context`: Verifies full detail with `Context: 2% (4102/200000)`
+     - `debug_format_without_context_window`: Omits Context when window size is 0
+     - `debug_format_high_usage`: 100% context with 200k/200k tokens
+     - `verbose_format_zero_cache`: No message when CacheReadInputTokens is 0
+   - `TestCacheDisplayLevelGating`: ShouldShow matrix for all 5 levels (5 subtests)
+   - `TestCacheDisplayOldFormatRemoved`: Integration test ensuring "Cache hit:" and "of input" are gone
+   - `TestWithContextWindowSizeOption`: Verifies new agent option (2 subtests)
+
+**Before vs After**:
+```
+# Old format (at Verbose):
+💾 Cache hit: 3715 tokens (100% of input)
+
+# New Verbose format:
+💾 Cache: 3715/4102 tokens
+
+# New Debug format:
+💾 Cache: 3715/4102 tokens | Creation: 387 tokens | Context: 2% (4102/200000)
+```
+
+**Why the change**: At Normal level, users see context window % on the prompt line (TUI-4). The verbose cache hit message was redundant and cluttered. The new formats are more informative (token fraction shows cache vs total) and cleaner.
+
+**Test Results**: All unit tests pass. All existing cache tests pass (including `TestCacheUsageDisplay` which now correctly gets no messages at Normal level). Integration tests would pass with a funded API key.
 
 ### Bug #3: Readline Prompt Newline Causes Scroll on Every Keystroke (Fixed 2026-04-03)
 

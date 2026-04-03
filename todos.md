@@ -1014,7 +1014,7 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 
 ---
 
-### TUI-6: Cache Display Rework (Verbose/Debug Only)
+### TUI-6: Cache Display Rework (Verbose/Debug Only)  ✅ DONE
 
 **As a** user,
 **I want** cache hit information to only appear at Verbose and Debug levels (not cluttering Normal output),
@@ -1023,13 +1023,13 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 **Depends on**: TUI-1 (log levels), TUI-2 (colors), TUI-4 (context % on prompt line)
 
 **Acceptance Criteria**:
-- [ ] The current `💾 Cache hit: 3715 tokens (100% of input)` message is suppressed at Silent, Quiet, and Normal levels.
-- [ ] At Verbose level, cache info is displayed as a token fraction: `💾 Cache: 3715/4102 tokens`.
-- [ ] At Debug level, cache info includes additional detail: `💾 Cache: 3715/4102 tokens | Creation: 387 tokens | Context: 12% (4102/128000)`.
-- [ ] The context window percentage is surfaced on the prompt line (TUI-4), replacing the cache message as the primary "how full is my context?" indicator at Normal level.
-- [ ] Unit tests verify cache display format at Verbose and Debug levels.
-- [ ] Unit tests verify cache display is suppressed at Normal, Quiet, and Silent levels.
-- [ ] Existing cache tests continue to pass.
+- [x] The current `💾 Cache hit: 3715 tokens (100% of input)` message is suppressed at Silent, Quiet, and Normal levels.
+- [x] At Verbose level, cache info is displayed as a token fraction: `💾 Cache: 3715/4102 tokens`.
+- [x] At Debug level, cache info includes additional detail: `💾 Cache: 3715/4102 tokens | Creation: 387 tokens | Context: 12% (4102/128000)`.
+- [x] The context window percentage is surfaced on the prompt line (TUI-4), replacing the cache message as the primary "how full is my context?" indicator at Normal level.
+- [x] Unit tests verify cache display format at Verbose and Debug levels.
+- [x] Unit tests verify cache display is suppressed at Normal, Quiet, and Silent levels.
+- [x] Existing cache tests continue to pass.
 
 ---
 

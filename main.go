@@ -89,6 +89,7 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level) {
 		apiClient,
 		prompts.SystemPrompt,
 		agent.WithLogLevel(level),
+		agent.WithContextWindowSize(cfg.ContextWindowSize),
 		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
 			fmt.Fprintln(os.Stderr, styleMessage(lvl, msg))
 		}),
@@ -136,6 +137,7 @@ func runREPLMode(level loglevel.Level) {
 		apiClient,
 		prompts.SystemPrompt,
 		agent.WithLogLevel(level),
+		agent.WithContextWindowSize(cfg.ContextWindowSize),
 		agent.WithSpinnerCallback(func(start bool, message string) {
 			if level == loglevel.Silent {
 				return
@@ -280,6 +282,7 @@ func runREPLBasicMode(level loglevel.Level, apiClient *api.Client, sp *spinner.S
 		apiClient,
 		prompts.SystemPrompt,
 		agent.WithLogLevel(level),
+		agent.WithContextWindowSize(cfg.ContextWindowSize),
 		agent.WithSpinnerCallback(func(start bool, message string) {
 			if level == loglevel.Silent {
 				return

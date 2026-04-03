@@ -24,14 +24,15 @@ type ErrorCallback func(err error)
 
 // Agent handles conversation and tool execution
 type Agent struct {
-	apiClient        *api.Client
-	systemPrompt     string
-	history          []api.Message
-	logLevel         loglevel.Level
-	progressCallback ProgressCallback
-	spinnerCallback  SpinnerCallback
-	errorCallback    ErrorCallback
-	lastUsage        api.Usage // Token usage from the most recent API response
+	apiClient         *api.Client
+	systemPrompt      string
+	history           []api.Message
+	logLevel          loglevel.Level
+	progressCallback  ProgressCallback
+	spinnerCallback   SpinnerCallback
+	errorCallback     ErrorCallback
+	lastUsage         api.Usage // Token usage from the most recent API response
+	contextWindowSize int       // Model context window size in tokens (for debug display)
 }
 
 // AgentOption is a functional option for configuring an Agent
@@ -63,6 +64,14 @@ func WithSpinnerCallback(cb SpinnerCallback) AgentOption {
 func WithErrorCallback(cb ErrorCallback) AgentOption {
 	return func(a *Agent) {
 		a.errorCallback = cb
+	}
+}
+
+// WithContextWindowSize sets the model's context window size in tokens.
+// This is used for debug-level cache display to show context usage percentage.
+func WithContextWindowSize(size int) AgentOption {
+	return func(a *Agent) {
+		a.contextWindowSize = size
 	}
 }
 
@@ -145,12 +154,32 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 		// Store usage for context tracking
 		a.lastUsage = resp.Usage
 
-		// Display cache hit information if available (Verbose and above)
+		// Display cache information (Verbose and Debug only).
+		// At Normal/Quiet/Silent, cache info is suppressed — the context
+		// window percentage on the prompt line serves as the primary
+		// "how full is my context?" indicator.
 		if resp.Usage.CacheReadInputTokens > 0 {
 			totalInputTokens := resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens
-			cachePercentage := float64(resp.Usage.CacheReadInputTokens) / float64(totalInputTokens) * 100
-			a.emit(loglevel.Verbose, fmt.Sprintf("💾 Cache hit: %d tokens (%.0f%% of input)",
-				resp.Usage.CacheReadInputTokens, cachePercentage))
+
+			// Verbose: token fraction format
+			a.emit(loglevel.Verbose, fmt.Sprintf("💾 Cache: %d/%d tokens",
+				resp.Usage.CacheReadInputTokens, totalInputTokens))
+
+			// Debug: detailed format with creation tokens and context %
+			if a.logLevel.ShouldShow(loglevel.Debug) {
+				detail := fmt.Sprintf("💾 Cache: %d/%d tokens | Creation: %d tokens",
+					resp.Usage.CacheReadInputTokens, totalInputTokens,
+					resp.Usage.CacheCreationInputTokens)
+				if a.contextWindowSize > 0 {
+					pct := (totalInputTokens * 100) / a.contextWindowSize
+					if pct > 100 {
+						pct = 100
+					}
+					detail += fmt.Sprintf(" | Context: %d%% (%d/%d)",
+						pct, totalInputTokens, a.contextWindowSize)
+				}
+				a.emit(loglevel.Debug, detail)
+			}
 		}
 
 		// Display debug diagnostics (Debug only)
