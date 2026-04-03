@@ -972,7 +972,77 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-04-02)
 
-**Latest Update**: TUI-1: Log Level Infrastructure & CLI Flags ✅
+**Latest Update**: TUI-2: Color Scheme & Themed Output ✅
+
+### TUI-2: Color Scheme & Themed Output (Completed 2026-04-02)
+
+**Story**: Color-coded terminal output with semantic styles for each element type (user, agent, tools, thinking, debug), respecting NO_COLOR/TERM=dumb conventions.
+
+**Implementation**:
+
+1. **New `style` package** (`style/style.go`):
+   - 6 semantic style helpers: `UserLabel()` (bold cyan), `AgentLabel()` (bold green), `ToolLabel()` (bold yellow), `Dim()` (faint), `ThinkingStyle()` (dim magenta), `DebugStyle()` (red)
+   - Compound formatters: `FormatUserPrompt()`, `FormatAgentPrefix()`, `FormatToolProgress()`, `FormatThinking()`, `FormatDebug()`, `FormatDim()`
+   - `IsColorEnabled()` with cached detection — respects `NO_COLOR` (any value, per no-color.org) and `TERM=dumb`
+   - `ResetColorCache()` for testing
+   - Uses only named ANSI colors and dim/faint attribute — no hardcoded RGB or black/white
+   - `FormatToolProgress()` intelligently splits "→ Action: detail" — action part in bold yellow, detail in default foreground
+
+2. **main.go integration**:
+   - REPL prompt: `style.FormatUserPrompt()` (bold cyan "You: ")
+   - REPL response: `style.FormatAgentPrefix()` (bold green "Claude: ")
+   - New `styleMessage(level, msg)` function routes messages by log level:
+     - `Quiet` → `FormatToolProgress()` (bold yellow tool label)
+     - `Normal` → `FormatDim()` (faint tool output bodies)
+     - `Debug` → `FormatDebug()` (red)
+     - `Verbose` and others → unstyled
+   - Both CLI and REPL progress callbacks use `styleMessage()`
+
+3. **Comprehensive tests**:
+   - `style/style_test.go`: 40 tests covering:
+     - Color detection: default, NO_COLOR (set, empty), TERM=dumb, TERM=other, caching, cache reset
+     - All 6 helpers with color enabled: ANSI code verification, text preservation
+     - All 6 helpers with NO_COLOR: zero ANSI codes, exact text passthrough
+     - All 6 helpers with TERM=dumb: same as NO_COLOR
+     - Compound formatters (with/without color): FormatUserPrompt, FormatAgentPrefix, FormatToolProgress, FormatThinking, FormatDebug, FormatDim
+     - Edge cases: empty strings, multiline text, pre-existing ANSI codes
+     - FormatToolProgress edge cases: empty, just arrow, no colon, multiple colons, non-arrow prefix
+     - Exact ANSI code values for each style
+     - Body text readability: user input and agent response are default foreground
+   - `tests/style_test.go`: 11 tests covering integration:
+     - styleMessage routing for Quiet/Normal/Debug/Verbose levels
+     - NO_COLOR disabling across all levels
+     - REPL prompt and response formatting
+     - Thinking and dim format verification
+     - CLI binary color output (builds binary, tests NO_COLOR and TERM=dumb)
+
+**Design Decisions**:
+- Style is applied at the display layer (main.go callbacks), not in the agent — keeps agent output semantic
+- Log level serves as message type proxy (Quiet=progress, Normal=output, Debug=diagnostics)
+- Used `sync.Once` for color detection caching — thread-safe, pay-once
+- NO_COLOR checks for env var *presence* (not value), per https://no-color.org/
+- Named ANSI colors only — works on both dark and light themes
+
+**Test Results**:
+```
+=== style package (40 tests) ===
+All PASS — color detection, ANSI codes, NO_COLOR, TERM=dumb, compound formatters, edge cases
+
+=== tests/ integration (11 new tests) ===  
+TestStyleMessage_ToolProgress      PASS (6 subtests)
+TestStyleMessage_ToolOutput        PASS
+TestStyleMessage_Debug             PASS
+TestStyleMessage_Verbose           PASS
+TestStyleMessage_NoColor           PASS (4 subtests)
+TestREPLPromptFormatting           PASS
+TestREPLResponseFormatting         PASS
+TestREPLPromptFormatting_NoColor   PASS
+TestThinkingFormat                 PASS
+TestDimFormat                      PASS
+TestCLIBinaryColorOutput           PASS (2 subtests)
+```
+
+---
 
 ### TUI-1: Log Level Infrastructure & CLI Flags (Completed 2026-04-02)
 

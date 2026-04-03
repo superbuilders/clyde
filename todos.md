@@ -922,7 +922,7 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 
 ---
 
-### TUI-2: Color Scheme & Themed Output
+### TUI-2: Color Scheme & Themed Output  ✅ DONE
 
 **As a** user with either a dark or light terminal theme,
 **I want** conversation output to be color-coded (bold cyan for `You:`, bold green for `Claude:`, bold yellow for tool labels, dim for secondary content, dim magenta for thinking, red for debug),
@@ -931,18 +931,18 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 **Depends on**: nothing (foundation)
 
 **Acceptance Criteria**:
-- [ ] A `colors` or `style` package is created with helper functions for each semantic style (e.g., `UserLabel()`, `AgentLabel()`, `ToolLabel()`, `Dim()`, `ThinkingStyle()`, `DebugStyle()`).
-- [ ] Helpers emit ANSI escape codes. They use named ANSI colors (cyan, green, yellow, magenta, red) and the dim/faint attribute — never hardcoded RGB or black/white.
-- [ ] A `NO_COLOR` or `TERM=dumb` environment variable disables all color output (standard convention).
-- [ ] The `You:` label is rendered in bold cyan; user input text is default foreground.
-- [ ] The `Claude:` label is rendered in bold green; agent response text is default foreground.
-- [ ] Tool `→` progress lines use bold yellow for the tool name portion.
-- [ ] Tool output bodies are rendered in dim/faint.
-- [ ] Thinking trace text is rendered in dim magenta, prefixed with `💭`.
-- [ ] Debug-level lines are rendered in red.
-- [ ] Body text (user input, agent response) is always default foreground for readability.
-- [ ] Unit tests verify that styled output contains expected ANSI codes when color is enabled, and contains no ANSI codes when `NO_COLOR` is set.
-- [ ] Manual visual verification on at least one dark and one light terminal theme (documented in PR description).
+- [x] A `colors` or `style` package is created with helper functions for each semantic style (e.g., `UserLabel()`, `AgentLabel()`, `ToolLabel()`, `Dim()`, `ThinkingStyle()`, `DebugStyle()`).
+- [x] Helpers emit ANSI escape codes. They use named ANSI colors (cyan, green, yellow, magenta, red) and the dim/faint attribute — never hardcoded RGB or black/white.
+- [x] A `NO_COLOR` or `TERM=dumb` environment variable disables all color output (standard convention).
+- [x] The `You:` label is rendered in bold cyan; user input text is default foreground.
+- [x] The `Claude:` label is rendered in bold green; agent response text is default foreground.
+- [x] Tool `→` progress lines use bold yellow for the tool name portion.
+- [x] Tool output bodies are rendered in dim/faint.
+- [x] Thinking trace text is rendered in dim magenta, prefixed with `💭`.
+- [x] Debug-level lines are rendered in red.
+- [x] Body text (user input, agent response) is always default foreground for readability.
+- [x] Unit tests verify that styled output contains expected ANSI codes when color is enabled, and contains no ANSI codes when `NO_COLOR` is set.
+- [x] Manual visual verification on at least one dark and one light terminal theme (documented in PR description).
 
 ---
 

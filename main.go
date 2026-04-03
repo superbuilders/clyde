@@ -13,6 +13,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/config"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
 	"github.com/this-is-alpha-iota/clyde/prompts"
+	"github.com/this-is-alpha-iota/clyde/style"
 	_ "github.com/this-is-alpha-iota/clyde/tools" // Import tools to register them
 )
 
@@ -85,8 +86,8 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level) {
 		apiClient,
 		prompts.SystemPrompt,
 		agent.WithLogLevel(level),
-		agent.WithProgressCallback(func(_ loglevel.Level, msg string) {
-			fmt.Fprintln(os.Stderr, msg) // Print progress to stderr
+		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
+			fmt.Fprintln(os.Stderr, styleMessage(lvl, msg))
 		}),
 	)
 
@@ -122,8 +123,8 @@ func runREPLMode(level loglevel.Level) {
 		apiClient,
 		prompts.SystemPrompt,
 		agent.WithLogLevel(level),
-		agent.WithProgressCallback(func(_ loglevel.Level, msg string) {
-			fmt.Println(msg) // REPL prints progress to stdout
+		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
+			fmt.Println(styleMessage(lvl, msg))
 		}),
 	)
 
@@ -134,7 +135,7 @@ func runREPLMode(level loglevel.Level) {
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
-		fmt.Print("\nYou: ")
+		fmt.Print("\n" + style.FormatUserPrompt())
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
@@ -156,7 +157,30 @@ func runREPLMode(level loglevel.Level) {
 		}
 
 		response, _ := agentInstance.HandleMessage(input)
-		fmt.Printf("\nClaude: %s\n", response)
+		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
+	}
+}
+
+// styleMessage applies color styling to a progress message based on its log level.
+// Messages emitted at different levels carry different semantic meaning:
+//   - Quiet:   tool → progress lines (bold yellow tool label)
+//   - Normal:  tool output bodies (dim/faint)
+//   - Verbose: cache/diagnostic info (default)
+//   - Debug:   harness diagnostics (red)
+func styleMessage(level loglevel.Level, msg string) string {
+	switch level {
+	case loglevel.Quiet:
+		// Tool progress lines: "→ Reading file: main.go"
+		return style.FormatToolProgress(msg)
+	case loglevel.Normal:
+		// Tool output bodies: secondary content
+		return style.FormatDim(msg)
+	case loglevel.Debug:
+		// Debug diagnostics
+		return style.FormatDebug(msg)
+	default:
+		// Verbose and others: no special styling
+		return msg
 	}
 }
 
