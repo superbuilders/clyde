@@ -970,6 +970,74 @@ Created demo showing all error message improvements:
 **Philosophy**:
 Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
 
+## Current Status (2026-04-02)
+
+**Latest Update**: TUI-1: Log Level Infrastructure & CLI Flags ✅
+
+### TUI-1: Log Level Infrastructure & CLI Flags (Completed 2026-04-02)
+
+**Story**: Control verbosity via `--silent`, `-q`/`--quiet`, `-v`/`--verbose`, `--debug` flags.
+
+**Implementation**:
+
+1. **New `loglevel` package** (`loglevel/loglevel.go`):
+   - `Level` type with 5 values: `Silent`, `Quiet`, `Normal`, `Verbose`, `Debug`
+   - `ShouldShow(threshold)` method for gating output
+   - `ParseFlags(args)` function that strips verbosity flags and returns remaining args
+   - `String()` method for human-readable level names
+   - Last-flag-wins semantics when multiple flags provided
+
+2. **Agent integration** (`agent/agent.go`):
+   - New `WithLogLevel(level)` `AgentOption` for setting log level
+   - `LogLevel()` getter method
+   - Internal `emit(threshold, message)` helper that gates output
+   - `ProgressCallback` signature changed: `func(level loglevel.Level, message string)`
+   - Cache hit info → emitted at `Verbose` threshold (not cluttering Normal)
+   - Token diagnostics → emitted at `Debug` threshold
+   - Tool `→` progress lines → emitted at `Quiet` threshold
+   - Tool output bodies → emitted at `Normal` threshold
+
+3. **CLI integration** (`main.go`):
+   - `loglevel.ParseFlags()` called before mode detection
+   - Log level threaded into agent via `WithLogLevel(level)`
+   - Flags stripped from args so they don't become prompt text
+
+4. **Comprehensive tests**:
+   - `loglevel/loglevel_test.go`: 5 test functions, 37 subtests
+     - Level string representation, ordering, ShouldShow matrix, flag parsing, nil args
+   - `tests/loglevel_test.go`: 7 test functions, 19+ subtests
+     - Default level, WithOption wiring, gating, parse+thread integration
+     - CLI flag stripping, -f flag preservation, binary-level flag parsing
+
+**Breaking Change**: `ProgressCallback` signature changed from `func(string)` to `func(loglevel.Level, string)`. Updated `cache_test.go` to match.
+
+**Design Decisions**:
+- Flag parsing is a simple loop (no external library) — matches minimal-deps philosophy
+- Flags can appear anywhere in args (position-independent), making UX natural
+- Multiple flags = last wins (not an error), keeping it simple
+- `-f` flag is NOT consumed by log level parser (correctly passed through)
+
+**Test Results**:
+```
+=== loglevel package (5 tests, 37 subtests) ===
+TestLevelString           PASS (6 subtests)
+TestLevelOrdering         PASS
+TestShouldShow            PASS (21 subtests)
+TestParseFlags            PASS (14 subtests)
+TestParseFlagsNilArgs     PASS
+
+=== tests/ package (7 new tests) ===
+TestLogLevelDefault               PASS
+TestLogLevelWithOption             PASS (5 subtests)
+TestLogLevelGating                 PASS
+TestLogLevelParseFlagsIntegration  PASS (5 subtests)
+TestLogLevelCLIFlagStripping       PASS
+TestLogLevelCLIFileFlagPreserved   PASS
+TestLogLevelCLIBinaryFlagParsing   PASS (4 subtests)
+```
+
+---
+
 ## Current Status (2026-02-23)
 
 **Latest Update**: System Prompt Enhancement - TMUX for Background Processes & Subagents ✅

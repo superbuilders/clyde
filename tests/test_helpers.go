@@ -1,12 +1,16 @@
 package main
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
 	"github.com/this-is-alpha-iota/clyde/api"
 	"github.com/this-is-alpha-iota/clyde/config"
 	"github.com/this-is-alpha-iota/clyde/prompts"
 	"github.com/this-is-alpha-iota/clyde/tools"
-	"os"
-	"strings"
 )
 
 // Test helper functions that wrap the new architecture
@@ -273,4 +277,41 @@ func (a *testAgent) HandleMessage(userInput string) (string, error) {
 			Content: toolResults,
 		})
 	}
+}
+
+// buildTestCommand creates an exec.Command for the test binary with a proper
+// temporary HOME containing a valid Clyde config. This is a helper for tests
+// that need to run the compiled binary with custom flags.
+func buildTestCommand(t *testing.T, binaryPath string, args ...string) *exec.Cmd {
+	t.Helper()
+
+	// Create test config in a temp home directory
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, ".clyde")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config")
+
+	// Read API key from environment
+	apiKey := os.Getenv("TS_AGENT_API_KEY")
+	if apiKey == "" {
+		// Use a dummy key — the test may expect an error anyway
+		apiKey = "sk-ant-test-dummy-key"
+	}
+
+	configContent := "TS_AGENT_API_KEY=" + apiKey + "\n"
+	braveKey := os.Getenv("BRAVE_SEARCH_API_KEY")
+	if braveKey != "" {
+		configContent += "BRAVE_SEARCH_API_KEY=" + braveKey + "\n"
+	}
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	cmd := exec.Command(binaryPath, args...)
+	cmd.Env = append(os.Environ(), "HOME="+tmpDir)
+	return cmd
 }

@@ -898,7 +898,7 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 
 ---
 
-### TUI-1: Log Level Infrastructure & CLI Flags
+### TUI-1: Log Level Infrastructure & CLI Flags  ✅ DONE
 
 **As a** user running Clyde in CLI or TUI mode,
 **I want** to control the verbosity of output via `--silent`, `-q`/`--quiet`, `-v`/`--verbose`, and `--debug` flags,
@@ -907,18 +907,18 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 **Depends on**: nothing (foundation)
 
 **Acceptance Criteria**:
-- [ ] A `LogLevel` type is defined with five values: Silent, Quiet, Normal, Verbose, Debug.
-- [ ] CLI argument parsing recognizes `--silent`, `-q`/`--quiet`, (no flag = Normal), `-v`/`--verbose`, `--debug`.
-- [ ] The parsed log level is threaded into the agent via `AgentOption` (e.g., `WithLogLevel`).
-- [ ] The progress callback receives the log level and can gate output accordingly.
-- [ ] At Silent level, nothing is printed to stdout or stderr (side-effects only).
-- [ ] At Quiet level, only `→` tool progress lines and the final agent response are printed.
-- [ ] At Normal level, tool output bodies and thinking traces are also printed (truncated per TUI-7).
-- [ ] At Verbose level, all truncation is removed.
-- [ ] At Debug level, additional harness diagnostics (token counts, latency, request/response sizes) are printed.
-- [ ] Existing REPL and CLI mode tests still pass.
-- [ ] New unit tests verify flag parsing for all five levels.
-- [ ] New unit tests verify that the correct content is emitted (or suppressed) at each level, using a captured output buffer.
+- [x] A `LogLevel` type is defined with five values: Silent, Quiet, Normal, Verbose, Debug.
+- [x] CLI argument parsing recognizes `--silent`, `-q`/`--quiet`, (no flag = Normal), `-v`/`--verbose`, `--debug`.
+- [x] The parsed log level is threaded into the agent via `AgentOption` (e.g., `WithLogLevel`).
+- [x] The progress callback receives the log level and can gate output accordingly.
+- [x] At Silent level, nothing is printed to stdout or stderr (side-effects only).
+- [x] At Quiet level, only `→` tool progress lines and the final agent response are printed.
+- [x] At Normal level, tool output bodies and thinking traces are also printed (truncated per TUI-7).
+- [x] At Verbose level, all truncation is removed.
+- [x] At Debug level, additional harness diagnostics (token counts, latency, request/response sizes) are printed.
+- [x] Existing REPL and CLI mode tests still pass.
+- [x] New unit tests verify flag parsing for all five levels.
+- [x] New unit tests verify that the correct content is emitted (or suppressed) at each level, using a captured output buffer.
 
 ---
 

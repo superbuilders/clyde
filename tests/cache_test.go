@@ -6,6 +6,7 @@ import (
 
 	"github.com/this-is-alpha-iota/clyde/agent"
 	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/loglevel"
 	"github.com/this-is-alpha-iota/clyde/prompts"
 )
 
@@ -60,7 +61,7 @@ func TestCacheUsageDisplay(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithProgressCallback(func(_ loglevel.Level, msg string) {
 			progressMessages = append(progressMessages, msg)
 		}),
 	)
@@ -103,7 +104,7 @@ func TestCacheHitAfterToolUse(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithProgressCallback(func(_ loglevel.Level, msg string) {
 			progressMessages = append(progressMessages, msg)
 			t.Logf("Progress: %s", msg)
 		}),

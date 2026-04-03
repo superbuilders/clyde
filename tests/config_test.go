@@ -131,11 +131,11 @@ func TestConfigDefaultValues(t *testing.T) {
 	if cfg.APIURL != "https://api.anthropic.com/v1/messages" {
 		t.Errorf("Expected default APIURL, got '%s'", cfg.APIURL)
 	}
-	if cfg.ModelID != "claude-sonnet-4-5-20250929" {
-		t.Errorf("Expected default ModelID, got '%s'", cfg.ModelID)
+	if cfg.ModelID != "claude-opus-4-6" {
+		t.Errorf("Expected default ModelID 'claude-opus-4-6', got '%s'", cfg.ModelID)
 	}
-	if cfg.MaxTokens != 4096 {
-		t.Errorf("Expected default MaxTokens 4096, got %d", cfg.MaxTokens)
+	if cfg.MaxTokens != 64000 {
+		t.Errorf("Expected default MaxTokens 64000, got %d", cfg.MaxTokens)
 	}
 }
 
