@@ -53,6 +53,13 @@ func (l Level) ShouldShow(threshold Level) bool {
 	return l >= threshold
 }
 
+// FlagResult contains the parsed result of CLI flag processing.
+type FlagResult struct {
+	Level   Level
+	NoThink bool     // true if --no-think was passed
+	Args    []string // remaining args after flag stripping
+}
+
 // ParseFlags parses CLI flags and returns the appropriate log level.
 // It scans the provided args for verbosity flags and returns the level
 // plus the remaining args with verbosity flags removed.
@@ -63,26 +70,36 @@ func (l Level) ShouldShow(threshold Level) bool {
 //   (no flag)       → Normal
 //   -v, --verbose   → Verbose
 //   --debug         → Debug
+//   --no-think      → Disable thinking (orthogonal to log level)
 //
-// If multiple flags are provided, the last one wins.
+// If multiple verbosity flags are provided, the last one wins.
 func ParseFlags(args []string) (Level, []string) {
-	level := Normal
-	remaining := make([]string, 0, len(args))
+	result := ParseFlagsExt(args)
+	return result.Level, result.Args
+}
+
+// ParseFlagsExt is the extended version of ParseFlags that also returns
+// the --no-think flag. Use this when you need the full flag result.
+func ParseFlagsExt(args []string) FlagResult {
+	result := FlagResult{Level: Normal}
+	result.Args = make([]string, 0, len(args))
 
 	for _, arg := range args {
 		switch arg {
 		case "--silent":
-			level = Silent
+			result.Level = Silent
 		case "-q", "--quiet":
-			level = Quiet
+			result.Level = Quiet
 		case "-v", "--verbose":
-			level = Verbose
+			result.Level = Verbose
 		case "--debug":
-			level = Debug
+			result.Level = Debug
+		case "--no-think":
+			result.NoThink = true
 		default:
-			remaining = append(remaining, arg)
+			result.Args = append(result.Args, arg)
 		}
 	}
 
-	return level, remaining
+	return result
 }

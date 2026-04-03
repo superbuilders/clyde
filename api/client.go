@@ -15,6 +15,7 @@ type Client struct {
 	apiURL    string
 	modelID   string
 	maxTokens int
+	thinking  *ThinkingConfig
 }
 
 // NewClient creates a new Claude API client
@@ -27,6 +28,18 @@ func NewClient(apiKey, apiURL, modelID string, maxTokens int) *Client {
 	}
 }
 
+// WithThinking returns a new client with thinking enabled.
+// Pass nil to disable thinking.
+func (c *Client) WithThinking(thinking *ThinkingConfig) *Client {
+	return &Client{
+		apiKey:    c.apiKey,
+		apiURL:    c.apiURL,
+		modelID:   c.modelID,
+		maxTokens: c.maxTokens,
+		thinking:  thinking,
+	}
+}
+
 // Call sends a request to the Claude API with the given messages and tools
 func (c *Client) Call(systemPrompt string, messages []Message, tools []Tool) (*Response, error) {
 	reqBody := Request{
@@ -36,6 +49,7 @@ func (c *Client) Call(systemPrompt string, messages []Message, tools []Tool) (*R
 		System:       systemPrompt,
 		Messages:     messages,
 		Tools:        tools,
+		Thinking:     c.thinking,
 	}
 
 	jsonData, err := json.Marshal(reqBody)

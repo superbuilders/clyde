@@ -970,9 +970,101 @@ Created demo showing all error message improvements:
 **Philosophy**:
 Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
 
-## Current Status (2026-04-03)
+## Current Status (2026-07-10)
 
-**Latest Update**: TUI-6: Cache Display Rework ✅
+**Latest Update**: TUI-7: Thinking Traces — API Integration, Truncation & Display ✅
+
+### TUI-7: Thinking Traces (Completed 2026-07-10)
+
+**Story**: Enable Claude's thinking traces by default, build a truncation engine, and display thinking at Normal level (truncated) and above.
+
+**What Was Built**:
+
+#### 1. Truncation Engine (`truncate/` package)
+A reusable truncation package with configurable line and character limits:
+- **`Lines(text, maxLines, level)`**: Truncates to N lines, appends `... (M more lines)`
+- **`Chars(line, level)`**: Truncates single lines at 2000 characters with `...`
+- **`Text(text, maxLines, level)`**: Combined line + character truncation
+- **`Thinking(text, level)`**: Convenience wrapper (50-line limit)
+- **`ToolOutput(text, level)`**: Convenience wrapper (25-line limit)
+- All functions bypass truncation at Verbose/Debug levels
+- 27 unit tests in `truncate/truncate_test.go`
+
+#### 2. Thinking API Integration
+- **`api/types.go`**: Added `ThinkingConfig` struct with `Type` ("adaptive"/"enabled") and `BudgetTokens`
+- **`api/types.go`**: Added `Thinking`, `Signature`, `Data` fields to `ContentBlock` for parsing thinking/redacted_thinking blocks
+- **`api/types.go`**: Added `Thinking *ThinkingConfig` to `Request` (with `omitempty`)
+- **`api/client.go`**: Added `WithThinking(*ThinkingConfig)` method to create thinking-enabled client
+- **Adaptive thinking** enabled by default for Opus 4.6 (`type: "adaptive"`) — Claude decides when and how much to think
+- **Manual mode** available when `THINKING_BUDGET_TOKENS` is configured in `~/.clyde/config`
+
+#### 3. Agent Thinking Display
+- **`agent/agent.go`**: New `ThinkingCallback func(text string)` type
+- **`agent/agent.go`**: New `WithThinkingCallback(cb)` option
+- **`agent/agent.go`**: `emitThinking(text)` method applies truncation and level gating:
+  - Silent/Quiet: suppressed
+  - Normal: truncated to 50 lines
+  - Verbose/Debug: full text
+- Thinking blocks preserved in conversation history for proper API round-tripping
+- Redacted thinking blocks logged at Debug level
+
+#### 4. `--no-think` CLI Flag
+- **`loglevel/loglevel.go`**: Added `ParseFlagsExt()` returning `FlagResult` with `NoThink` field
+- Backward-compatible: `ParseFlags()` still works (calls `ParseFlagsExt` internally)
+- When `--no-think` is passed, thinking parameter is omitted from API requests
+
+#### 5. Display Command Truncation Removal
+Per TUI spec: "Single-line bash commands and search queries are never truncated"
+- Removed 60-char truncation from `tools/run_bash.go` `displayRunBash()`
+- Removed 50-char truncation from `tools/web_search.go` `displayWebSearch()`
+
+#### 6. Config Enhancement
+- **`config/config.go`**: Added `ThinkingBudgetTokens` field
+- Parsed from `THINKING_BUDGET_TOKENS` env var (optional, min 1024)
+- When set, uses manual mode (`type: "enabled"`) instead of adaptive
+
+**Files Changed**:
+- `truncate/truncate.go` (new) — Truncation engine
+- `truncate/truncate_test.go` (new) — 27 truncation unit tests
+- `api/types.go` — ThinkingConfig, thinking block fields
+- `api/client.go` — WithThinking, thinking in requests
+- `agent/agent.go` — ThinkingCallback, emitThinking, thinking block handling
+- `config/config.go` — ThinkingBudgetTokens
+- `loglevel/loglevel.go` — ParseFlagsExt, --no-think flag
+- `main.go` — Wire up thinking callback, createAPIClient, --no-think
+- `tools/run_bash.go` — Remove 60-char display truncation
+- `tools/web_search.go` — Remove 50-char display truncation
+- `tests/thinking_test.go` (new) — 28 thinking-specific tests
+
+**Test Summary**:
+- 27 truncation unit tests (truncate package)
+- 28 thinking tests (tests package):
+  - 6 truncation exercises
+  - 3 request serialization tests (adaptive, manual, nil)
+  - 3 response parsing tests (thinking, redacted, tool_use)
+  - 5 display gating tests (all log levels)
+  - 3 callback truncation tests (Normal/Verbose/Debug)
+  - 4 --no-think flag tests
+  - 2 WithThinking client tests
+  - 2 ThinkingConfig JSON tests
+  - 5 integration tests (real API: thinking present, agent flow, verbose, quiet suppression, no-think)
+- All existing tests continue to pass
+
+**Integration Test Results** (real API):
+```
+TestThinkingIntegration            PASS (4.5s) — thinking block present, 43 chars
+TestThinkingIntegrationWithAgent   PASS (2.5s) — agent flow works
+TestThinkingIntegrationVerbose     PASS (4.0s) — full text at Verbose
+TestThinkingSuppressedAtQuiet      PASS (2.1s) — no callbacks at Quiet
+TestNoThinkIntegration             PASS (2.0s) — no thinking blocks when disabled
+```
+
+**Design Decisions**:
+- **Adaptive thinking** (not manual) for Opus 4.6: Claude decides when to think, no token budget to tune
+- **ThinkingCallback** separate from ProgressCallback: different display semantics (💭 dim magenta vs → bold yellow)
+- **Truncation is log-level-aware**: same function works at all levels, behavior changes with level
+- **Thinking blocks preserved in history**: required by Claude API for proper multi-turn thinking
+- **`--no-think` omits parameter entirely**: simplest way to disable (nil thinking config)
 
 ### TUI-6: Cache Display Rework (Completed 2026-04-03)
 

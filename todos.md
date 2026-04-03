@@ -1033,7 +1033,7 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 
 ---
 
-### TUI-7: Thinking Traces — API Integration, Truncation & Display
+### TUI-7: Thinking Traces — API Integration, Truncation & Display  ✅ DONE
 
 **As a** user of Clyde,
 **I want** the agent to request and display Claude's thinking traces by default, truncated to reasonable limits at Normal verbosity,
@@ -1044,31 +1044,31 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 This story delivers the truncation engine *and* thinking traces together as one user-visible feature. The truncation functions (line limits, character limits, verbose bypass) are built here and reused by TUI-8 (tool output bodies).
 
 **Acceptance Criteria — Truncation Engine**:
-- [ ] A `truncate` package or set of functions is created with configurable line and character limits.
-- [ ] Thinking traces are truncated to 50 lines at Normal level, with `... (N more lines)` appended.
-- [ ] Tool output bodies are truncated to 25 lines at Normal level, with `... (N more lines)` appended. (Exercised in TUI-8, but the function is built and unit-tested here.)
-- [ ] Any single line exceeding 2000 characters is truncated with `...` appended.
-- [ ] At Verbose and Debug levels, all truncation is disabled (functions pass through unmodified).
-- [ ] Single-line bash commands and search queries are **never** truncated at Normal level (the existing 60-char and 50-char truncation in display functions is removed).
-- [ ] Multi-line bash commands follow the standard 25-line truncation.
-- [ ] Unit tests verify truncation at exact boundary conditions (24 lines → no truncation, 25 lines → no truncation, 26 lines → truncated to 25 + overflow message).
-- [ ] Unit tests verify character truncation at 2000 chars.
-- [ ] Unit tests verify truncation is bypassed at Verbose level.
-- [ ] Unit tests verify single-line commands are never truncated.
+- [x] A `truncate` package or set of functions is created with configurable line and character limits.
+- [x] Thinking traces are truncated to 50 lines at Normal level, with `... (N more lines)` appended.
+- [x] Tool output bodies are truncated to 25 lines at Normal level, with `... (N more lines)` appended. (Exercised in TUI-8, but the function is built and unit-tested here.)
+- [x] Any single line exceeding 2000 characters is truncated with `...` appended.
+- [x] At Verbose and Debug levels, all truncation is disabled (functions pass through unmodified).
+- [x] Single-line bash commands and search queries are **never** truncated at Normal level (the existing 60-char and 50-char truncation in display functions is removed).
+- [x] Multi-line bash commands follow the standard 25-line truncation.
+- [x] Unit tests verify truncation at exact boundary conditions (24 lines → no truncation, 25 lines → no truncation, 26 lines → truncated to 25 + overflow message).
+- [x] Unit tests verify character truncation at 2000 chars.
+- [x] Unit tests verify truncation is bypassed at Verbose level.
+- [x] Unit tests verify single-line commands are never truncated.
 
 **Acceptance Criteria — Thinking Traces**:
-- [ ] The `api.Request` struct gains a `Thinking` field (`*ThinkingConfig`) with `Type` ("enabled") and `BudgetTokens` (int).
-- [ ] The `api.Client.Call()` method includes the `thinking` parameter in every request by default, with a configurable `budget_tokens` (default 8192).
-- [ ] `budget_tokens` is configurable via `~/.clyde/config` (e.g., `THINKING_BUDGET_TOKENS=8192`).
-- [ ] A `--no-think` CLI flag disables thinking entirely (omits the parameter from requests).
-- [ ] The `api.Response` correctly parses `thinking` content blocks from Claude's response.
-- [ ] The agent extracts thinking blocks and forwards them via a new `ThinkingCallback` (or extends the existing `ProgressCallback`).
-- [ ] At Normal level: thinking is displayed truncated (50-line limit), in dim magenta, prefixed with `💭`.
-- [ ] At Verbose/Debug: thinking is displayed in full with no truncation.
-- [ ] At Silent/Quiet: thinking is suppressed.
-- [ ] Unit tests verify the `thinking` parameter is included in serialized requests.
-- [ ] Unit tests verify thinking blocks are correctly parsed from mock API responses.
-- [ ] Integration test confirms a real API call returns thinking blocks and they are displayed (truncated at Normal, full at Verbose).
+- [x] The `api.Request` struct gains a `Thinking` field (`*ThinkingConfig`) with `Type` ("enabled") and `BudgetTokens` (int).
+- [x] The `api.Client.Call()` method includes the `thinking` parameter in every request by default, with a configurable `budget_tokens` (default 8192).
+- [x] `budget_tokens` is configurable via `~/.clyde/config` (e.g., `THINKING_BUDGET_TOKENS=8192`).
+- [x] A `--no-think` CLI flag disables thinking entirely (omits the parameter from requests).
+- [x] The `api.Response` correctly parses `thinking` content blocks from Claude's response.
+- [x] The agent extracts thinking blocks and forwards them via a new `ThinkingCallback` (or extends the existing `ProgressCallback`).
+- [x] At Normal level: thinking is displayed truncated (50-line limit), in dim magenta, prefixed with `💭`.
+- [x] At Verbose/Debug: thinking is displayed in full with no truncation.
+- [x] At Silent/Quiet: thinking is suppressed.
+- [x] Unit tests verify the `thinking` parameter is included in serialized requests.
+- [x] Unit tests verify thinking blocks are correctly parsed from mock API responses.
+- [x] Integration test confirms a real API call returns thinking blocks and they are displayed (truncated at Normal, full at Verbose).
 
 ---
 
@@ -1089,6 +1089,53 @@ This story delivers the truncation engine *and* thinking traces together as one 
 - [ ] The agent's callback interface supports both progress messages and tool output bodies (either via a second callback or by distinguishing message types).
 - [ ] Unit tests verify tool output is emitted at Normal/Verbose/Debug and suppressed at Quiet/Silent, using a captured output buffer.
 - [ ] Integration test with a real tool call (e.g., `list_files`) confirms output body appears in the log.
+
+---
+
+### TUI-9: Alt+Enter & Ctrl+J for Multiline Input
+
+**As a** user composing multi-line prompts in REPL mode,
+**I want** to press Alt+Enter (or Ctrl+J) to insert a newline without submitting,
+**so that** I can write structured, multi-line prompts naturally — without relying solely on backslash continuation.
+
+**Depends on**: TUI-5 (rich text input / chzyer/readline integration)
+
+**Context & Research**:
+- Traditional terminals cannot distinguish Shift+Enter from Enter (both send `0x0D`). Shift+Enter requires the Kitty keyboard protocol, which would mean replacing chzyer/readline — a large lift.
+- **Alt+Enter** is detectable without Kitty: when Alt/Meta is active, the terminal prefixes the key byte with ESC (`0x1B`), so Alt+Enter sends `0x1B 0x0D` — distinct from plain Enter's `0x0D`. This works on any terminal where Alt acts as Meta (iTerm2 by default, macOS Terminal.app with "Use Option as Meta Key" enabled, most Linux terminals).
+- **Ctrl+J** sends `0x0A` (line feed), which is always distinct from Enter's `0x0D`. It works on every terminal, everywhere, unconditionally. The current code comments claim Ctrl+J support but the Listener was never wired up.
+- Claude Code and OpenCode both use the Kitty protocol for Shift+Enter but keep Ctrl+J and backslash as universal fallbacks. This story brings Clyde to parity on the fallback layer without the Kitty lift.
+
+**Acceptance Criteria**:
+
+*Ctrl+J (universal):*
+- [ ] Pressing Ctrl+J (`0x0A`) while typing inserts a newline and enters multiline accumulation mode.
+- [ ] The prompt changes to the continuation prompt (`  > `) on subsequent lines, matching the existing backslash behavior.
+- [ ] Pressing plain Enter submits the accumulated multiline input.
+- [ ] Ctrl+J works in every terminal without configuration (it sends a distinct byte from Enter).
+
+*Alt+Enter (Meta+CR):*
+- [ ] Pressing Alt+Enter (`0x1B 0x0D`) inserts a newline and enters multiline accumulation mode, identical to Ctrl+J behavior.
+- [ ] The ESC prefix is correctly disambiguated from a standalone Escape keypress followed by Enter (readline's existing timeout-based disambiguation is sufficient).
+- [ ] On macOS Terminal.app, this requires "Use Option as Meta Key" to be enabled (documented in README or startup hint).
+
+*Shared behavior:*
+- [ ] Both methods integrate with the existing backslash continuation — a user can mix `\`-continuation, Ctrl+J, and Alt+Enter freely within the same input.
+- [ ] Multiline input assembled via Ctrl+J or Alt+Enter is saved to history as a single block (matching backslash behavior).
+- [ ] Ctrl+C while in multiline mode discards the partial input and returns to a fresh prompt (matching existing behavior).
+- [ ] The implementation uses chzyer/readline's `FuncFilterInputRune` or `Listener` callback — no library replacement needed.
+
+*Documentation & discoverability:*
+- [ ] The README documents all three multiline methods (backslash, Ctrl+J, Alt+Enter) with a note about macOS Terminal.app Option-as-Meta.
+- [ ] On first launch (or via a `/help` hint), the available multiline key combos are mentioned.
+
+*Tests:*
+- [ ] Unit tests verify Ctrl+J (`0x0A`) triggers multiline mode and accumulates lines correctly.
+- [ ] Unit tests verify Alt+Enter (`0x1B 0x0D`) triggers multiline mode and accumulates lines correctly.
+- [ ] Unit tests verify mixed usage (backslash + Ctrl+J + Alt+Enter in the same input block).
+- [ ] Unit tests verify Ctrl+C discards partial multiline input from Ctrl+J / Alt+Enter mode.
+- [ ] Unit tests verify history saves the complete assembled block.
+- [ ] Existing backslash-continuation tests still pass unchanged.
 
 ---
 

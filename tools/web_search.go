@@ -138,11 +138,5 @@ func executeWebSearch(input map[string]interface{}, apiClient *api.Client, conve
 
 func displayWebSearch(input map[string]interface{}) string {
 	query, _ := input["query"].(string)
-	
-	// Truncate long queries for display
-	displayQuery := query
-	if len(displayQuery) > 50 {
-		displayQuery = displayQuery[:47] + "..."
-	}
-	return fmt.Sprintf("→ Searching web: \"%s\"", displayQuery)
+	return fmt.Sprintf("→ Searching web: \"%s\"", query)
 }

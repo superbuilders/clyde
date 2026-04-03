@@ -7,12 +7,17 @@ import (
 	"github.com/this-is-alpha-iota/clyde/api"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
 	"github.com/this-is-alpha-iota/clyde/tools"
+	"github.com/this-is-alpha-iota/clyde/truncate"
 )
 
 // ProgressCallback receives progress messages during tool execution.
 // The level parameter indicates the minimum log level at which this
 // message should be displayed.
 type ProgressCallback func(level loglevel.Level, message string)
+
+// ThinkingCallback receives thinking trace text from Claude's extended thinking.
+// The text is the raw thinking content; the caller is responsible for styling.
+type ThinkingCallback func(text string)
 
 // SpinnerCallback receives signals to start or stop the loading spinner.
 // When start is true, message contains the operation text to display.
@@ -29,6 +34,7 @@ type Agent struct {
 	history           []api.Message
 	logLevel          loglevel.Level
 	progressCallback  ProgressCallback
+	thinkingCallback  ThinkingCallback
 	spinnerCallback   SpinnerCallback
 	errorCallback     ErrorCallback
 	lastUsage         api.Usage // Token usage from the most recent API response
@@ -49,6 +55,14 @@ func WithLogLevel(level loglevel.Level) AgentOption {
 func WithProgressCallback(cb ProgressCallback) AgentOption {
 	return func(a *Agent) {
 		a.progressCallback = cb
+	}
+}
+
+// WithThinkingCallback sets the callback for thinking trace display.
+// The callback receives truncated (or full) thinking text based on log level.
+func WithThinkingCallback(cb ThinkingCallback) AgentOption {
+	return func(a *Agent) {
+		a.thinkingCallback = cb
 	}
 }
 
@@ -110,6 +124,22 @@ func (a *Agent) emit(threshold loglevel.Level, message string) {
 	if a.progressCallback != nil && a.logLevel.ShouldShow(threshold) {
 		a.progressCallback(threshold, message)
 	}
+}
+
+// emitThinking sends thinking trace text via the thinking callback.
+// Thinking is displayed at Normal level (truncated) and above.
+// Suppressed at Silent and Quiet.
+func (a *Agent) emitThinking(text string) {
+	if a.thinkingCallback == nil {
+		return
+	}
+	if !a.logLevel.ShouldShow(loglevel.Normal) {
+		return
+	}
+
+	// Apply truncation based on log level
+	truncated := truncate.Thinking(text, a.logLevel)
+	a.thinkingCallback(truncated)
 }
 
 // spinnerStart sends a start signal to the spinner callback if set.
@@ -194,14 +224,26 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 		for _, block := range resp.Content {
 			assistantContent = append(assistantContent, block)
 
-			if block.Type == "text" && block.Text != "" {
-				textResponses = append(textResponses, block.Text)
-			} else if block.Type == "tool_use" {
+			switch block.Type {
+			case "text":
+				if block.Text != "" {
+					textResponses = append(textResponses, block.Text)
+				}
+			case "tool_use":
 				toolUseBlocks = append(toolUseBlocks, block)
+			case "thinking":
+				// Display thinking trace
+				if block.Thinking != "" {
+					a.emitThinking(block.Thinking)
+				}
+			case "redacted_thinking":
+				// Redacted thinking — note it but don't display content
+				a.emit(loglevel.Debug, "🔒 Redacted thinking block (encrypted by safety system)")
 			}
 		}
 
-		// Add assistant response to history
+		// Add assistant response to history (includes thinking blocks
+		// for proper round-tripping as required by the API)
 		a.history = append(a.history, api.Message{
 			Role:    "assistant",
 			Content: assistantContent,

@@ -21,8 +21,8 @@ import (
 )
 
 func main() {
-	// Parse log level flags first, stripping them from args
-	level, args := loglevel.ParseFlags(os.Args[1:])
+	// Parse log level and extended flags, stripping them from args
+	flags := loglevel.ParseFlagsExt(os.Args[1:])
 
 	// Check if stdin has input (pipe/redirect)
 	stat, _ := os.Stdin.Stat()
@@ -31,15 +31,42 @@ func main() {
 	// Determine mode: CLI or REPL
 	// CLI mode if: args provided OR stdin is piped
 	// REPL mode if: no args AND stdin is interactive (terminal)
-	if len(args) > 0 || hasStdinInput {
-		runCLIMode(args, hasStdinInput, level)
+	if len(flags.Args) > 0 || hasStdinInput {
+		runCLIMode(flags.Args, hasStdinInput, flags.Level, flags.NoThink)
 	} else {
-		runREPLMode(level)
+		runREPLMode(flags.Level, flags.NoThink)
 	}
 }
 
+// createAPIClient creates an API client with optional thinking enabled.
+// When noThink is false and the model supports it, adaptive thinking is enabled.
+func createAPIClient(cfg *config.Config, noThink bool) *api.Client {
+	client := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+
+	if !noThink {
+		// Enable adaptive thinking (recommended for Opus 4.6 and Sonnet 4.6).
+		// Adaptive thinking lets Claude decide when and how much to think.
+		// For older models, budget_tokens would be needed instead.
+		thinking := &api.ThinkingConfig{
+			Type: "adaptive",
+		}
+
+		// If a budget is configured, use manual mode instead
+		if cfg.ThinkingBudgetTokens > 0 {
+			thinking = &api.ThinkingConfig{
+				Type:         "enabled",
+				BudgetTokens: cfg.ThinkingBudgetTokens,
+			}
+		}
+
+		client = client.WithThinking(thinking)
+	}
+
+	return client
+}
+
 // runCLIMode executes the agent on a single prompt and exits
-func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level) {
+func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink bool) {
 	// Determine prompt source
 	var userPrompt string
 	var err error
@@ -81,8 +108,8 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level) {
 		os.Exit(1)
 	}
 
-	// Create API client
-	apiClient := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+	// Create API client with thinking
+	apiClient := createAPIClient(cfg, noThink)
 
 	// Create agent with progress callback (print to stderr so stdout is clean)
 	agentInstance := agent.NewAgent(
@@ -92,6 +119,9 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level) {
 		agent.WithContextWindowSize(cfg.ContextWindowSize),
 		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
 			fmt.Fprintln(os.Stderr, styleMessage(lvl, msg))
+		}),
+		agent.WithThinkingCallback(func(text string) {
+			fmt.Fprintln(os.Stderr, style.FormatThinking(text))
 		}),
 	)
 
@@ -108,7 +138,7 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level) {
 }
 
 // runREPLMode runs the interactive REPL
-func runREPLMode(level loglevel.Level) {
+func runREPLMode(level loglevel.Level, noThink bool) {
 	// Determine config file location (CLI layer responsibility)
 	configPath := getConfigPath()
 
@@ -119,8 +149,8 @@ func runREPLMode(level loglevel.Level) {
 		os.Exit(1)
 	}
 
-	// Create API client
-	apiClient := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+	// Create API client with thinking
+	apiClient := createAPIClient(cfg, noThink)
 
 	// Create spinner for animated progress display (REPL mode only).
 	// The spinner shows a live preview on the second-to-last terminal line.
@@ -149,6 +179,18 @@ func runREPLMode(level loglevel.Level) {
 					sp.Stop()
 				}
 			}
+		}),
+		agent.WithThinkingCallback(func(text string) {
+			// Stop spinner before printing thinking (thinking comes before tool calls)
+			if sp.IsActive() {
+				sp.Stop()
+			}
+			// Flush any pending progress message
+			if lastProgressMsg != "" {
+				fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
+				lastProgressMsg = ""
+			}
+			fmt.Println(style.FormatThinking(text))
 		}),
 		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
 			switch lvl {
@@ -214,7 +256,7 @@ func runREPLMode(level loglevel.Level) {
 	if err != nil {
 		// Fall back to basic bufio reader if readline fails
 		fmt.Fprintf(os.Stderr, "Warning: Rich input unavailable (%v), using basic input\n", err)
-		runREPLBasicMode(level, apiClient, sp, cfg)
+		runREPLBasicMode(level, noThink, apiClient, sp, cfg)
 		return
 	}
 	defer reader.Close()
@@ -275,7 +317,7 @@ func runREPLMode(level loglevel.Level) {
 // It uses bufio.NewReader for basic line input without cursor movement
 // or history recall. This ensures Clyde can still run on systems where
 // readline initialization fails.
-func runREPLBasicMode(level loglevel.Level, apiClient *api.Client, sp *spinner.Spinner, cfg *config.Config) {
+func runREPLBasicMode(level loglevel.Level, noThink bool, apiClient *api.Client, sp *spinner.Spinner, cfg *config.Config) {
 	var lastProgressMsg string
 
 	agentInstance := agent.NewAgent(
@@ -294,6 +336,16 @@ func runREPLBasicMode(level loglevel.Level, apiClient *api.Client, sp *spinner.S
 					sp.Stop()
 				}
 			}
+		}),
+		agent.WithThinkingCallback(func(text string) {
+			if sp.IsActive() {
+				sp.Stop()
+			}
+			if lastProgressMsg != "" {
+				fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
+				lastProgressMsg = ""
+			}
+			fmt.Println(style.FormatThinking(text))
 		}),
 		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
 			switch lvl {

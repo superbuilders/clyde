@@ -90,11 +90,5 @@ func executeRunBash(input map[string]interface{}, apiClient *api.Client, convers
 
 func displayRunBash(input map[string]interface{}) string {
 	command, _ := input["command"].(string)
-	
-	// Truncate long commands for display
-	displayCmd := command
-	if len(displayCmd) > 60 {
-		displayCmd = displayCmd[:57] + "..."
-	}
-	return fmt.Sprintf("→ Running bash: %s", displayCmd)
+	return fmt.Sprintf("→ Running bash: %s", command)
 }
