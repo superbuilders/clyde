@@ -1072,7 +1072,7 @@ This story delivers the truncation engine *and* thinking traces together as one 
 
 ---
 
-### TUI-8: Tool Output Bodies Display
+### TUI-8: Tool Output Bodies Display ✅ DONE
 
 **As a** user of Clyde at Normal verbosity or higher,
 **I want** to see the actual output of tool calls (file listings, grep results, bash output, etc.) displayed below the `→` progress line,
@@ -1081,14 +1081,14 @@ This story delivers the truncation engine *and* thinking traces together as one 
 **Depends on**: TUI-1 (log levels), TUI-2 (dim styling), TUI-7 (truncation engine)
 
 **Acceptance Criteria**:
-- [ ] After each tool execution, the tool's output string is forwarded via callback alongside the progress message.
-- [ ] At Normal level: tool output bodies are displayed in dim text, separated from surrounding content by blank lines above and below, truncated per TUI-7's 25-line limit.
-- [ ] At Verbose/Debug: tool output is displayed in full with no truncation.
-- [ ] At Quiet level: only the `→` progress line is shown; tool output body is suppressed.
-- [ ] At Silent level: nothing is shown.
-- [ ] The agent's callback interface supports both progress messages and tool output bodies (either via a second callback or by distinguishing message types).
-- [ ] Unit tests verify tool output is emitted at Normal/Verbose/Debug and suppressed at Quiet/Silent, using a captured output buffer.
-- [ ] Integration test with a real tool call (e.g., `list_files`) confirms output body appears in the log.
+- [x] After each tool execution, the tool's output string is forwarded via callback alongside the progress message.
+- [x] At Normal level: tool output bodies are displayed in dim text, separated from surrounding content by blank lines above and below, truncated per TUI-7's 25-line limit.
+- [x] At Verbose/Debug: tool output is displayed in full with no truncation.
+- [x] At Quiet level: only the `→` progress line is shown; tool output body is suppressed.
+- [x] At Silent level: nothing is shown.
+- [x] The agent's callback interface supports both progress messages and tool output bodies (either via a second callback or by distinguishing message types).
+- [x] Unit tests verify tool output is emitted at Normal/Verbose/Debug and suppressed at Quiet/Silent, using a captured output buffer.
+- [x] Integration test with a real tool call (e.g., `list_files`) confirms output body appears in the log.
 
 ---
 

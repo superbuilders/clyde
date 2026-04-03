@@ -972,7 +972,103 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-07-10)
 
-**Latest Update**: TUI-7: Thinking Traces — API Integration, Truncation & Display ✅
+**Latest Update**: TUI-8: Tool Output Bodies Display ✅
+
+### TUI-8: Tool Output Bodies Display (Completed 2026-07-10)
+
+**Story**: Display tool output bodies (file listings, grep results, bash output, etc.) below the `→` progress line at Normal verbosity and above, so users can follow along with what the agent is seeing.
+
+**Depends on**: TUI-1 (log levels), TUI-2 (dim styling), TUI-7 (truncation engine)
+
+**What Was Built**:
+
+#### 1. Agent-Side Truncation (`agent/agent.go`)
+- Applied `truncate.ToolOutput()` to tool output before emitting via callback
+- Truncation uses the agent's log level: 25-line limit at Normal, full output at Verbose/Debug
+- Image tool outputs (IMAGE_LOADED markers) are excluded from display
+
+#### 2. Blank Line Separation (`main.go`)
+- Tool output bodies are now visually separated from surrounding content by blank lines above and below
+- Applied in all three modes: REPL, REPL-basic-fallback, and CLI
+- Visual result:
+  ```
+  → Reading file: main.go
+  
+  [file contents in dim text]
+  
+  → Running bash: go test
+  
+  [test output in dim text]
+  
+  Claude: All tests pass.
+  ```
+
+#### 3. Proper → Line Flushing at Quiet Level
+- Fixed: At Quiet level, when multiple tools execute, intermediate → progress lines were only shown transiently on the spinner (never persisted to scrollback)
+- Now: When a new tool starts, the previous tool's → line is flushed to permanent scrollback
+- This ensures all → lines are visible in the terminal history at Quiet level and above
+
+#### 4. Comprehensive Test Suite (`tests/tool_output_test.go`)
+16 tests (13 unit + 3 integration):
+
+**Unit Tests (no API key needed)**:
+- `TestToolOutputLevelGating` (5 subtests): Verifies output shown at Normal/Verbose/Debug, suppressed at Silent/Quiet
+- `TestToolOutputProgressLineGating` (5 subtests): Verifies → lines shown at Quiet+, suppressed at Silent
+- `TestToolOutputTruncationBoundary` (3 subtests): Exact boundary testing — 24 lines (no truncation), 25 lines (no truncation), 26 lines (truncated)
+- `TestToolOutputTruncationLargeOutput`: 100-line output truncated to 25 + overflow message
+- `TestToolOutputNoTruncationAtVerbose`: 100-line output passed through at Verbose
+- `TestToolOutputNoTruncationAtDebug`: 100-line output passed through at Debug
+- `TestToolOutputCharacterTruncation`: Per-line 2000-char limit
+- `TestToolOutputDimStyling`: ANSI dim attribute applied when color enabled
+- `TestToolOutputNoColorWhenDisabled`: No ANSI codes when NO_COLOR set
+- `TestToolOutputAgentCallbackSetup` (5 subtests): Agent accepts callback, gating and truncation verified per level
+- `TestToolOutputTruncationConsistency`: ToolOutput uses 25-line limit, identical to Text(25)
+- `TestStyleMessageFormatting` (3 subtests): Quiet→yellow, Normal→dim, Debug→red styling
+
+**Integration Tests (require TS_AGENT_API_KEY)**:
+- `TestToolOutputIntegrationNormal`: Real API call triggers list_files, verifies both → line and output body emitted
+- `TestToolOutputIntegrationQuietSuppressed`: Verifies output body suppressed at Quiet, → line still visible
+- `TestToolOutputIntegrationVerboseNoTruncation`: Verifies no truncation at Verbose level
+
+**Files Changed**:
+- `agent/agent.go` — Apply `truncate.ToolOutput()` before emitting tool output
+- `main.go` — Blank line separation in REPL, REPL-basic, and CLI progress callbacks; → line flushing fix at Quiet level
+- `tests/tool_output_test.go` (new) — 16 comprehensive tests
+
+**Test Results**:
+```
+TestToolOutputLevelGating               PASS (0.00s) — 5 subtests
+TestToolOutputProgressLineGating        PASS (0.00s) — 5 subtests
+TestToolOutputTruncationBoundary        PASS (0.00s) — 3 subtests
+TestToolOutputTruncationLargeOutput     PASS (0.00s)
+TestToolOutputNoTruncationAtVerbose     PASS (0.00s)
+TestToolOutputNoTruncationAtDebug       PASS (0.00s)
+TestToolOutputCharacterTruncation       PASS (0.00s)
+TestToolOutputDimStyling                PASS (0.00s)
+TestToolOutputNoColorWhenDisabled       PASS (0.00s)
+TestToolOutputAgentCallbackSetup        PASS (0.00s) — 5 subtests
+TestToolOutputTruncationConsistency     PASS (0.00s)
+TestStyleMessageFormatting              PASS (0.00s) — 3 subtests
+TestToolOutputIntegrationNormal         PASS (9.1s)
+TestToolOutputIntegrationQuietSuppressed PASS (8.9s)
+TestToolOutputIntegrationVerboseNoTrunc  PASS (7.1s)
+```
+
+**Acceptance Criteria Verification**:
+- [x] After each tool execution, output string forwarded via callback alongside progress message
+- [x] At Normal level: dim text, blank line separation, truncated to 25 lines
+- [x] At Verbose/Debug: full output, no truncation
+- [x] At Quiet level: only → progress line shown; output body suppressed
+- [x] At Silent level: nothing shown
+- [x] Agent callback interface supports both progress messages and tool output bodies (distinguished by log level: Quiet=progress, Normal=output)
+- [x] Unit tests verify output emitted at Normal/Verbose/Debug and suppressed at Quiet/Silent
+- [x] Integration test with real tool call confirms output body appears
+
+**Design Decisions**:
+- **Truncation in agent, not display layer**: Consistent with thinking traces (agent truncates before emitting)
+- **Log level as message type proxy**: Quiet=→ lines, Normal=output bodies, Debug=diagnostics — no new callback type needed
+- **Blank lines in display layer**: Formatting is a display concern, kept in main.go callbacks
+- **→ line flushing**: Fixed a subtle bug where intermediate → lines were lost at Quiet level
 
 ### TUI-7: Thinking Traces (Completed 2026-07-10)
 

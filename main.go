@@ -118,7 +118,14 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 		agent.WithLogLevel(level),
 		agent.WithContextWindowSize(cfg.ContextWindowSize),
 		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
-			fmt.Fprintln(os.Stderr, styleMessage(lvl, msg))
+			if lvl == loglevel.Normal {
+				// Tool output body — add blank line separation above and below
+				fmt.Fprintln(os.Stderr)
+				fmt.Fprintln(os.Stderr, styleMessage(lvl, msg))
+				fmt.Fprintln(os.Stderr)
+			} else {
+				fmt.Fprintln(os.Stderr, styleMessage(lvl, msg))
+			}
 		}),
 		agent.WithThinkingCallback(func(text string) {
 			fmt.Fprintln(os.Stderr, style.FormatThinking(text))
@@ -195,8 +202,16 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
 			switch lvl {
 			case loglevel.Quiet:
-				// Tool progress line (→ Reading file: main.go)
-				// Start/update the spinner with this message
+				// Tool progress line (→ Reading file: main.go).
+				// If there's a pending progress message from a previous tool,
+				// flush it now before updating. This ensures → lines are
+				// persisted at Quiet level where the Normal handler never fires.
+				if lastProgressMsg != "" {
+					if sp.IsActive() {
+						sp.Stop()
+					}
+					fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
+				}
 				lastProgressMsg = msg
 				if level != loglevel.Silent {
 					sp.Start(spinner.FormatSpinnerMessage(msg))
@@ -204,7 +219,8 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 
 			case loglevel.Normal:
 				// Tool output body — tool execution is complete.
-				// Stop spinner, print permanent progress line, then output body.
+				// Stop spinner, print permanent progress line, then output
+				// body with blank line separation above and below.
 				if sp.IsActive() {
 					sp.Stop()
 				}
@@ -212,7 +228,9 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 					fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
 					lastProgressMsg = ""
 				}
+				fmt.Println()                        // blank line above output body
 				fmt.Println(styleMessage(lvl, msg))
+				fmt.Println()                        // blank line below output body
 
 			default:
 				// Verbose, Debug, etc. — stop spinner if active, print directly.
@@ -350,6 +368,12 @@ func runREPLBasicMode(level loglevel.Level, noThink bool, apiClient *api.Client,
 		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
 			switch lvl {
 			case loglevel.Quiet:
+				if lastProgressMsg != "" {
+					if sp.IsActive() {
+						sp.Stop()
+					}
+					fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
+				}
 				lastProgressMsg = msg
 				if level != loglevel.Silent {
 					sp.Start(spinner.FormatSpinnerMessage(msg))
@@ -362,7 +386,9 @@ func runREPLBasicMode(level loglevel.Level, noThink bool, apiClient *api.Client,
 					fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
 					lastProgressMsg = ""
 				}
+				fmt.Println()                        // blank line above output body
 				fmt.Println(styleMessage(lvl, msg))
+				fmt.Println()                        // blank line below output body
 			default:
 				if sp.IsActive() {
 					sp.Stop()

@@ -316,9 +316,12 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 				}
 			}
 
-			// Display tool output body (Normal and above)
+			// Display tool output body (Normal and above).
+			// Apply truncation based on log level: 25-line limit at Normal,
+			// full output at Verbose/Debug.
 			if resultContent != "" && !strings.HasPrefix(resultContent, "Image loaded") {
-				a.emit(loglevel.Normal, resultContent)
+				truncatedOutput := truncate.ToolOutput(resultContent, a.logLevel)
+				a.emit(loglevel.Normal, truncatedOutput)
 			}
 
 			toolResults = append(toolResults, api.ContentBlock{
