@@ -972,7 +972,78 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-04-02)
 
-**Latest Update**: TUI-2: Color Scheme & Themed Output ✅
+**Latest Update**: TUI-3: Loading Spinner ✅
+
+### TUI-3: Loading Spinner (Completed 2026-04-02)
+
+**Story**: Smooth animated braille-dot spinner in REPL mode while the agent is processing, providing visual feedback during API calls and tool execution.
+
+**Implementation**:
+
+1. **New `spinner` package** (`spinner/spinner.go`):
+   - Braille dot animation: `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` (10 frames)
+   - 1/60s frame delay, 2 frames per symbol = ~30 symbols/second
+   - `Spinner` struct with thread-safe Start/Stop/IsActive/Message methods
+   - `NewWithWriter()` for testability (injects custom writer instead of os.Stderr)
+   - ANSI cursor control: `\r\033[K` for in-place rewriting and line clearing
+   - `FormatSpinnerMessage()` strips `→ ` prefix and adds `...` suffix
+   - Goroutine-based animation loop with proper cleanup via channels
+
+2. **New `SpinnerCallback` in agent** (`agent/agent.go`):
+   - `SpinnerCallback func(start bool, message string)` type
+   - `WithSpinnerCallback()` functional option
+   - `spinnerStart()`/`spinnerStop()` helper methods
+   - Spinner shows "Thinking..." during API calls (before response arrives)
+   - Spinner stops when API responds
+   - Respects Silent log level (suppressed)
+
+3. **REPL integration** (`main.go`):
+   - Spinner created only in REPL mode (not CLI mode)
+   - **Spinner lifecycle per tool call**:
+     1. API call begins → spinner shows "Thinking..."
+     2. API responds → spinner stops
+     3. Tool progress callback (Quiet) → spinner shows "Reading file: main.go..."
+     4. Tool output callback (Normal) → spinner stops, permanent `→` line printed, output body printed
+   - **Persistence rule**: spinner text also appears in permanent scrollback
+   - Edge case: if tool emits `→` but no output body, progress line printed after HandleMessage returns
+   - CLI mode: no spinner, progress goes to stderr as permanent lines
+
+4. **Comprehensive tests** (28 new tests):
+   - `spinner/spinner_test.go` (19 tests):
+     - Frame sequence and count verification
+     - Frame delay (1/60s) and FramesPerSymbol (2) constants
+     - Effective rate calculation (~30/sec)
+     - New spinner inactive state
+     - Custom writer injection
+     - Start/Stop lifecycle
+     - Message update while running (no restart)
+     - Double stop safety (no panic)
+     - Stop when not active (no-op)
+     - Output contains braille frames
+     - Output contains operation message
+     - renderFrame format verification
+     - clearLine escape sequence
+     - Restart after stop
+     - FormatSpinnerMessage: 9 subtests (arrow stripping, trailing dots, empty, all tool types)
+     - Concurrent start/stop thread safety
+     - Symbol cycling (all frames appear)
+   - `tests/spinner_test.go` (9 tests):
+     - CLI mode doesn't use spinner
+     - Silent level suppresses spinner
+     - Quiet level shows spinner
+     - Normal level shows spinner
+     - Persistence rule (scrollback contains progress line after stop)
+     - Tool with no output (progress line still printed)
+     - Multiple sequential tool calls
+     - Message update during operation
+     - FormatSpinnerMessage integration with all real tool messages
+
+**Architecture Decisions**:
+- Spinner is REPL-only — CLI mode has no ephemeral terminal zones
+- SpinnerCallback is separate from ProgressCallback — clean separation of concerns
+- Agent drives spinner start/stop for API calls; REPL callback drives for tool progress
+- Thread safety via sync.Mutex — spinner goroutine reads state, main thread writes
+- Channel-based stop/done signaling for clean goroutine shutdown
 
 ### TUI-2: Color Scheme & Themed Output (Completed 2026-04-02)
 

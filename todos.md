@@ -946,7 +946,7 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 
 ---
 
-### TUI-3: Loading Spinner
+### TUI-3: Loading Spinner ✅ DONE
 
 **As a** user in TUI/REPL mode,
 **I want** a smooth animated spinner on the second-to-last terminal line while the agent is working,
@@ -955,18 +955,18 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 **Depends on**: TUI-1 (log level gating)
 
 **Acceptance Criteria**:
-- [ ] A `spinner` package is created that renders braille dot animation (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`).
-- [ ] The spinner runs at 1/60s frame delay with 2 frames per symbol (~30 symbols/second).
-- [ ] The spinner occupies the second-to-last terminal line and is redrawn in place (ANSI cursor control).
-- [ ] The spinner line shows the current operation text (e.g., `⠹ Patching file: agent.go...`).
-- [ ] When an operation completes, the spinner clears and the permanent `→` progress line is appended to scrollback above.
-- [ ] **Persistence rule**: any text shown on the spinner line also appears in the permanent scrollback log — the spinner is a live preview, not a replacement.
-- [ ] The spinner does not appear in CLI mode (progress goes directly to stderr as permanent lines).
-- [ ] The spinner does not appear at Silent log level.
-- [ ] The spinner integrates cleanly with the input line below it (no visual glitches or overwriting).
-- [ ] Unit tests verify spinner frame sequence and timing.
-- [ ] Unit tests verify spinner start/stop lifecycle (content appears and clears correctly).
-- [ ] Manual verification that the spinner animates smoothly and doesn't corrupt the terminal (documented in PR).
+- [x] A `spinner` package is created that renders braille dot animation (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`).
+- [x] The spinner runs at 1/60s frame delay with 2 frames per symbol (~30 symbols/second).
+- [x] The spinner occupies the second-to-last terminal line and is redrawn in place (ANSI cursor control).
+- [x] The spinner line shows the current operation text (e.g., `⠹ Patching file: agent.go...`).
+- [x] When an operation completes, the spinner clears and the permanent `→` progress line is appended to scrollback above.
+- [x] **Persistence rule**: any text shown on the spinner line also appears in the permanent scrollback log — the spinner is a live preview, not a replacement.
+- [x] The spinner does not appear in CLI mode (progress goes directly to stderr as permanent lines).
+- [x] The spinner does not appear at Silent log level.
+- [x] The spinner integrates cleanly with the input line below it (no visual glitches or overwriting).
+- [x] Unit tests verify spinner frame sequence and timing.
+- [x] Unit tests verify spinner start/stop lifecycle (content appears and clears correctly).
+- [x] Manual verification that the spinner animates smoothly and doesn't corrupt the terminal (documented in PR).
 
 ---
 

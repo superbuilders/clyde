@@ -13,6 +13,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/config"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
 	"github.com/this-is-alpha-iota/clyde/prompts"
+	"github.com/this-is-alpha-iota/clyde/spinner"
 	"github.com/this-is-alpha-iota/clyde/style"
 	_ "github.com/this-is-alpha-iota/clyde/tools" // Import tools to register them
 )
@@ -118,13 +119,66 @@ func runREPLMode(level loglevel.Level) {
 	// Create API client
 	apiClient := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
 
-	// Create agent with system prompt and progress callback
+	// Create spinner for animated progress display (REPL mode only).
+	// The spinner shows a live preview on the second-to-last terminal line.
+	// When a tool completes, the spinner clears and the permanent → line
+	// is appended to scrollback.
+	sp := spinner.New()
+
+	// lastProgressMsg tracks the most recent tool → progress message so we
+	// can print it as a permanent log line when the spinner stops.
+	var lastProgressMsg string
+
+	// Create agent with system prompt and spinner-aware progress callback
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
 		agent.WithLogLevel(level),
+		agent.WithSpinnerCallback(func(start bool, message string) {
+			if level == loglevel.Silent {
+				return
+			}
+			if start {
+				sp.Start(message)
+			} else {
+				if sp.IsActive() {
+					sp.Stop()
+				}
+			}
+		}),
 		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
-			fmt.Println(styleMessage(lvl, msg))
+			switch lvl {
+			case loglevel.Quiet:
+				// Tool progress line (→ Reading file: main.go)
+				// Start/update the spinner with this message
+				lastProgressMsg = msg
+				if level != loglevel.Silent {
+					sp.Start(spinner.FormatSpinnerMessage(msg))
+				}
+
+			case loglevel.Normal:
+				// Tool output body — tool execution is complete.
+				// Stop spinner, print permanent progress line, then output body.
+				if sp.IsActive() {
+					sp.Stop()
+				}
+				if lastProgressMsg != "" {
+					fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
+					lastProgressMsg = ""
+				}
+				fmt.Println(styleMessage(lvl, msg))
+
+			default:
+				// Verbose, Debug, etc. — stop spinner if active, print directly.
+				if sp.IsActive() {
+					sp.Stop()
+					if lastProgressMsg != "" {
+						fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
+						lastProgressMsg = ""
+					}
+				}
+				fmt.Println(styleMessage(lvl, msg))
+			}
 		}),
 	)
 
@@ -157,6 +211,17 @@ func runREPLMode(level loglevel.Level) {
 		}
 
 		response, _ := agentInstance.HandleMessage(input)
+
+		// Ensure spinner is stopped before printing the response
+		// (handles edge case where tool emits → but no output body)
+		if sp.IsActive() {
+			sp.Stop()
+		}
+		if lastProgressMsg != "" {
+			fmt.Println(styleMessage(loglevel.Quiet, lastProgressMsg))
+			lastProgressMsg = ""
+		}
+
 		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
 	}
 }

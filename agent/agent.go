@@ -14,6 +14,11 @@ import (
 // message should be displayed.
 type ProgressCallback func(level loglevel.Level, message string)
 
+// SpinnerCallback receives signals to start or stop the loading spinner.
+// When start is true, message contains the operation text to display.
+// When start is false, message is empty and the spinner should stop.
+type SpinnerCallback func(start bool, message string)
+
 // ErrorCallback receives errors during processing (optional, for logging)
 type ErrorCallback func(err error)
 
@@ -24,6 +29,7 @@ type Agent struct {
 	history          []api.Message
 	logLevel         loglevel.Level
 	progressCallback ProgressCallback
+	spinnerCallback  SpinnerCallback
 	errorCallback    ErrorCallback
 }
 
@@ -41,6 +47,14 @@ func WithLogLevel(level loglevel.Level) AgentOption {
 func WithProgressCallback(cb ProgressCallback) AgentOption {
 	return func(a *Agent) {
 		a.progressCallback = cb
+	}
+}
+
+// WithSpinnerCallback sets the spinner callback for starting/stopping
+// the loading spinner during operations.
+func WithSpinnerCallback(cb SpinnerCallback) AgentOption {
+	return func(a *Agent) {
+		a.spinnerCallback = cb
 	}
 }
 
@@ -82,6 +96,20 @@ func (a *Agent) emit(threshold loglevel.Level, message string) {
 	}
 }
 
+// spinnerStart sends a start signal to the spinner callback if set.
+func (a *Agent) spinnerStart(message string) {
+	if a.spinnerCallback != nil && a.logLevel != loglevel.Silent {
+		a.spinnerCallback(true, message)
+	}
+}
+
+// spinnerStop sends a stop signal to the spinner callback if set.
+func (a *Agent) spinnerStop() {
+	if a.spinnerCallback != nil {
+		a.spinnerCallback(false, "")
+	}
+}
+
 // HandleMessage processes a user message and returns the response
 func (a *Agent) HandleMessage(userInput string) (string, error) {
 	// Add user message to history
@@ -95,7 +123,14 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 
 	// Conversation loop - continue until we get a text response
 	for {
+		// Start spinner while waiting for API response
+		a.spinnerStart("Thinking...")
+
 		resp, err := a.apiClient.Call(a.systemPrompt, a.history, allTools)
+
+		// Stop spinner once API responds
+		a.spinnerStop()
+
 		if err != nil {
 			return fmt.Sprintf("Error: %v", err), err
 		}
