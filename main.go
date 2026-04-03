@@ -12,6 +12,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/api"
 	"github.com/this-is-alpha-iota/clyde/config"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
+	"github.com/this-is-alpha-iota/clyde/prompt"
 	"github.com/this-is-alpha-iota/clyde/prompts"
 	"github.com/this-is-alpha-iota/clyde/spinner"
 	"github.com/this-is-alpha-iota/clyde/style"
@@ -39,7 +40,7 @@ func main() {
 // runCLIMode executes the agent on a single prompt and exits
 func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level) {
 	// Determine prompt source
-	var prompt string
+	var userPrompt string
 	var err error
 
 	if len(args) > 0 && args[0] == "-f" {
@@ -49,24 +50,24 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level) {
 			fmt.Fprintln(os.Stderr, "Usage: clyde -f prompt.txt")
 			os.Exit(1)
 		}
-		prompt, err = readPromptFromFile(args[1])
+		userPrompt, err = readPromptFromFile(args[1])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading prompt file: %v\n", err)
 			os.Exit(1)
 		}
 	} else if hasStdinInput {
 		// stdin is piped/redirected
-		prompt, err = readPromptFromStdin()
+		userPrompt, err = readPromptFromStdin()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading from stdin: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
 		// Treat all args as the prompt string
-		prompt = strings.Join(args, " ")
+		userPrompt = strings.Join(args, " ")
 	}
 
-	if strings.TrimSpace(prompt) == "" {
+	if strings.TrimSpace(userPrompt) == "" {
 		fmt.Fprintln(os.Stderr, "Error: Empty prompt provided")
 		os.Exit(1)
 	}
@@ -93,7 +94,7 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level) {
 	)
 
 	// Execute prompt
-	response, err := agentInstance.HandleMessage(prompt)
+	response, err := agentInstance.HandleMessage(userPrompt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -188,8 +189,13 @@ func runREPLMode(level loglevel.Level) {
 
 	reader := bufio.NewReader(os.Stdin)
 
+	// contextPercent starts at -1 (no data yet) until the first API response
+	contextPercent := -1
+
 	for {
-		fmt.Print("\n" + style.FormatUserPrompt())
+		// Refresh git info on each prompt render
+		gitInfo := prompt.GetGitInfo()
+		fmt.Print("\n" + prompt.FormatPrompt(gitInfo, contextPercent))
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
@@ -223,6 +229,11 @@ func runREPLMode(level loglevel.Level) {
 		}
 
 		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
+
+		// Update context percentage for next prompt
+		usage := agentInstance.LastUsage()
+		totalInput := usage.InputTokens + usage.CacheReadInputTokens
+		contextPercent = prompt.CalculateContextPercent(totalInput, cfg.ContextWindowSize)
 	}
 }
 

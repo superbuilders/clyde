@@ -31,6 +31,7 @@ type Agent struct {
 	progressCallback ProgressCallback
 	spinnerCallback  SpinnerCallback
 	errorCallback    ErrorCallback
+	lastUsage        api.Usage // Token usage from the most recent API response
 }
 
 // AgentOption is a functional option for configuring an Agent
@@ -87,6 +88,12 @@ func (a *Agent) LogLevel() loglevel.Level {
 	return a.logLevel
 }
 
+// LastUsage returns the token usage from the most recent API response.
+// Returns a zero-value Usage if no API call has been made yet.
+func (a *Agent) LastUsage() api.Usage {
+	return a.lastUsage
+}
+
 // emit sends a progress message if the agent's log level allows it.
 // The threshold parameter indicates the minimum level required to see
 // this message.
@@ -134,6 +141,9 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 		if err != nil {
 			return fmt.Sprintf("Error: %v", err), err
 		}
+
+		// Store usage for context tracking
+		a.lastUsage = resp.Usage
 
 		// Display cache hit information if available (Verbose and above)
 		if resp.Usage.CacheReadInputTokens > 0 {

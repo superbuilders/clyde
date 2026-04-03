@@ -972,7 +972,76 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-04-02)
 
-**Latest Update**: TUI-3: Loading Spinner ✅
+**Latest Update**: TUI-4: Prompt Line (Git Branch, Context %, Input Label) ✅
+
+### TUI-4: Prompt Line (Completed 2026-04-02)
+
+**Story**: Show git branch, dirty indicator, context window usage %, and "You:" label in the REPL prompt line.
+
+**Implementation**:
+
+1. **New `prompt` package** (`prompt/prompt.go`):
+   - `GitInfo` struct: Branch name, Dirty state, IsRepo flag
+   - `GetGitInfo()`: Queries `git rev-parse --abbrev-ref HEAD` and `git status --porcelain`
+   - Handles detached HEAD (falls back to `git rev-parse --short HEAD` for short hash)
+   - Handles non-git directories (returns `IsRepo: false`, omits git info from prompt)
+   - Handles git status failures gracefully (reports dirty=false as fallback)
+   - `FormatPrompt(git, contextPercent)`: Formats the complete prompt line
+   - `CalculateContextPercent(inputTokens, contextWindowSize)`: Integer percentage (0–100, clamped)
+   - Dependency injection via `gitRunner` type for testability (no real git needed in tests)
+   - Git info and context % rendered in dim style, "You:" in bold cyan (via style package)
+
+2. **Agent `LastUsage()` method** (`agent/agent.go`):
+   - New `lastUsage api.Usage` field stores token usage from most recent API response
+   - `LastUsage()` getter exposes usage data for context % calculation
+   - Updated after every API call in the conversation loop
+   - Zero-value before first API call (prompt shows no context %)
+
+3. **Config `ContextWindowSize`** (`config/config.go`):
+   - New field: `ContextWindowSize int` (200,000 for Claude Opus 4.6)
+   - Used by REPL to calculate context window usage percentage
+
+4. **REPL integration** (`main.go`):
+   - Replaced `style.FormatUserPrompt()` with `prompt.FormatPrompt(gitInfo, contextPercent)`
+   - Git info refreshed on every prompt render
+   - Context % initialized to -1 (hidden until first API response)
+   - After each response, calculates context % from `agent.LastUsage()`
+   - CLI mode: no prompt line (unchanged — CLI never renders interactive prompts)
+   - Fixed variable naming conflict (`prompt` → `userPrompt` in CLI mode)
+
+5. **Comprehensive tests** (12 unit tests + 5 integration tests):
+   - `prompt/prompt_test.go` (12 tests, 31 subtests):
+     - Live git info retrieval (TestGetGitInfo)
+     - Mock git: clean repo, dirty repo, detached HEAD, non-repo, status failure
+     - FormatPrompt: 9 scenarios (clean, dirty, detached, non-repo, no context, 0%, 99%, feature branch)
+     - NO_COLOR support (no ANSI codes when disabled)
+     - Ordering verification (git → context% → You:)
+     - CalculateContextPercent: 10 boundary conditions (0%, 12%, 50%, 99%, 100%, >100% clamped, unknown window)
+     - Bold cyan verification for You: label
+     - Dim style verification for git info
+   - `tests/prompt_test.go` (5 integration tests):
+     - CLI mode doesn't show prompt (builds binary, runs, checks output)
+     - Agent LastUsage() works with real API call
+     - Git info appears in prompt when in repo
+     - Non-git directory omits git info
+     - Context % progresses across multiple API calls
+
+**Prompt Examples**:
+```
+main* 12% You:      ← dirty repo, 12% context used
+develop 0% You:     ← clean repo, just started
+a1b2c3d 50% You:   ← detached HEAD, half context used
+5% You:             ← not a git repo, 5% context used
+main You:           ← before first API call (no context % yet)
+You:                ← not a git repo, before first API call
+```
+
+**Architecture Decisions**:
+- Git info is dim (secondary) while "You:" is bold cyan (primary) — visual hierarchy
+- Context % uses integer precision (no decimal) — compact and sufficient
+- Context % hidden before first API call (-1 sentinel) — clean initial UX
+- Dependency injection for git commands — enables fast, deterministic unit tests
+- `CalculateContextPercent` is a pure function — easy to test, no side effects
 
 ### TUI-3: Loading Spinner (Completed 2026-04-02)
 

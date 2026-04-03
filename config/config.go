@@ -14,6 +14,7 @@ type Config struct {
 	APIURL            string
 	ModelID           string
 	MaxTokens         int
+	ContextWindowSize int // Maximum context window for the model in tokens
 }
 
 // LoadFromFile loads configuration from a specific file path
@@ -44,5 +45,6 @@ func LoadFromFile(path string) (*Config, error) {
 		APIURL:            "https://api.anthropic.com/v1/messages",
 		ModelID:           "claude-opus-4-6",
 		MaxTokens:         64000,
+		ContextWindowSize: 200000, // Claude Opus 4.6 context window
 	}, nil
 }

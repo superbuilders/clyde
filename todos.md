@@ -970,7 +970,7 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 
 ---
 
-### TUI-4: Prompt Line (Git Branch, Context %, Input Label)
+### TUI-4: Prompt Line (Git Branch, Context %, Input Label) ✅ DONE
 
 **As a** user in REPL mode,
 **I want** the input prompt to show the current git branch (with dirty indicator), context window usage percentage, and the `You:` label,
@@ -979,15 +979,15 @@ Stories are dependency-ordered: foundations first (1–2), then UI chrome (3–6
 **Depends on**: TUI-2 (bold cyan for `You:` label)
 
 **Acceptance Criteria**:
-- [ ] The prompt line format is: `<branch><dirty> <context%> You: ` (e.g., `main* 12% You: `).
-- [ ] Git branch is obtained via `git rev-parse --abbrev-ref HEAD`. If detached HEAD, show short hash. If not a git repo, omit git info entirely.
-- [ ] Dirty indicator (`*`) is present when `git status --porcelain` returns non-empty output.
-- [ ] Context window usage is calculated as `(total_input_tokens_last_turn / model_context_window_size) * 100` and displayed as a compact integer percentage (e.g., `12%`).
-- [ ] The `You:` label is styled in bold cyan per TUI-2.
-- [ ] Git info is refreshed on each prompt render.
-- [ ] In CLI mode, there is no prompt line.
-- [ ] Unit tests verify prompt formatting for: clean repo, dirty repo, detached HEAD, non-git directory, various context percentages (0%, 50%, 99%).
-- [ ] Unit tests verify git info is omitted when not in a git repo.
+- [x] The prompt line format is: `<branch><dirty> <context%> You: ` (e.g., `main* 12% You: `).
+- [x] Git branch is obtained via `git rev-parse --abbrev-ref HEAD`. If detached HEAD, show short hash. If not a git repo, omit git info entirely.
+- [x] Dirty indicator (`*`) is present when `git status --porcelain` returns non-empty output.
+- [x] Context window usage is calculated as `(total_input_tokens_last_turn / model_context_window_size) * 100` and displayed as a compact integer percentage (e.g., `12%`).
+- [x] The `You:` label is styled in bold cyan per TUI-2.
+- [x] Git info is refreshed on each prompt render.
+- [x] In CLI mode, there is no prompt line.
+- [x] Unit tests verify prompt formatting for: clean repo, dirty repo, detached HEAD, non-git directory, various context percentages (0%, 50%, 99%).
+- [x] Unit tests verify git info is omitted when not in a git repo.
 
 ---
 
