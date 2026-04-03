@@ -11,13 +11,14 @@ import (
 	"github.com/this-is-alpha-iota/clyde/agent"
 	"github.com/this-is-alpha-iota/clyde/api"
 	"github.com/this-is-alpha-iota/clyde/config"
+	"github.com/this-is-alpha-iota/clyde/loglevel"
 	"github.com/this-is-alpha-iota/clyde/prompts"
 	_ "github.com/this-is-alpha-iota/clyde/tools" // Import tools to register them
 )
 
 func main() {
-	// Parse command line arguments to determine mode
-	args := os.Args[1:]
+	// Parse log level flags first, stripping them from args
+	level, args := loglevel.ParseFlags(os.Args[1:])
 
 	// Check if stdin has input (pipe/redirect)
 	stat, _ := os.Stdin.Stat()
@@ -27,14 +28,14 @@ func main() {
 	// CLI mode if: args provided OR stdin is piped
 	// REPL mode if: no args AND stdin is interactive (terminal)
 	if len(args) > 0 || hasStdinInput {
-		runCLIMode(args, hasStdinInput)
+		runCLIMode(args, hasStdinInput, level)
 	} else {
-		runREPLMode()
+		runREPLMode(level)
 	}
 }
 
 // runCLIMode executes the agent on a single prompt and exits
-func runCLIMode(args []string, hasStdinInput bool) {
+func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level) {
 	// Determine prompt source
 	var prompt string
 	var err error
@@ -83,7 +84,8 @@ func runCLIMode(args []string, hasStdinInput bool) {
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithLogLevel(level),
+		agent.WithProgressCallback(func(_ loglevel.Level, msg string) {
 			fmt.Fprintln(os.Stderr, msg) // Print progress to stderr
 		}),
 	)
@@ -101,7 +103,7 @@ func runCLIMode(args []string, hasStdinInput bool) {
 }
 
 // runREPLMode runs the interactive REPL
-func runREPLMode() {
+func runREPLMode(level loglevel.Level) {
 	// Determine config file location (CLI layer responsibility)
 	configPath := getConfigPath()
 
@@ -119,7 +121,8 @@ func runREPLMode() {
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithLogLevel(level),
+		agent.WithProgressCallback(func(_ loglevel.Level, msg string) {
 			fmt.Println(msg) // REPL prints progress to stdout
 		}),
 	)
