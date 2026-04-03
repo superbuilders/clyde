@@ -972,7 +972,54 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-04-03)
 
-**Latest Update**: TUI-5: Rich Text Input (readline-based input widget) ✅
+**Latest Update**: TUI-5 bugfix — extra newline on every keystroke ✅
+
+### Bug #3: Readline Prompt Newline Causes Scroll on Every Keystroke (Fixed 2026-04-03)
+
+**Issue**: After TUI-5 (readline integration), every keystroke in the REPL pushed previous content up by one line, creating a rapidly scrolling display.
+
+**Symptoms**: Typing any character caused the scroll area above the prompt to shift up. The more you typed, the more blank lines accumulated. The REPL became unusable for normal input.
+
+**Root Cause**: The `"\n"` newline prefix was embedded in the readline prompt string:
+```go
+// BUGGY — "\n" is part of the prompt string
+reader.SetPrompt("\n" + prompt.FormatPrompt(gitInfo, contextPercent))
+```
+
+`chzyer/readline` **redraws the entire prompt on every keystroke** (it sends `\033[J\033[2K\r` then re-outputs the prompt + input text). With `"\n"` embedded in the prompt, each redraw emitted a newline into the terminal scroll buffer, pushing content up.
+
+This was fine with the old `bufio.NewReader` code because `fmt.Print("\n" + prompt)` was called once before the blocking `ReadString('\n')` — there was no per-keystroke redraw.
+
+**Reproduction** (via `expect` + `cat -v`):
+```
+# Before fix — ^M^M (double carriage return = newline in prompt) on every redraw:
+^[[J^[[2K^M^M
+^[[2mmaster^[[0m ^[[1;36mYou: ^[[0mh^[[J^[[2K^M^M
+^[[2mmaster^[[0m ^[[1;36mYou: ^[[0mhe^[[J^[[2K^M^M
+
+# After fix — single line, no embedded newline:
+^[[J^[[2K^M^[[2mmaster*^[[0m ^[[1;36mYou: ^[[0mh^[[J^[[2K^M^[[2mmaster*^[[0m ^[[1;36mYou: ^[[0mhe
+```
+
+**Fix Applied** (`main.go`, two locations):
+```go
+// Before (buggy):
+initialPrompt := "\n" + prompt.FormatPrompt(gitInfo, -1)
+reader.SetPrompt("\n" + prompt.FormatPrompt(gitInfo, contextPercent))
+
+// After (fixed):
+initialPrompt := prompt.FormatPrompt(gitInfo, -1)
+fmt.Println()  // print separator once, before ReadLine
+reader.SetPrompt(prompt.FormatPrompt(gitInfo, contextPercent))
+```
+
+The `"\n"` is now printed via `fmt.Println()` once per prompt cycle (before `ReadLine()` blocks), not embedded in the prompt string that gets redrawn on every keystroke.
+
+**Impact**: REPL input works correctly — no extra scrolling, no blank lines accumulating.
+
+**Tests**: All 23 input package tests pass. All unit tests across all packages pass. No regressions.
+
+**Lesson Learned**: Never embed `\n` in a readline prompt string. Readline libraries redraw the prompt on every keystroke; any embedded newlines will be emitted on every redraw. Print visual separators outside the prompt string.
 
 ### TUI-5: Rich Text Input (Completed 2026-04-03)
 

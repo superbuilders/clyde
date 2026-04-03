@@ -197,9 +197,13 @@ func runREPLMode(level loglevel.Level) {
 		historyFile = filepath.Join(homeDir, ".clyde", "history")
 	}
 
-	// Build the initial prompt
+	// Build the initial prompt.
+	// NOTE: The "\n" separator is NOT part of the prompt string because
+	// chzyer/readline redraws the prompt on every keystroke. A newline
+	// embedded in the prompt would be emitted on every redraw, scrolling
+	// content upward. Instead we print the newline once before ReadLine().
 	gitInfo := prompt.GetGitInfo()
-	initialPrompt := "\n" + prompt.FormatPrompt(gitInfo, -1)
+	initialPrompt := prompt.FormatPrompt(gitInfo, -1)
 
 	reader, err := input.New(input.Config{
 		Prompt:      initialPrompt,
@@ -217,9 +221,12 @@ func runREPLMode(level loglevel.Level) {
 	contextPercent := -1
 
 	for {
-		// Refresh git info and update prompt on each iteration
+		// Refresh git info and update prompt on each iteration.
+		// Print the blank-line separator here (not in the prompt string)
+		// so it is emitted once instead of on every keystroke redraw.
 		gitInfo := prompt.GetGitInfo()
-		reader.SetPrompt("\n" + prompt.FormatPrompt(gitInfo, contextPercent))
+		fmt.Println()
+		reader.SetPrompt(prompt.FormatPrompt(gitInfo, contextPercent))
 
 		userInput, err := reader.ReadLine()
 		if err != nil {
