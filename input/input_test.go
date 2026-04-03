@@ -16,7 +16,15 @@ type mockReadCloser struct {
 func (m *mockReadCloser) Close() error { return nil }
 
 // newMockStdin creates a mock stdin from the given string.
-// Each line should end with \n to simulate Enter.
+//
+// Byte conventions for simulating keypresses:
+//
+//	\r        (0x0D / CR)       — Enter key (submit line)
+//	\n        (0x0A / LF)       — Ctrl+J (insert newline / multiline)
+//	\x1b\x0d (ESC + CR)        — Alt+Enter (insert newline / multiline)
+//	\\        (literal \)       — backslash continuation when at end of line
+//
+// These match what real terminals send in raw mode.
 func newMockStdin(s string) io.ReadCloser {
 	return &mockReadCloser{strings.NewReader(s)}
 }
@@ -30,7 +38,7 @@ func TestNew_DefaultConfig(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "test> ",
 		HistoryFile: historyFile,
-		Stdin:       newMockStdin("hello\n"),
+		Stdin:       newMockStdin("hello\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -51,7 +59,7 @@ func TestReadLine_SingleLine(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin("hello world\n"),
+		Stdin:       newMockStdin("hello world\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -77,7 +85,7 @@ func TestReadLine_EmptyLine(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin("\n"),
+		Stdin:       newMockStdin("\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -126,7 +134,7 @@ func TestReadLine_MultipleLines(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin("first\nsecond\nthird\n"),
+		Stdin:       newMockStdin("first\rsecond\rthird\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -152,8 +160,9 @@ func TestReadLine_MultipleLines(t *testing.T) {
 func TestReadLine_Multiline_BackslashContinuation(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Lines ending with \ continue to the next line
-	input := "line one\\\nline two\\\nline three\n"
+	// Lines ending with \ continue to the next line.
+	// \r simulates pressing Enter to submit each line to readline.
+	input := "line one\\\rline two\\\rline three\r"
 
 	r, err := New(Config{
 		Prompt:      "> ",
@@ -183,7 +192,7 @@ func TestReadLine_Multiline_BackslashContinuation(t *testing.T) {
 func TestReadLine_Multiline_SingleBackslashLine(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	input := "start\\\nend\n"
+	input := "start\\\rend\r"
 
 	r, err := New(Config{
 		Prompt:      "> ",
@@ -212,7 +221,7 @@ func TestReadLine_Multiline_SingleBackslashLine(t *testing.T) {
 func TestReadLine_Multiline_OnlyBackslash(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	input := "\\\nsecond line\n"
+	input := "\\\rsecond line\r"
 
 	r, err := New(Config{
 		Prompt:      "> ",
@@ -245,7 +254,7 @@ func TestReadLine_HistorySaved(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "> ",
 		HistoryFile: historyFile,
-		Stdin:       newMockStdin("first input\nsecond input\n"),
+		Stdin:       newMockStdin("first input\rsecond input\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -283,7 +292,7 @@ func TestReadLine_EmptyNotSavedToHistory(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "> ",
 		HistoryFile: historyFile,
-		Stdin:       newMockStdin("\nreal input\n"),
+		Stdin:       newMockStdin("\rreal input\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -304,7 +313,7 @@ func TestReadLine_EmptyNotSavedToHistory(t *testing.T) {
 	histContent := string(data)
 	// The empty line should not be in history but real input should
 	if !strings.Contains(histContent, "real input") {
-		t.Errorf("History should contain 'real input', got: %q", histContent)
+		t.Error("History should contain 'real input'")
 	}
 }
 
@@ -314,7 +323,7 @@ func TestReadLine_Multiline_HistorySavedAsBlock(t *testing.T) {
 	tmpDir := t.TempDir()
 	historyFile := filepath.Join(tmpDir, "history")
 
-	input := "first line\\\nsecond line\n"
+	input := "first line\\\rsecond line\r"
 
 	r, err := New(Config{
 		Prompt:      "> ",
@@ -353,7 +362,7 @@ func TestSetPrompt(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "initial> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin("test\n"),
+		Stdin:       newMockStdin("test\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -404,7 +413,7 @@ func TestStdout(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin("test\n"),
+		Stdin:       newMockStdin("test\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -432,7 +441,7 @@ func TestStderr(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin("test\n"),
+		Stdin:       newMockStdin("test\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -454,7 +463,7 @@ func TestIsMultiline(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin("normal\n"),
+		Stdin:       newMockStdin("normal\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -483,7 +492,7 @@ func TestAccumulatedLines_Nil(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin("normal\n"),
+		Stdin:       newMockStdin("normal\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -514,7 +523,7 @@ func TestReadLine_LongInput(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a long input line (3000 chars)
-	longLine := strings.Repeat("a", 3000) + "\n"
+	longLine := strings.Repeat("a", 3000) + "\r"
 
 	r, err := New(Config{
 		Prompt:      "> ",
@@ -546,9 +555,9 @@ func TestReadLine_Multiline_ManyLines(t *testing.T) {
 	var sb strings.Builder
 	for i := 0; i < 20; i++ {
 		sb.WriteString("line " + strings.Repeat("x", i))
-		sb.WriteString("\\\n")
+		sb.WriteString("\\\r")
 	}
-	sb.WriteString("final line\n")
+	sb.WriteString("final line\r")
 
 	r, err := New(Config{
 		Prompt:      "> ",
@@ -587,7 +596,7 @@ func TestNew_NoHistoryFile(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "nonexistent-dir", "history"),
-		Stdin:       newMockStdin("test\n"),
+		Stdin:       newMockStdin("test\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -616,7 +625,7 @@ func TestReadLine_WhitespaceOnly(t *testing.T) {
 	r, err := New(Config{
 		Prompt:      "> ",
 		HistoryFile: historyFile,
-		Stdin:       newMockStdin("   \nreal\n"),
+		Stdin:       newMockStdin("   \rreal\r"),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
@@ -649,7 +658,7 @@ func TestReadLine_SequentialSingleAndMultiline(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// single -> multiline -> single
-	input := "single one\nfirst\\\nsecond\nsingle two\n"
+	input := "single one\rfirst\\\rsecond\rsingle two\r"
 
 	r, err := New(Config{
 		Prompt:      "> ",
@@ -688,5 +697,490 @@ func TestReadLine_SequentialSingleAndMultiline(t *testing.T) {
 	}
 	if got != "single two" {
 		t.Errorf("ReadLine() 3 = %q, want %q", got, "single two")
+	}
+}
+
+// ============================================================================
+// TUI-9: Ctrl+J and Alt+Enter multiline tests
+// ============================================================================
+
+// TestReadLine_CtrlJ_BasicMultiline tests that Ctrl+J (0x0A) inserts a
+// newline and enters multiline accumulation mode.
+func TestReadLine_CtrlJ_BasicMultiline(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// "hello" + Ctrl+J (0x0A) + "world" + Enter (0x0D)
+	input := "hello\nworld\r"
+
+	r, err := New(Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(input),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer r.Close()
+
+	result, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+
+	want := "hello\nworld"
+	if result != want {
+		t.Errorf("ReadLine() = %q, want %q", result, want)
+	}
+}
+
+// TestReadLine_CtrlJ_ThreeLines tests Ctrl+J with three lines.
+func TestReadLine_CtrlJ_ThreeLines(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// "line1" + Ctrl+J + "line2" + Ctrl+J + "line3" + Enter
+	input := "line1\nline2\nline3\r"
+
+	r, err := New(Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(input),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer r.Close()
+
+	result, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+
+	want := "line1\nline2\nline3"
+	if result != want {
+		t.Errorf("ReadLine() = %q, want %q", result, want)
+	}
+}
+
+// TestReadLine_CtrlJ_EmptyFirstLine tests Ctrl+J on an empty line
+// (just pressing Ctrl+J immediately inserts a blank line).
+func TestReadLine_CtrlJ_EmptyFirstLine(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Ctrl+J (empty first line) + "content" + Enter
+	input := "\ncontent\r"
+
+	r, err := New(Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(input),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer r.Close()
+
+	result, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+
+	want := "\ncontent"
+	if result != want {
+		t.Errorf("ReadLine() = %q, want %q", result, want)
+	}
+}
+
+// TestReadLine_AltEnter_BasicMultiline tests that Alt+Enter (ESC CR / 0x1B 0x0D)
+// inserts a newline and enters multiline accumulation mode.
+func TestReadLine_AltEnter_BasicMultiline(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// "hello" + Alt+Enter (ESC CR) + "world" + Enter (CR)
+	input := "hello\x1b\x0dworld\r"
+
+	r, err := New(Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(input),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer r.Close()
+
+	result, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+
+	want := "hello\nworld"
+	if result != want {
+		t.Errorf("ReadLine() = %q, want %q", result, want)
+	}
+}
+
+// TestReadLine_AltEnter_ThreeLines tests Alt+Enter with three lines.
+func TestReadLine_AltEnter_ThreeLines(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// "a" + Alt+Enter + "b" + Alt+Enter + "c" + Enter
+	input := "a\x1b\x0db\x1b\x0dc\r"
+
+	r, err := New(Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(input),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer r.Close()
+
+	result, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+
+	want := "a\nb\nc"
+	if result != want {
+		t.Errorf("ReadLine() = %q, want %q", result, want)
+	}
+}
+
+// TestReadLine_MixedMultiline tests mixing all three multiline methods
+// (backslash, Ctrl+J, Alt+Enter) in a single input block.
+func TestReadLine_MixedMultiline(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// "line1\" + Enter (backslash continuation)
+	// + "line2" + Ctrl+J (0x0A)
+	// + "line3" + Alt+Enter (ESC CR)
+	// + "line4" + Enter (submit)
+	input := "line1\\\rline2\nline3\x1b\x0dline4\r"
+
+	r, err := New(Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(input),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer r.Close()
+
+	result, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+
+	want := "line1\nline2\nline3\nline4"
+	if result != want {
+		t.Errorf("ReadLine() = %q, want %q", result, want)
+	}
+}
+
+// TestReadLine_CtrlJ_HistorySavedAsBlock tests that multiline input
+// assembled via Ctrl+J is saved to history as a single block.
+func TestReadLine_CtrlJ_HistorySavedAsBlock(t *testing.T) {
+	tmpDir := t.TempDir()
+	historyFile := filepath.Join(tmpDir, "history")
+
+	// "part1" + Ctrl+J + "part2" + Enter
+	input := "part1\npart2\r"
+
+	r, err := New(Config{
+		Prompt:      "> ",
+		HistoryFile: historyFile,
+		Stdin:       newMockStdin(input),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	result, _ := r.ReadLine()
+	r.Close()
+
+	// Verify assembled correctly
+	want := "part1\npart2"
+	if result != want {
+		t.Errorf("ReadLine() = %q, want %q", result, want)
+	}
+
+	// History should contain the assembled multiline input
+	data, err := os.ReadFile(historyFile)
+	if err != nil {
+		t.Fatalf("Failed to read history file: %v", err)
+	}
+	histContent := string(data)
+	if !strings.Contains(histContent, "part1") {
+		t.Error("History should contain 'part1'")
+	}
+	if !strings.Contains(histContent, "part2") {
+		t.Error("History should contain 'part2'")
+	}
+}
+
+// TestReadLine_CtrlJ_BackslashPreserved tests that a trailing backslash
+// is preserved (not stripped) when Ctrl+J is used for continuation,
+// since the backslash is content, not a continuation marker.
+func TestReadLine_CtrlJ_BackslashPreserved(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// "path\to\" + Ctrl+J + "file" + Enter
+	// The backslash should be preserved because Ctrl+J, not Enter, was used
+	input := "path\\to\\\nfile\r"
+
+	r, err := New(Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(input),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer r.Close()
+
+	result, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+
+	// With Ctrl+J, the backslash is preserved (it's content, not a continuation marker)
+	want := "path\\to\\\nfile"
+	if result != want {
+		t.Errorf("ReadLine() = %q, want %q", result, want)
+	}
+}
+
+// TestReadLine_CtrlJ_ThenSingleLine tests that after a Ctrl+J multiline
+// input, the next read works as a normal single-line input.
+func TestReadLine_CtrlJ_ThenSingleLine(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// First: "a" + Ctrl+J + "b" + Enter
+	// Second: "single" + Enter
+	input := "a\nb\rsingle\r"
+
+	r, err := New(Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(input),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer r.Close()
+
+	// First: multiline via Ctrl+J
+	result, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() 1 error = %v", err)
+	}
+	if result != "a\nb" {
+		t.Errorf("ReadLine() 1 = %q, want %q", result, "a\nb")
+	}
+
+	// Second: single line
+	result, err = r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() 2 error = %v", err)
+	}
+	if result != "single" {
+		t.Errorf("ReadLine() 2 = %q, want %q", result, "single")
+	}
+}
+
+// TestReadLine_CtrlC_DuringCtrlJMultiline tests that Ctrl+C during a
+// Ctrl+J multiline session discards the partial input.
+func TestReadLine_CtrlC_DuringCtrlJMultiline(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// "partial" + Ctrl+J + Ctrl+C (interrupt) + "after" + Enter
+	// Ctrl+C is 0x03 (CharInterrupt)
+	input := "partial\n\x03after\r"
+
+	r, err := New(Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(input),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer r.Close()
+
+	// First ReadLine: "partial" + Ctrl+J enters multiline,
+	// then Ctrl+C interrupts → returns error
+	_, err = r.ReadLine()
+	if err == nil {
+		t.Fatal("Expected error from Ctrl+C, got nil")
+	}
+
+	// Verify multiline state was cleaned up
+	if r.IsMultiline() {
+		t.Error("Expected IsMultiline() = false after Ctrl+C")
+	}
+
+	// Next read should work normally
+	result, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() after Ctrl+C error = %v", err)
+	}
+	if result != "after" {
+		t.Errorf("ReadLine() after Ctrl+C = %q, want %q", result, "after")
+	}
+}
+
+// ============================================================================
+// metaCRReader unit tests
+// ============================================================================
+
+// TestMetaCRReader_PassThrough tests that normal bytes pass through unchanged.
+func TestMetaCRReader_PassThrough(t *testing.T) {
+	input := "hello\rworld\r"
+	m := &metaCRReader{rc: newMockStdin(input)}
+
+	var result []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := m.Read(buf)
+		if n > 0 {
+			result = append(result, buf[0])
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	if string(result) != input {
+		t.Errorf("metaCRReader passthrough = %q, want %q", string(result), input)
+	}
+}
+
+// TestMetaCRReader_AltEnterTranslation tests that ESC+CR is translated to LF.
+func TestMetaCRReader_AltEnterTranslation(t *testing.T) {
+	// "hello" + ESC CR + "world" + CR
+	input := "hello\x1b\x0dworld\r"
+	m := &metaCRReader{rc: newMockStdin(input)}
+
+	var result []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := m.Read(buf)
+		if n > 0 {
+			result = append(result, buf[0])
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	// ESC+CR should become LF (0x0A)
+	want := "hello\nworld\r"
+	if string(result) != want {
+		t.Errorf("metaCRReader Alt+Enter = %q, want %q", string(result), want)
+	}
+}
+
+// TestMetaCRReader_EscapeSequencePreserved tests that non-Alt+Enter escape
+// sequences (like ESC [ A for up arrow) pass through correctly.
+func TestMetaCRReader_EscapeSequencePreserved(t *testing.T) {
+	// ESC + '[' + 'A' = up arrow escape sequence
+	input := "\x1b[A"
+	m := &metaCRReader{rc: newMockStdin(input)}
+
+	var result []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := m.Read(buf)
+		if n > 0 {
+			result = append(result, buf[0])
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	// ESC + non-CR should pass through: ESC, then '[', then 'A'
+	if string(result) != input {
+		t.Errorf("metaCRReader escape seq = %q, want %q", string(result), input)
+	}
+}
+
+// TestMetaCRReader_MultipleAltEnters tests multiple Alt+Enter sequences.
+func TestMetaCRReader_MultipleAltEnters(t *testing.T) {
+	// "a" + ESC CR + "b" + ESC CR + "c" + CR
+	input := "a\x1b\x0db\x1b\x0dc\r"
+	m := &metaCRReader{rc: newMockStdin(input)}
+
+	var result []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := m.Read(buf)
+		if n > 0 {
+			result = append(result, buf[0])
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	want := "a\nb\nc\r"
+	if string(result) != want {
+		t.Errorf("metaCRReader multiple = %q, want %q", string(result), want)
+	}
+}
+
+// TestMetaCRReader_EscAtEOF tests that ESC at the end of input passes through.
+func TestMetaCRReader_EscAtEOF(t *testing.T) {
+	input := "hello\x1b"
+	m := &metaCRReader{rc: newMockStdin(input)}
+
+	var result []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := m.Read(buf)
+		if n > 0 {
+			result = append(result, buf[0])
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	// ESC at EOF should be passed through
+	if string(result) != input {
+		t.Errorf("metaCRReader ESC at EOF = %q, want %q", string(result), input)
+	}
+}
+
+// TestMetaCRReader_Close tests that Close delegates to underlying reader.
+func TestMetaCRReader_Close(t *testing.T) {
+	mock := newMockStdin("test")
+	m := &metaCRReader{rc: mock}
+
+	err := m.Close()
+	if err != nil {
+		t.Errorf("metaCRReader.Close() error = %v", err)
 	}
 }

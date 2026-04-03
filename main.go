@@ -248,7 +248,8 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 
 	// Start REPL
 	fmt.Println("Clyde - AI Coding Agent - Type 'exit' or 'quit' to exit")
-	fmt.Println("  Multiline: end a line with \\ to continue on the next line")
+	fmt.Println("  Multiline: Ctrl+J or Alt+Enter to insert a newline,")
+	fmt.Println("             or end a line with \\ to continue")
 	fmt.Println("==========================================================")
 
 	// Create rich text input reader (readline-based).

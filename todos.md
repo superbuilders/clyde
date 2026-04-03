@@ -1109,33 +1109,33 @@ This story delivers the truncation engine *and* thinking traces together as one 
 **Acceptance Criteria**:
 
 *Ctrl+J (universal):*
-- [ ] Pressing Ctrl+J (`0x0A`) while typing inserts a newline and enters multiline accumulation mode.
-- [ ] The prompt changes to the continuation prompt (`  > `) on subsequent lines, matching the existing backslash behavior.
-- [ ] Pressing plain Enter submits the accumulated multiline input.
-- [ ] Ctrl+J works in every terminal without configuration (it sends a distinct byte from Enter).
+- [x] Pressing Ctrl+J (`0x0A`) while typing inserts a newline and enters multiline accumulation mode.
+- [x] The prompt changes to the continuation prompt (`  > `) on subsequent lines, matching the existing backslash behavior.
+- [x] Pressing plain Enter submits the accumulated multiline input.
+- [x] Ctrl+J works in every terminal without configuration (it sends a distinct byte from Enter).
 
 *Alt+Enter (Meta+CR):*
-- [ ] Pressing Alt+Enter (`0x1B 0x0D`) inserts a newline and enters multiline accumulation mode, identical to Ctrl+J behavior.
-- [ ] The ESC prefix is correctly disambiguated from a standalone Escape keypress followed by Enter (readline's existing timeout-based disambiguation is sufficient).
-- [ ] On macOS Terminal.app, this requires "Use Option as Meta Key" to be enabled (documented in README or startup hint).
+- [x] Pressing Alt+Enter (`0x1B 0x0D`) inserts a newline and enters multiline accumulation mode, identical to Ctrl+J behavior.
+- [x] The ESC prefix is correctly disambiguated from a standalone Escape keypress followed by Enter (readline's existing timeout-based disambiguation is sufficient).
+- [x] On macOS Terminal.app, this requires "Use Option as Meta Key" to be enabled (documented in README or startup hint).
 
 *Shared behavior:*
-- [ ] Both methods integrate with the existing backslash continuation — a user can mix `\`-continuation, Ctrl+J, and Alt+Enter freely within the same input.
-- [ ] Multiline input assembled via Ctrl+J or Alt+Enter is saved to history as a single block (matching backslash behavior).
-- [ ] Ctrl+C while in multiline mode discards the partial input and returns to a fresh prompt (matching existing behavior).
-- [ ] The implementation uses chzyer/readline's `FuncFilterInputRune` or `Listener` callback — no library replacement needed.
+- [x] Both methods integrate with the existing backslash continuation — a user can mix `\`-continuation, Ctrl+J, and Alt+Enter freely within the same input.
+- [x] Multiline input assembled via Ctrl+J or Alt+Enter is saved to history as a single block (matching backslash behavior).
+- [x] Ctrl+C while in multiline mode discards the partial input and returns to a fresh prompt (matching existing behavior).
+- [x] The implementation uses chzyer/readline's `FuncFilterInputRune` or `Listener` callback — no library replacement needed.
 
 *Documentation & discoverability:*
-- [ ] The README documents all three multiline methods (backslash, Ctrl+J, Alt+Enter) with a note about macOS Terminal.app Option-as-Meta.
-- [ ] On first launch (or via a `/help` hint), the available multiline key combos are mentioned.
+- [x] The README documents all three multiline methods (backslash, Ctrl+J, Alt+Enter) with a note about macOS Terminal.app Option-as-Meta.
+- [x] On first launch (or via a `/help` hint), the available multiline key combos are mentioned.
 
 *Tests:*
-- [ ] Unit tests verify Ctrl+J (`0x0A`) triggers multiline mode and accumulates lines correctly.
-- [ ] Unit tests verify Alt+Enter (`0x1B 0x0D`) triggers multiline mode and accumulates lines correctly.
-- [ ] Unit tests verify mixed usage (backslash + Ctrl+J + Alt+Enter in the same input block).
-- [ ] Unit tests verify Ctrl+C discards partial multiline input from Ctrl+J / Alt+Enter mode.
-- [ ] Unit tests verify history saves the complete assembled block.
-- [ ] Existing backslash-continuation tests still pass unchanged.
+- [x] Unit tests verify Ctrl+J (`0x0A`) triggers multiline mode and accumulates lines correctly.
+- [x] Unit tests verify Alt+Enter (`0x1B 0x0D`) triggers multiline mode and accumulates lines correctly.
+- [x] Unit tests verify mixed usage (backslash + Ctrl+J + Alt+Enter in the same input block).
+- [x] Unit tests verify Ctrl+C discards partial multiline input from Ctrl+J / Alt+Enter mode.
+- [x] Unit tests verify history saves the complete assembled block.
+- [x] Existing backslash-continuation tests still pass unchanged.
 
 ---
 

@@ -327,6 +327,37 @@ go test ./tests/... -v
 go test ./tests/... -v -run TestName
 ```
 
+## Multiline Input
+
+Clyde supports three ways to compose multi-line prompts in REPL mode:
+
+### 1. Ctrl+J (Universal)
+Press **Ctrl+J** to insert a newline without submitting. Works on every terminal, everywhere, unconditionally.
+
+```
+main* 12% You: Write a function that  [Ctrl+J]
+  > takes two numbers and    [Ctrl+J]
+  > returns their sum        [Enter to submit]
+```
+
+### 2. Alt+Enter
+Press **Alt+Enter** to insert a newline, identical to Ctrl+J.
+
+> **macOS Terminal.app**: Requires "Use Option as Meta Key" to be enabled in terminal preferences.
+> **iTerm2**: Works by default (Option acts as Meta).
+> **Linux terminals**: Works by default on most terminals.
+
+### 3. Backslash Continuation
+End a line with `\` to continue on the next line:
+
+```
+main* 12% You: This is a long prompt that \
+  > continues on the next line \
+  > and finishes here         [Enter to submit]
+```
+
+All three methods can be mixed freely within the same input block. **Ctrl+C** while composing a multiline prompt discards the partial input and returns to a fresh prompt. Multiline input is saved to history as a single block.
+
 ## Available Tools
 
 The REPL includes eleven integrated tools:

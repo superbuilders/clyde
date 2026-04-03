@@ -972,7 +972,105 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-07-10)
 
-**Latest Update**: TUI-8: Tool Output Bodies Display ✅
+**Latest Update**: TUI-9: Alt+Enter & Ctrl+J for Multiline Input ✅
+
+### TUI-9: Alt+Enter & Ctrl+J for Multiline Input (Completed 2026-07-10)
+
+**Story**: Enable Ctrl+J and Alt+Enter as newline-insertion keys in REPL mode, so users can compose structured multi-line prompts naturally — without relying solely on backslash continuation.
+
+**Depends on**: TUI-5 (rich text input / chzyer/readline integration)
+
+**What Was Built**:
+
+#### 1. `FuncFilterInputRune` for Ctrl+J (`input/input.go`)
+- Intercepts `CharCtrlJ` (0x0A / LF) in readline's input filter before it's processed
+- Sets an atomic `ctrlJPressed` flag and translates the rune to `CharEnter` (0x0D)
+- readline accepts the current line normally, but `ReadLine()` sees the flag and accumulates instead of returning
+- Thread-safe: flag set in readline's ioloop goroutine, read in main goroutine via `sync/atomic.Bool`
+
+#### 2. `metaCRReader` — stdin wrapper for Alt+Enter (`input/input.go`)
+- Translates the byte sequence ESC+CR (`0x1B 0x0D`, sent by terminals for Alt+Enter) to LF (`0x0A`)
+- This makes Alt+Enter arrive at `FuncFilterInputRune` as CharCtrlJ, receiving identical treatment
+- Wraps stdin before readline's terminal layer processes escape sequences
+- All other escape sequences (ESC+`[`, ESC+`O`, ESC+letter for Meta keys) pass through unmodified
+- For REPL mode: wraps `os.Stdin` through `readline.NewCancelableStdin` for proper shutdown
+- For tests: wraps the mock stdin directly
+
+**Why a stdin wrapper was needed**:
+The original acceptance criteria suggested using only `FuncFilterInputRune` or `Listener`. However, readline's terminal layer consumes ESC and passes through plain CR for the ESC+CR sequence — making Alt+Enter indistinguishable from Enter by the time it reaches `FuncFilterInputRune`. The `metaCRReader` intercepts at the byte level before readline's terminal processes the escape, cleanly separating concerns.
+
+#### 3. Updated `ReadLine()` flow
+The ReadLine loop now checks three triggers in order:
+1. **ctrlJPressed flag** (Ctrl+J or Alt+Enter) → accumulate line as-is, enter multiline mode
+2. **Trailing backslash** → strip backslash, accumulate, enter multiline mode
+3. **Plain Enter in multiline mode** → append final line, assemble and return block
+4. **Plain Enter (single line)** → return line directly
+
+Key behaviors:
+- Backslash is preserved (not stripped) when Ctrl+J is the trigger, since the user explicitly chose Ctrl+J over backslash-continuation
+- Ctrl+C during any multiline mode discards partial input and clears the ctrlJ flag
+- History saves the complete assembled block as one entry
+
+#### 4. Test byte conventions changed
+Mock stdin strings now use `\r` (0x0D / CR) for Enter and `\n` (0x0A / LF) for Ctrl+J. This matches what real terminals send in raw mode:
+- Real Enter key → CR (0x0D)
+- Real Ctrl+J → LF (0x0A)
+
+All 23 existing tests were updated to use `\r` for Enter simulation. No behavioral changes — just more accurate byte representation.
+
+#### 5. Startup banner and README updated
+- Banner now shows: `Multiline: Ctrl+J or Alt+Enter to insert a newline, or end a line with \\ to continue`
+- README has a new "Multiline Input" section documenting all three methods with examples
+- macOS Terminal.app "Use Option as Meta Key" note included for Alt+Enter
+
+**Files Changed**:
+- `input/input.go` — Added metaCRReader, FuncFilterInputRune, ctrlJPressed flag, stdin wrapping
+- `input/input_test.go` — Updated 23 tests (\n→\r), added 16 new tests (10 feature + 6 metaCRReader)
+- `main.go` — Updated startup banner
+- `README.md` — New "Multiline Input" section
+- `todos.md` — Marked TUI-9 acceptance criteria as done
+- `progress.md` — This entry
+
+**Test Summary (39 tests total)**:
+- 23 existing tests: all pass (updated byte convention)
+- 10 new multiline tests:
+  - `TestReadLine_CtrlJ_BasicMultiline` — 2-line Ctrl+J
+  - `TestReadLine_CtrlJ_ThreeLines` — 3-line Ctrl+J
+  - `TestReadLine_CtrlJ_EmptyFirstLine` — Ctrl+J on empty line
+  - `TestReadLine_AltEnter_BasicMultiline` — 2-line Alt+Enter
+  - `TestReadLine_AltEnter_ThreeLines` — 3-line Alt+Enter
+  - `TestReadLine_MixedMultiline` — backslash + Ctrl+J + Alt+Enter in one block
+  - `TestReadLine_CtrlJ_HistorySavedAsBlock` — history saves assembled block
+  - `TestReadLine_CtrlJ_BackslashPreserved` — backslash kept when Ctrl+J used
+  - `TestReadLine_CtrlJ_ThenSingleLine` — state reset after multiline
+  - `TestReadLine_CtrlC_DuringCtrlJMultiline` — Ctrl+C discards partial, next read works
+- 6 metaCRReader unit tests:
+  - `TestMetaCRReader_PassThrough` — normal bytes unchanged
+  - `TestMetaCRReader_AltEnterTranslation` — ESC+CR → LF
+  - `TestMetaCRReader_EscapeSequencePreserved` — ESC+[ not mangled
+  - `TestMetaCRReader_MultipleAltEnters` — multiple translations
+  - `TestMetaCRReader_EscAtEOF` — ESC at end of input
+  - `TestMetaCRReader_Close` — delegates to underlying reader
+
+**Test Results**:
+```
+=== input package (39 tests) ===
+All PASS — 0.165s
+
+=== All unit packages ===
+ok  input     0.596s
+ok  loglevel  0.141s
+ok  prompt    0.303s
+ok  spinner   1.536s
+ok  style     0.468s
+ok  truncate  0.665s
+```
+
+**Design Decisions**:
+- **Atomic flag over channel**: simpler, no goroutine coordination needed, clear happens-before via channel (outchan)
+- **metaCRReader over library fork**: clean byte-level interception, no dependency changes, fully testable
+- **\r for Enter in tests**: matches real terminal behavior (Enter sends CR, not LF), more accurate tests
+- **Ctrl+J preserves backslash**: when user chooses Ctrl+J, trailing backslash is content, not continuation marker
 
 ### TUI-8: Tool Output Bodies Display (Completed 2026-07-10)
 
