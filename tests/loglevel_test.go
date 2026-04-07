@@ -10,79 +10,35 @@ import (
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 )
 
-// TestLogLevelDefault verifies that a new agent defaults to Normal log level
+// TestLogLevelDefault verifies that a new agent can be created without log level (ARCH-2).
 func TestLogLevelDefault(t *testing.T) {
 	apiClient := providers.NewClient("test-key", "https://api.example.com", "test-model", 4096)
 	a := agent.NewAgent(apiClient, prompts.SystemPrompt)
-
-	if a.LogLevel() != loglevel.Normal {
-		t.Errorf("Default log level = %v, want Normal", a.LogLevel())
+	if a == nil {
+		t.Error("Agent should not be nil")
 	}
 }
 
-// TestLogLevelWithOption verifies WithLogLevel sets the level correctly
-func TestLogLevelWithOption(t *testing.T) {
+// TestLogLevelCallbackWiring verifies that callbacks can be composed on the agent.
+// With ARCH-2, the agent has no log level — it emits everything.
+// The CLI filters using its own log level.
+func TestLogLevelCallbackWiring(t *testing.T) {
 	apiClient := providers.NewClient("test-key", "https://api.example.com", "test-model", 4096)
 
-	tests := []struct {
-		name  string
-		level loglevel.Level
-	}{
-		{"silent", loglevel.Silent},
-		{"quiet", loglevel.Quiet},
-		{"normal", loglevel.Normal},
-		{"verbose", loglevel.Verbose},
-		{"debug", loglevel.Debug},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			a := agent.NewAgent(apiClient, prompts.SystemPrompt,
-				agent.WithLogLevel(tt.level))
-
-			if a.LogLevel() != tt.level {
-				t.Errorf("WithLogLevel(%v): LogLevel() = %v, want %v",
-					tt.level, a.LogLevel(), tt.level)
-			}
-		})
-	}
-}
-
-// capturedMessage records a progress message with its level
-type capturedMessage struct {
-	level   loglevel.Level
-	message string
-}
-
-// TestLogLevelGating verifies that the agent correctly gates output based on
-// the log level. This uses a mock interaction pattern: we verify that the
-// callback reports the level correctly. We can't easily do a full API round-trip
-// without a real API key, so we verify the wiring and callback signature.
-func TestLogLevelGating(t *testing.T) {
-	// This test verifies the callback signature and that WithLogLevel + WithProgressCallback
-	// can be composed correctly.
-	apiClient := providers.NewClient("test-key", "https://api.example.com", "test-model", 4096)
-
-	var captured []capturedMessage
+	var captured []string
 
 	a := agent.NewAgent(apiClient, prompts.SystemPrompt,
-		agent.WithLogLevel(loglevel.Debug),
-		agent.WithProgressCallback(func(level loglevel.Level, msg string) {
-			captured = append(captured, capturedMessage{level, msg})
+		agent.WithProgressCallback(func(msg string) {
+			captured = append(captured, msg)
 		}),
 	)
 
-	if a.LogLevel() != loglevel.Debug {
-		t.Errorf("Expected Debug log level, got %v", a.LogLevel())
-	}
-
-	// Verify the callback was set (non-nil agent is the proof)
 	if a == nil {
 		t.Fatal("Agent should not be nil")
 	}
 }
 
-// TestLogLevelParseFlagsIntegration tests parsing flags and threading them into the agent
+// TestLogLevelParseFlagsIntegration tests parsing flags (loglevel is still used by CLI).
 func TestLogLevelParseFlagsIntegration(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -91,25 +47,25 @@ func TestLogLevelParseFlagsIntegration(t *testing.T) {
 		expectedArgs  []string
 	}{
 		{
-			name:          "silent flag threaded to agent",
+			name:          "silent flag",
 			args:          []string{"--silent", "Hello"},
 			expectedLevel: loglevel.Silent,
 			expectedArgs:  []string{"Hello"},
 		},
 		{
-			name:          "quiet flag threaded to agent",
+			name:          "quiet flag",
 			args:          []string{"-q", "Hello"},
 			expectedLevel: loglevel.Quiet,
 			expectedArgs:  []string{"Hello"},
 		},
 		{
-			name:          "verbose flag threaded to agent",
+			name:          "verbose flag",
 			args:          []string{"-v", "Hello"},
 			expectedLevel: loglevel.Verbose,
 			expectedArgs:  []string{"Hello"},
 		},
 		{
-			name:          "debug flag threaded to agent",
+			name:          "debug flag",
 			args:          []string{"--debug", "Hello"},
 			expectedLevel: loglevel.Debug,
 			expectedArgs:  []string{"Hello"},
@@ -139,23 +95,12 @@ func TestLogLevelParseFlagsIntegration(t *testing.T) {
 					t.Errorf("remaining[%d] = %q, want %q", i, arg, tt.expectedArgs[i])
 				}
 			}
-
-			// Thread into agent and verify
-			apiClient := providers.NewClient("test-key", "https://api.example.com", "test-model", 4096)
-			a := agent.NewAgent(apiClient, prompts.SystemPrompt,
-				agent.WithLogLevel(level))
-
-			if a.LogLevel() != tt.expectedLevel {
-				t.Errorf("Agent log level = %v, want %v", a.LogLevel(), tt.expectedLevel)
-			}
 		})
 	}
 }
 
-// TestLogLevelCLIFlagStripping verifies that verbosity flags are stripped from
-// args before they are treated as prompt text (important for CLI mode)
+// TestLogLevelCLIFlagStripping verifies that verbosity flags are stripped from args.
 func TestLogLevelCLIFlagStripping(t *testing.T) {
-	// Simulate: clyde --verbose What is 2+2?
 	args := []string{"--verbose", "What", "is", "2+2?"}
 	level, remaining := loglevel.ParseFlags(args)
 
@@ -169,10 +114,8 @@ func TestLogLevelCLIFlagStripping(t *testing.T) {
 	}
 }
 
-// TestLogLevelCLIFileFlagPreserved verifies that -f flag is not consumed
-// by the log level parser
+// TestLogLevelCLIFileFlagPreserved verifies that -f flag is not consumed by log level parser.
 func TestLogLevelCLIFileFlagPreserved(t *testing.T) {
-	// Simulate: clyde -v -f prompt.txt
 	args := []string{"-v", "-f", "prompt.txt"}
 	level, remaining := loglevel.ParseFlags(args)
 
@@ -180,22 +123,15 @@ func TestLogLevelCLIFileFlagPreserved(t *testing.T) {
 		t.Errorf("Expected Verbose, got %v", level)
 	}
 
-	if len(remaining) != 2 {
-		t.Fatalf("Expected 2 remaining args, got %d: %v", len(remaining), remaining)
-	}
-
-	if remaining[0] != "-f" || remaining[1] != "prompt.txt" {
+	if len(remaining) != 2 || remaining[0] != "-f" || remaining[1] != "prompt.txt" {
 		t.Errorf("Expected [-f prompt.txt], got %v", remaining)
 	}
 }
 
-// TestLogLevelCLIBinaryFlagParsing tests that CLI binary properly parses
-// log level flags. This is an end-to-end test that builds the binary.
+// TestLogLevelCLIBinaryFlagParsing tests that CLI binary properly parses log level flags.
 func TestLogLevelCLIBinaryFlagParsing(t *testing.T) {
-	// Build binary
 	binaryPath := buildTestBinary(t)
 
-	// Verify --silent with empty prompt gives proper error (not a flag parse error)
 	tests := []struct {
 		name       string
 		args       []string

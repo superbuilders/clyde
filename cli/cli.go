@@ -1,8 +1,9 @@
 // Package cli implements Clyde's CLI and REPL interfaces.
 //
 // It contains all user-facing I/O orchestration: flag parsing, prompt
-// management, spinner control, and mode selection (CLI vs REPL). The
-// agent package handles conversation logic; this package handles display.
+// management, spinner control, display filtering, truncation, and mode
+// selection (CLI vs REPL). The agent package handles conversation logic;
+// this package handles all display concerns.
 package cli
 
 import (
@@ -16,6 +17,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/agent"
 	"github.com/this-is-alpha-iota/clyde/agent/mcp"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
+	"github.com/this-is-alpha-iota/clyde/agent/truncate"
 	"github.com/this-is-alpha-iota/clyde/cli/input"
 	"github.com/this-is-alpha-iota/clyde/cli/prompt"
 	"github.com/this-is-alpha-iota/clyde/cli/spinner"
@@ -70,8 +72,6 @@ func createAPIClient(cfg *config.Config, noThink bool) *providers.Client {
 
 	if !noThink {
 		// Enable adaptive thinking (recommended for Opus 4.6 and Sonnet 4.6).
-		// Adaptive thinking lets Claude decide when and how much to think.
-		// For older models, budget_tokens would be needed instead.
 		thinking := &providers.ThinkingConfig{
 			Type: "adaptive",
 		}
@@ -142,24 +142,48 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 		defer mcpServer.Close()
 	}
 
-	// Create agent with progress callback (print to stderr so stdout is clean)
+	// Create agent — the CLI layer owns all display filtering.
+	// The agent emits everything unconditionally; we filter here.
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithLogLevel(level),
 		agent.WithContextWindowSize(cfg.ContextWindowSize),
-		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
-			if lvl == loglevel.Normal {
-				// Tool output body — add blank line separation above and below
+		agent.WithProgressCallback(func(msg string) {
+			if level.ShouldShow(loglevel.Quiet) {
+				fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Quiet, msg))
+			}
+		}),
+		agent.WithOutputCallback(func(output string) {
+			if level.ShouldShow(loglevel.Normal) {
+				displayed := truncateForLevel(output, truncate.ToolOutputLineLimit, level)
 				fmt.Fprintln(os.Stderr)
-				fmt.Fprintln(os.Stderr, StyleMessage(lvl, msg))
+				fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Normal, displayed))
 				fmt.Fprintln(os.Stderr)
-			} else {
-				fmt.Fprintln(os.Stderr, StyleMessage(lvl, msg))
 			}
 		}),
 		agent.WithThinkingCallback(func(text string) {
-			fmt.Fprintln(os.Stderr, style.FormatThinking(text))
+			if level.ShouldShow(loglevel.Normal) {
+				displayed := truncateForLevel(text, truncate.ThinkingLineLimit, level)
+				fmt.Fprintln(os.Stderr, style.FormatThinking(displayed))
+			}
+		}),
+		agent.WithDiagnosticCallback(func(msg string) {
+			if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
+				// Verbose cache format
+				if level.ShouldShow(loglevel.Verbose) {
+					fmt.Fprintln(os.Stderr, msg)
+				}
+			} else if strings.HasPrefix(msg, "💾 Cache:") && strings.Contains(msg, "|") {
+				// Debug cache format
+				if level.ShouldShow(loglevel.Debug) {
+					fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Debug, msg))
+				}
+			} else if strings.HasPrefix(msg, "🔍") || strings.HasPrefix(msg, "🔒") {
+				// Token diagnostics and redacted thinking
+				if level.ShouldShow(loglevel.Debug) {
+					fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Debug, msg))
+				}
+			}
 		}),
 	)
 
@@ -197,20 +221,17 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 	}
 
 	// Create spinner for animated progress display (REPL mode only).
-	// The spinner shows a live preview on the second-to-last terminal line.
-	// When a tool completes, the spinner clears and the permanent → line
-	// is appended to scrollback.
 	sp := spinner.New()
 
 	// lastProgressMsg tracks the most recent tool → progress message so we
 	// can print it as a permanent log line when the spinner stops.
 	var lastProgressMsg string
 
-	// Create agent with system prompt and spinner-aware progress callback
+	// Create agent — the CLI layer owns all display filtering, truncation,
+	// and spinner management. The agent emits everything unconditionally.
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithLogLevel(level),
 		agent.WithContextWindowSize(cfg.ContextWindowSize),
 		agent.WithSpinnerCallback(func(start bool, message string) {
 			if level == loglevel.Silent {
@@ -225,7 +246,10 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 			}
 		}),
 		agent.WithThinkingCallback(func(text string) {
-			// Stop spinner before printing thinking (thinking comes before tool calls)
+			if !level.ShouldShow(loglevel.Normal) {
+				return
+			}
+			// Stop spinner before printing thinking
 			if sp.IsActive() {
 				sp.Stop()
 			}
@@ -234,52 +258,72 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
 				lastProgressMsg = ""
 			}
-			fmt.Println(style.FormatThinking(text))
+			displayed := truncateForLevel(text, truncate.ThinkingLineLimit, level)
+			fmt.Println(style.FormatThinking(displayed))
 		}),
-		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
-			switch lvl {
-			case loglevel.Quiet:
-				// Tool progress line (→ Reading file: main.go).
-				// If there's a pending progress message from a previous tool,
-				// flush it now before updating. This ensures → lines are
-				// persisted at Quiet level where the Normal handler never fires.
-				if lastProgressMsg != "" {
-					if sp.IsActive() {
-						sp.Stop()
-					}
-					fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
-				}
-				lastProgressMsg = msg
-				if level != loglevel.Silent {
-					sp.Start(spinner.FormatSpinnerMessage(msg))
-				}
-
-			case loglevel.Normal:
-				// Tool output body — tool execution is complete.
-				// Stop spinner, print permanent progress line, then output
-				// body with blank line separation above and below.
+		agent.WithProgressCallback(func(msg string) {
+			if !level.ShouldShow(loglevel.Quiet) {
+				return
+			}
+			// Tool progress line (→ Reading file: main.go).
+			// If there's a pending progress message from a previous tool,
+			// flush it now before updating.
+			if lastProgressMsg != "" {
 				if sp.IsActive() {
 					sp.Stop()
 				}
+				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+			}
+			lastProgressMsg = msg
+			if level != loglevel.Silent {
+				sp.Start(spinner.FormatSpinnerMessage(msg))
+			}
+		}),
+		agent.WithOutputCallback(func(output string) {
+			if !level.ShouldShow(loglevel.Normal) {
+				return
+			}
+			// Tool output body — tool execution is complete.
+			// Stop spinner, print permanent progress line, then output
+			// body with blank line separation above and below.
+			if sp.IsActive() {
+				sp.Stop()
+			}
+			if lastProgressMsg != "" {
+				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+				lastProgressMsg = ""
+			}
+			displayed := truncateForLevel(output, truncate.ToolOutputLineLimit, level)
+			fmt.Println()
+			fmt.Println(StyleMessage(loglevel.Normal, displayed))
+			fmt.Println()
+		}),
+		agent.WithDiagnosticCallback(func(msg string) {
+			if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
+				// Verbose cache format
+				if !level.ShouldShow(loglevel.Verbose) {
+					return
+				}
+			} else if strings.HasPrefix(msg, "💾 Cache:") && strings.Contains(msg, "|") {
+				// Debug cache format
+				if !level.ShouldShow(loglevel.Debug) {
+					return
+				}
+			} else {
+				// Token diagnostics, redacted thinking
+				if !level.ShouldShow(loglevel.Debug) {
+					return
+				}
+			}
+			// Stop spinner if active, print directly
+			if sp.IsActive() {
+				sp.Stop()
 				if lastProgressMsg != "" {
 					fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
 					lastProgressMsg = ""
 				}
-				fmt.Println()                        // blank line above output body
-				fmt.Println(StyleMessage(lvl, msg))
-				fmt.Println()                        // blank line below output body
-
-			default:
-				// Verbose, Debug, etc. — stop spinner if active, print directly.
-				if sp.IsActive() {
-					sp.Stop()
-					if lastProgressMsg != "" {
-						fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
-						lastProgressMsg = ""
-					}
-				}
-				fmt.Println(StyleMessage(lvl, msg))
 			}
+			fmt.Println(StyleMessage(loglevel.Debug, msg))
 		}),
 	)
 
@@ -290,18 +334,12 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 	fmt.Println("==========================================================")
 
 	// Create rich text input reader (readline-based).
-	// Provides cursor movement, history recall, and multiline input.
 	homeDir, _ := os.UserHomeDir()
 	historyFile := ""
 	if homeDir != "" {
 		historyFile = filepath.Join(homeDir, ".clyde", "history")
 	}
 
-	// Build the initial prompt.
-	// NOTE: The "\n" separator is NOT part of the prompt string because
-	// chzyer/readline redraws the prompt on every keystroke. A newline
-	// embedded in the prompt would be emitted on every redraw, scrolling
-	// content upward. Instead we print the newline once before ReadLine().
 	gitInfo := prompt.GetGitInfo()
 	initialPrompt := prompt.FormatPrompt(gitInfo, -1)
 
@@ -321,9 +359,6 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 	contextPercent := -1
 
 	for {
-		// Refresh git info and update prompt on each iteration.
-		// Print the blank-line separator here (not in the prompt string)
-		// so it is emitted once instead of on every keystroke redraw.
 		gitInfo := prompt.GetGitInfo()
 		fmt.Println()
 		reader.SetPrompt(prompt.FormatPrompt(gitInfo, contextPercent))
@@ -351,7 +386,6 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 		response, _ := agentInstance.HandleMessage(userInput)
 
 		// Ensure spinner is stopped before printing the response
-		// (handles edge case where tool emits → but no output body)
 		if sp.IsActive() {
 			sp.Stop()
 		}
@@ -370,16 +404,12 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 }
 
 // runREPLBasicMode is the fallback REPL when readline is unavailable.
-// It uses bufio.NewReader for basic line input without cursor movement
-// or history recall. This ensures Clyde can still run on systems where
-// readline initialization fails.
 func runREPLBasicMode(level loglevel.Level, noThink bool, apiClient *providers.Client, sp *spinner.Spinner, cfg *config.Config) {
 	var lastProgressMsg string
 
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithLogLevel(level),
 		agent.WithContextWindowSize(cfg.ContextWindowSize),
 		agent.WithSpinnerCallback(func(start bool, message string) {
 			if level == loglevel.Silent {
@@ -394,6 +424,9 @@ func runREPLBasicMode(level loglevel.Level, noThink bool, apiClient *providers.C
 			}
 		}),
 		agent.WithThinkingCallback(func(text string) {
+			if !level.ShouldShow(loglevel.Normal) {
+				return
+			}
 			if sp.IsActive() {
 				sp.Stop()
 			}
@@ -401,42 +434,62 @@ func runREPLBasicMode(level loglevel.Level, noThink bool, apiClient *providers.C
 				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
 				lastProgressMsg = ""
 			}
-			fmt.Println(style.FormatThinking(text))
+			displayed := truncateForLevel(text, truncate.ThinkingLineLimit, level)
+			fmt.Println(style.FormatThinking(displayed))
 		}),
-		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
-			switch lvl {
-			case loglevel.Quiet:
-				if lastProgressMsg != "" {
-					if sp.IsActive() {
-						sp.Stop()
-					}
-					fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
-				}
-				lastProgressMsg = msg
-				if level != loglevel.Silent {
-					sp.Start(spinner.FormatSpinnerMessage(msg))
-				}
-			case loglevel.Normal:
+		agent.WithProgressCallback(func(msg string) {
+			if !level.ShouldShow(loglevel.Quiet) {
+				return
+			}
+			if lastProgressMsg != "" {
 				if sp.IsActive() {
 					sp.Stop()
 				}
+				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+			}
+			lastProgressMsg = msg
+			if level != loglevel.Silent {
+				sp.Start(spinner.FormatSpinnerMessage(msg))
+			}
+		}),
+		agent.WithOutputCallback(func(output string) {
+			if !level.ShouldShow(loglevel.Normal) {
+				return
+			}
+			if sp.IsActive() {
+				sp.Stop()
+			}
+			if lastProgressMsg != "" {
+				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+				lastProgressMsg = ""
+			}
+			displayed := truncateForLevel(output, truncate.ToolOutputLineLimit, level)
+			fmt.Println()
+			fmt.Println(StyleMessage(loglevel.Normal, displayed))
+			fmt.Println()
+		}),
+		agent.WithDiagnosticCallback(func(msg string) {
+			if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
+				if !level.ShouldShow(loglevel.Verbose) {
+					return
+				}
+			} else if strings.HasPrefix(msg, "💾 Cache:") && strings.Contains(msg, "|") {
+				if !level.ShouldShow(loglevel.Debug) {
+					return
+				}
+			} else {
+				if !level.ShouldShow(loglevel.Debug) {
+					return
+				}
+			}
+			if sp.IsActive() {
+				sp.Stop()
 				if lastProgressMsg != "" {
 					fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
 					lastProgressMsg = ""
 				}
-				fmt.Println()                        // blank line above output body
-				fmt.Println(StyleMessage(lvl, msg))
-				fmt.Println()                        // blank line below output body
-			default:
-				if sp.IsActive() {
-					sp.Stop()
-					if lastProgressMsg != "" {
-						fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
-						lastProgressMsg = ""
-					}
-				}
-				fmt.Println(StyleMessage(lvl, msg))
 			}
+			fmt.Println(StyleMessage(loglevel.Debug, msg))
 		}),
 	)
 
@@ -483,6 +536,16 @@ func runREPLBasicMode(level loglevel.Level, noThink bool, apiClient *providers.C
 	}
 }
 
+// truncateForLevel applies truncation based on the log level.
+// At Verbose and Debug, text passes through unmodified.
+// At Normal and below, text is truncated to maxLines with character limits.
+func truncateForLevel(text string, maxLines int, level loglevel.Level) string {
+	if level.ShouldShow(loglevel.Verbose) {
+		return text
+	}
+	return truncate.Text(text, maxLines)
+}
+
 // StyleMessage applies color styling to a progress message based on its log level.
 // Messages emitted at different levels carry different semantic meaning:
 //   - Quiet:   tool → progress lines (bold yellow tool label)
@@ -525,7 +588,6 @@ func readPromptFromStdin() (string, error) {
 }
 
 // getConfigPath determines the config file path for the production app
-// Always uses ~/.clyde/config
 func getConfigPath() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -535,7 +597,6 @@ func getConfigPath() string {
 
 	configPath := filepath.Join(homeDir, ".clyde", "config")
 
-	// Check if config file exists, if not provide helpful error and exit
 	if _, err := os.Stat(configPath); err != nil {
 		configDir := filepath.Join(homeDir, ".clyde")
 		fmt.Printf("Configuration file not found: %s\n\n", configPath)

@@ -278,10 +278,13 @@ func TestARCH1_NoCircularImports(t *testing.T) {
 	//   cli                → agent, agent/mcp, agent/prompts, cli/input,
 	//                        cli/prompt, cli/spinner, cli/style, config,
 	//                        loglevel, providers, tools
-	//   agent              → providers, loglevel, tools, agent/truncate
+	//   agent              → providers, tools
 	//   agent/mcp          → providers, tools
-	//   agent/truncate     → loglevel
+	//   agent/truncate     → (no clyde imports)
 	//   cli/prompt         → cli/style
+	//   cli                → agent, agent/mcp, agent/prompts, agent/truncate, cli/input,
+	//                        cli/prompt, cli/spinner, cli/style, config,
+	//                        loglevel, providers, tools
 	//   tools              → providers
 	//   loglevel, config, providers, cli/style, cli/spinner, cli/input,
 	//   agent/prompts      → (no clyde imports)

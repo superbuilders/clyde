@@ -13,7 +13,6 @@ import (
 
 	"github.com/this-is-alpha-iota/clyde/agent"
 	"github.com/this-is-alpha-iota/clyde/providers"
-	"github.com/this-is-alpha-iota/clyde/loglevel"
 	"github.com/this-is-alpha-iota/clyde/agent/mcp"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 	"github.com/this-is-alpha-iota/clyde/tools"
@@ -232,10 +231,12 @@ func TestMCPPlaywrightIntegration(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithLogLevel(loglevel.Normal),
-		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
+		agent.WithProgressCallback(func(msg string) {
 			progressMessages = append(progressMessages, msg)
-			t.Logf("[%s] %s", lvl, truncateStr(msg, 120))
+			t.Logf("[progress] %s", truncateStr(msg, 120))
+		}),
+		agent.WithOutputCallback(func(output string) {
+			t.Logf("[output] %s", truncateStr(output, 120))
 		}),
 	)
 
@@ -318,9 +319,8 @@ func TestMCPPlaywrightBrowserStatePersists(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithLogLevel(loglevel.Quiet),
-		agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
-			t.Logf("[%s] %s", lvl, truncateStr(msg, 120))
+		agent.WithProgressCallback(func(msg string) {
+			t.Logf("[progress] %s", truncateStr(msg, 120))
 		}),
 	)
 

@@ -988,7 +988,95 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-07-14)
 
-**Latest Update**: ARCH-1 Project Directory Reorganization ✅
+**Latest Update**: ARCH-2: Remove I/O Concerns from the Agent ✅
+
+### ARCH-2: Remove I/O Concerns from the Agent (Completed 2026-07-14)
+
+**Story**: Decouple the agent from all display/filtering logic so it becomes a pure conversation-and-tool-execution engine with zero UI coupling.
+
+**What Changed**:
+
+| Change | Details |
+|--------|---------|
+| `agent/agent.go` | Removed `loglevel` and `truncate` imports; agent emits unconditionally |
+| `agent/truncate/truncate.go` | Removed `loglevel` import; functions take plain `int` params |
+| `cli/cli.go` | Now owns all display filtering, truncation, and spinner management |
+| Callback API | Split into 4 separate concerns: Progress, Output, Diagnostic, Thinking |
+
+**Callback API changes**:
+
+| Old (in agent) | New (in agent) |
+|----------------|----------------|
+| `ProgressCallback func(loglevel.Level, string)` | `ProgressCallback func(string)` |
+| _(via emit at Normal level)_ | `OutputCallback func(string)` — tool output bodies |
+| _(via emit at Verbose/Debug)_ | `DiagnosticCallback func(string)` — cache, tokens |
+| `ThinkingCallback func(string)` _(truncated by agent)_ | `ThinkingCallback func(string)` _(full text)_ |
+
+**Removed from agent**:
+- `WithLogLevel()` option
+- `LogLevel()` getter
+- `logLevel` field
+- `emit()` method (level-gated)
+- `emitThinking()` method (truncation + level gating)
+- Level check in `spinnerStart()`
+
+**Truncation API changes**:
+
+| Old | New |
+|-----|-----|
+| `Lines(text, maxLines, loglevel.Level)` | `Lines(text, maxLines)` |
+| `Chars(line, loglevel.Level)` | `Chars(line)` |
+| `Text(text, maxLines, loglevel.Level)` | `Text(text, maxLines)` |
+| `Thinking(text, loglevel.Level)` | `Thinking(text)` |
+| `ToolOutput(text, loglevel.Level)` | `ToolOutput(text)` |
+
+Truncation functions now always truncate. The CLI decides whether to call them based on its own log level (using `truncateForLevel()` helper in `cli/cli.go`).
+
+**CLI filtering logic** (new, in `cli/cli.go`):
+- Progress (→ lines): show at `Quiet` and above
+- Output bodies: show at `Normal` and above; truncated unless `Verbose`+
+- Thinking: show at `Normal` and above; truncated unless `Verbose`+
+- Cache verbose: show at `Verbose` and above
+- Cache debug/tokens: show at `Debug`
+- Spinner: suppressed at `Silent`
+
+**Tests added** (`tests/arch2_test.go`, 11 tests):
+- `TestARCH2_AgentNoLogLevelImport` — source-level verification
+- `TestARCH2_TruncateNoLogLevelImport` — source-level verification
+- `TestARCH2_AgentNoWithLogLevel` — removed API verification
+- `TestARCH2_AgentEmitsUnconditionally` — 4 callbacks wired, no level gating
+- `TestARCH2_ProgressCallbackSignature` — new `func(string)` signature
+- `TestARCH2_OutputCallbackExists` — new callback type
+- `TestARCH2_DiagnosticCallbackExists` — new callback type
+- `TestARCH2_TruncateFunctionsNoLevelParam` — all 5 functions compile without level
+- `TestARCH2_TruncateAlwaysTruncates` — no verbose/debug bypass
+- `TestARCH2_CLIOwnsFilteringLogic` — 8 subtests verifying ShouldShow matrix
+- `TestARCH2_NoBehavioralChange` — documents the architecture
+
+**Updated tests**: All existing test files updated to match new callback signatures (cache_test, cache_display_test, loglevel_test, spinner_test, style_test, thinking_test, tool_output_test, mcp_playwright_test, arch1_test, truncate_test).
+
+**Verification**:
+- `go vet ./...` clean
+- `go build .` succeeds (9.8 MB binary)
+- All unit tests pass
+- Zero `loglevel` references in `agent/` directory
+- `loglevel` only imported by `cli/` and `tests/`
+- No behavioral change from user's perspective
+
+**Dependency graph (updated)**:
+```
+main.go           → cli
+cli                → agent, agent/mcp, agent/prompts, agent/truncate,
+                     cli/input, cli/prompt, cli/spinner, cli/style,
+                     config, loglevel, providers, tools
+agent              → providers, tools            (no loglevel!)
+agent/mcp          → providers, tools
+agent/truncate     → (no clyde imports!)         (no loglevel!)
+cli/prompt         → cli/style
+tools              → providers
+loglevel, config, providers, cli/style, cli/spinner, cli/input,
+agent/prompts      → (no clyde imports)
+```
 
 ### ARCH-1: Project Directory Reorganization (Completed 2026-07-14)
 

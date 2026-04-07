@@ -6,7 +6,6 @@ import (
 
 	"github.com/this-is-alpha-iota/clyde/agent"
 	"github.com/this-is-alpha-iota/clyde/providers"
-	"github.com/this-is-alpha-iota/clyde/loglevel"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 )
 
@@ -24,10 +23,8 @@ func TestCacheControlEnabled(t *testing.T) {
 		4096,
 	)
 
-	// Create an agent
 	agentInstance := agent.NewAgent(apiClient, prompts.SystemPrompt)
 
-	// Make a simple request
 	response, err := agentInstance.HandleMessage("Hello! Just say 'Hi' back.")
 	if err != nil {
 		t.Fatalf("Failed to get response: %v", err)
@@ -36,10 +33,6 @@ func TestCacheControlEnabled(t *testing.T) {
 	if response == "" {
 		t.Error("Expected a response, got empty string")
 	}
-
-	// Note: We can't directly check if cache_control was set in the request,
-	// but we verify the code compiles and runs without errors.
-	// Cache usage will be visible in subsequent requests.
 }
 
 // TestCacheUsageDisplay verifies cache hit display works
@@ -56,33 +49,27 @@ func TestCacheUsageDisplay(t *testing.T) {
 		4096,
 	)
 
-	// Track progress messages
-	var progressMessages []string
+	var diagnosticMessages []string
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithProgressCallback(func(_ loglevel.Level, msg string) {
-			progressMessages = append(progressMessages, msg)
+		agent.WithDiagnosticCallback(func(msg string) {
+			diagnosticMessages = append(diagnosticMessages, msg)
 		}),
 	)
 
-	// Make first request (may create cache)
 	_, err := agentInstance.HandleMessage("What is 2+2?")
 	if err != nil {
 		t.Fatalf("Failed on first request: %v", err)
 	}
 
-	// Make second request (should hit cache)
-	progressMessages = []string{} // Reset
+	diagnosticMessages = []string{}
 	_, err = agentInstance.HandleMessage("What is 3+3?")
 	if err != nil {
 		t.Fatalf("Failed on second request: %v", err)
 	}
 
-	// Check if cache hit message was displayed
-	// Note: Cache hit only happens if the cache was created and still valid (5 min TTL)
-	// So this might not always show a cache hit in tests
-	t.Logf("Progress messages from second request: %v", progressMessages)
+	t.Logf("Diagnostic messages from second request: %v", diagnosticMessages)
 }
 
 // TestCacheHitAfterToolUse verifies cache hits work with tool execution
@@ -99,39 +86,34 @@ func TestCacheHitAfterToolUse(t *testing.T) {
 		4096,
 	)
 
-	// Track all messages
-	var progressMessages []string
+	var diagnosticMessages []string
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithProgressCallback(func(_ loglevel.Level, msg string) {
-			progressMessages = append(progressMessages, msg)
-			t.Logf("Progress: %s", msg)
+		agent.WithDiagnosticCallback(func(msg string) {
+			diagnosticMessages = append(diagnosticMessages, msg)
+			t.Logf("Diagnostic: %s", msg)
 		}),
 	)
 
-	// First request with tool use
 	_, err := agentInstance.HandleMessage("What files are in the current directory?")
 	if err != nil {
 		t.Fatalf("Failed on first request: %v", err)
 	}
 
-	// Second request (should potentially hit cache for system prompt and tools)
-	progressMessages = []string{}
+	diagnosticMessages = []string{}
 	_, err = agentInstance.HandleMessage("What is 5+5?")
 	if err != nil {
 		t.Fatalf("Failed on second request: %v", err)
 	}
 
-	// Log progress messages for manual verification
-	if len(progressMessages) > 0 {
-		t.Logf("Second request progress messages: %v", progressMessages)
+	if len(diagnosticMessages) > 0 {
+		t.Logf("Second request diagnostics: %v", diagnosticMessages)
 	}
 }
 
 // TestUsageStructFields verifies Usage struct has correct fields
 func TestUsageStructFields(t *testing.T) {
-	// Create a mock Usage struct
 	usage := providers.Usage{
 		InputTokens:              1000,
 		OutputTokens:             200,
@@ -139,7 +121,6 @@ func TestUsageStructFields(t *testing.T) {
 		CacheReadInputTokens:     300,
 	}
 
-	// Verify fields are accessible
 	if usage.InputTokens != 1000 {
 		t.Errorf("Expected InputTokens=1000, got %d", usage.InputTokens)
 	}
@@ -156,9 +137,7 @@ func TestUsageStructFields(t *testing.T) {
 
 // TestCacheControlStruct verifies CacheControl struct
 func TestCacheControlStruct(t *testing.T) {
-	// Create a CacheControl struct
 	cacheControl := providers.CacheControl{Type: "ephemeral"}
-
 	if cacheControl.Type != "ephemeral" {
 		t.Errorf("Expected Type='ephemeral', got '%s'", cacheControl.Type)
 	}

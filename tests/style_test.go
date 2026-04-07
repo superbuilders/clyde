@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/this-is-alpha-iota/clyde/cli"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
 	"github.com/this-is-alpha-iota/clyde/cli/style"
 )
@@ -17,16 +18,7 @@ import (
 // styleMessageTest applies color styling to a progress message based on its log level.
 // This is an exact copy of main.go's styleMessage for testing purposes.
 func styleMessageTest(level loglevel.Level, msg string) string {
-	switch level {
-	case loglevel.Quiet:
-		return style.FormatToolProgress(msg)
-	case loglevel.Normal:
-		return style.FormatDim(msg)
-	case loglevel.Debug:
-		return style.FormatDebug(msg)
-	default:
-		return msg
-	}
+	return cli.StyleMessage(level, msg)
 }
 
 // containsANSI returns true if the string contains any ANSI escape sequence.

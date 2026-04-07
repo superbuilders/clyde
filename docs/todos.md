@@ -1284,7 +1284,7 @@ All type/function references must also be updated (e.g. `api.Client` → `provid
 
 ---
 
-### ARCH-2: Remove I/O Concerns from the Agent (loglevel decoupling)
+### ARCH-2: Remove I/O Concerns from the Agent (loglevel decoupling)  ✅ DONE
 
 **As a** developer maintaining the agent package,
 **I want** the agent to have zero display/filtering logic and return all information to callers,
@@ -1336,13 +1336,13 @@ After this refactor:
 6. **Update all tests** that construct agents with `WithLogLevel`.
 
 **Acceptance Criteria**:
-- [ ] `agent/agent.go` has zero imports of `loglevel`.
-- [ ] `agent/truncate/truncate.go` has zero imports of `loglevel` (functions take plain int params or package moves to `cli/`).
-- [ ] The agent emits all progress, output, thinking, and diagnostic information unconditionally via callbacks.
-- [ ] The CLI layer (`cli/cli.go`) is the sole owner of display filtering, truncation, and spinner management.
-- [ ] `loglevel/` is only imported by packages under `cli/` (and could be moved there in a follow-up).
-- [ ] All existing tests pass with updated callback wiring.
-- [ ] No behavioral change from the user's perspective — same output at every log level.
+- [x] `agent/agent.go` has zero imports of `loglevel`.
+- [x] `agent/truncate/truncate.go` has zero imports of `loglevel` (functions take plain int params or package moves to `cli/`).
+- [x] The agent emits all progress, output, thinking, and diagnostic information unconditionally via callbacks.
+- [x] The CLI layer (`cli/cli.go`) is the sole owner of display filtering, truncation, and spinner management.
+- [x] `loglevel/` is only imported by packages under `cli/` (and could be moved there in a follow-up).
+- [x] All existing tests pass with updated callback wiring.
+- [x] No behavioral change from the user's perspective — same output at every log level.
 
 ---
 

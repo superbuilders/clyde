@@ -5,23 +5,30 @@ import (
 	"strings"
 
 	"github.com/this-is-alpha-iota/clyde/providers"
-	"github.com/this-is-alpha-iota/clyde/loglevel"
 	"github.com/this-is-alpha-iota/clyde/tools"
-	"github.com/this-is-alpha-iota/clyde/agent/truncate"
 )
 
-// ProgressCallback receives progress messages during tool execution.
-// The level parameter indicates the minimum log level at which this
-// message should be displayed.
-type ProgressCallback func(level loglevel.Level, message string)
+// ProgressCallback receives tool progress lines (the → lines).
+// Called unconditionally for every tool execution.
+type ProgressCallback func(message string)
+
+// OutputCallback receives tool output bodies (full, untruncated text).
+// Called unconditionally; the caller is responsible for truncation.
+type OutputCallback func(output string)
 
 // ThinkingCallback receives thinking trace text from Claude's extended thinking.
-// The text is the raw thinking content; the caller is responsible for styling.
+// The text is the raw, full thinking content; the caller is responsible for
+// truncation and styling.
 type ThinkingCallback func(text string)
+
+// DiagnosticCallback receives diagnostic information (cache stats, token counts, etc.).
+// Called unconditionally; the caller decides whether to display.
+type DiagnosticCallback func(message string)
 
 // SpinnerCallback receives signals to start or stop the loading spinner.
 // When start is true, message contains the operation text to display.
 // When start is false, message is empty and the spinner should stop.
+// Called unconditionally; the caller decides whether to act.
 type SpinnerCallback func(start bool, message string)
 
 // ErrorCallback receives errors during processing (optional, for logging)
@@ -29,40 +36,49 @@ type ErrorCallback func(err error)
 
 // Agent handles conversation and tool execution
 type Agent struct {
-	apiClient         *providers.Client
-	systemPrompt      string
-	history           []providers.Message
-	logLevel          loglevel.Level
-	progressCallback  ProgressCallback
-	thinkingCallback  ThinkingCallback
-	spinnerCallback   SpinnerCallback
-	errorCallback     ErrorCallback
-	lastUsage         providers.Usage // Token usage from the most recent API response
-	contextWindowSize int       // Model context window size in tokens (for debug display)
+	apiClient          *providers.Client
+	systemPrompt       string
+	history            []providers.Message
+	progressCallback   ProgressCallback
+	outputCallback     OutputCallback
+	thinkingCallback   ThinkingCallback
+	diagnosticCallback DiagnosticCallback
+	spinnerCallback    SpinnerCallback
+	errorCallback      ErrorCallback
+	lastUsage          providers.Usage // Token usage from the most recent API response
+	contextWindowSize  int             // Model context window size in tokens (for diagnostic display)
 }
 
 // AgentOption is a functional option for configuring an Agent
 type AgentOption func(*Agent)
 
-// WithLogLevel sets the log level for the agent
-func WithLogLevel(level loglevel.Level) AgentOption {
-	return func(a *Agent) {
-		a.logLevel = level
-	}
-}
-
-// WithProgressCallback sets the progress callback
+// WithProgressCallback sets the callback for tool progress lines (→ lines).
 func WithProgressCallback(cb ProgressCallback) AgentOption {
 	return func(a *Agent) {
 		a.progressCallback = cb
 	}
 }
 
+// WithOutputCallback sets the callback for tool output bodies (full text).
+func WithOutputCallback(cb OutputCallback) AgentOption {
+	return func(a *Agent) {
+		a.outputCallback = cb
+	}
+}
+
 // WithThinkingCallback sets the callback for thinking trace display.
-// The callback receives truncated (or full) thinking text based on log level.
+// The callback receives the full, untruncated thinking text.
 func WithThinkingCallback(cb ThinkingCallback) AgentOption {
 	return func(a *Agent) {
 		a.thinkingCallback = cb
+	}
+}
+
+// WithDiagnosticCallback sets the callback for diagnostic messages
+// (cache stats, token counts, redacted thinking notes, etc.).
+func WithDiagnosticCallback(cb DiagnosticCallback) AgentOption {
+	return func(a *Agent) {
+		a.diagnosticCallback = cb
 	}
 }
 
@@ -82,7 +98,7 @@ func WithErrorCallback(cb ErrorCallback) AgentOption {
 }
 
 // WithContextWindowSize sets the model's context window size in tokens.
-// This is used for debug-level cache display to show context usage percentage.
+// This is used for diagnostic display to show context usage percentage.
 func WithContextWindowSize(size int) AgentOption {
 	return func(a *Agent) {
 		a.contextWindowSize = size
@@ -95,7 +111,6 @@ func NewAgent(apiClient *providers.Client, systemPrompt string, opts ...AgentOpt
 		apiClient:    apiClient,
 		systemPrompt: systemPrompt,
 		history:      []providers.Message{},
-		logLevel:     loglevel.Normal, // Default
 	}
 
 	// Apply options
@@ -106,54 +121,10 @@ func NewAgent(apiClient *providers.Client, systemPrompt string, opts ...AgentOpt
 	return agent
 }
 
-// LogLevel returns the agent's current log level
-func (a *Agent) LogLevel() loglevel.Level {
-	return a.logLevel
-}
-
 // LastUsage returns the token usage from the most recent API response.
 // Returns a zero-value Usage if no API call has been made yet.
 func (a *Agent) LastUsage() providers.Usage {
 	return a.lastUsage
-}
-
-// emit sends a progress message if the agent's log level allows it.
-// The threshold parameter indicates the minimum level required to see
-// this message.
-func (a *Agent) emit(threshold loglevel.Level, message string) {
-	if a.progressCallback != nil && a.logLevel.ShouldShow(threshold) {
-		a.progressCallback(threshold, message)
-	}
-}
-
-// emitThinking sends thinking trace text via the thinking callback.
-// Thinking is displayed at Normal level (truncated) and above.
-// Suppressed at Silent and Quiet.
-func (a *Agent) emitThinking(text string) {
-	if a.thinkingCallback == nil {
-		return
-	}
-	if !a.logLevel.ShouldShow(loglevel.Normal) {
-		return
-	}
-
-	// Apply truncation based on log level
-	truncated := truncate.Thinking(text, a.logLevel)
-	a.thinkingCallback(truncated)
-}
-
-// spinnerStart sends a start signal to the spinner callback if set.
-func (a *Agent) spinnerStart(message string) {
-	if a.spinnerCallback != nil && a.logLevel != loglevel.Silent {
-		a.spinnerCallback(true, message)
-	}
-}
-
-// spinnerStop sends a stop signal to the spinner callback if set.
-func (a *Agent) spinnerStop() {
-	if a.spinnerCallback != nil {
-		a.spinnerCallback(false, "")
-	}
 }
 
 // HandleMessage processes a user message and returns the response
@@ -170,12 +141,16 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 	// Conversation loop - continue until we get a text response
 	for {
 		// Start spinner while waiting for API response
-		a.spinnerStart("Thinking...")
+		if a.spinnerCallback != nil {
+			a.spinnerCallback(true, "Thinking...")
+		}
 
 		resp, err := a.apiClient.Call(a.systemPrompt, a.history, allTools)
 
 		// Stop spinner once API responds
-		a.spinnerStop()
+		if a.spinnerCallback != nil {
+			a.spinnerCallback(false, "")
+		}
 
 		if err != nil {
 			return fmt.Sprintf("Error: %v", err), err
@@ -184,38 +159,36 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 		// Store usage for context tracking
 		a.lastUsage = resp.Usage
 
-		// Display cache information (Verbose and Debug only).
-		// At Normal/Quiet/Silent, cache info is suppressed — the context
-		// window percentage on the prompt line serves as the primary
-		// "how full is my context?" indicator.
-		if resp.Usage.CacheReadInputTokens > 0 {
+		// Emit cache and diagnostic information unconditionally.
+		// The CLI layer filters based on its own log level.
+		if resp.Usage.CacheReadInputTokens > 0 && a.diagnosticCallback != nil {
 			totalInputTokens := resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens
 
-			// Verbose: token fraction format
-			a.emit(loglevel.Verbose, fmt.Sprintf("💾 Cache: %d/%d tokens",
+			// Cache token fraction
+			a.diagnosticCallback(fmt.Sprintf("💾 Cache: %d/%d tokens",
 				resp.Usage.CacheReadInputTokens, totalInputTokens))
 
-			// Debug: detailed format with creation tokens and context %
-			if a.logLevel.ShouldShow(loglevel.Debug) {
-				detail := fmt.Sprintf("💾 Cache: %d/%d tokens | Creation: %d tokens",
-					resp.Usage.CacheReadInputTokens, totalInputTokens,
-					resp.Usage.CacheCreationInputTokens)
-				if a.contextWindowSize > 0 {
-					pct := (totalInputTokens * 100) / a.contextWindowSize
-					if pct > 100 {
-						pct = 100
-					}
-					detail += fmt.Sprintf(" | Context: %d%% (%d/%d)",
-						pct, totalInputTokens, a.contextWindowSize)
+			// Detailed cache info with creation tokens and context %
+			detail := fmt.Sprintf("💾 Cache: %d/%d tokens | Creation: %d tokens",
+				resp.Usage.CacheReadInputTokens, totalInputTokens,
+				resp.Usage.CacheCreationInputTokens)
+			if a.contextWindowSize > 0 {
+				pct := (totalInputTokens * 100) / a.contextWindowSize
+				if pct > 100 {
+					pct = 100
 				}
-				a.emit(loglevel.Debug, detail)
+				detail += fmt.Sprintf(" | Context: %d%% (%d/%d)",
+					pct, totalInputTokens, a.contextWindowSize)
 			}
+			a.diagnosticCallback(detail)
 		}
 
-		// Display debug diagnostics (Debug only)
-		a.emit(loglevel.Debug, fmt.Sprintf("🔍 Tokens: input=%d output=%d cache_read=%d cache_create=%d",
-			resp.Usage.InputTokens, resp.Usage.OutputTokens,
-			resp.Usage.CacheReadInputTokens, resp.Usage.CacheCreationInputTokens))
+		// Token usage diagnostics
+		if a.diagnosticCallback != nil {
+			a.diagnosticCallback(fmt.Sprintf("🔍 Tokens: input=%d output=%d cache_read=%d cache_create=%d",
+				resp.Usage.InputTokens, resp.Usage.OutputTokens,
+				resp.Usage.CacheReadInputTokens, resp.Usage.CacheCreationInputTokens))
+		}
 
 		var assistantContent []providers.ContentBlock
 		var textResponses []string
@@ -223,9 +196,6 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 
 		for _, block := range resp.Content {
 			// Ensure tool_use blocks always have a non-nil Input map.
-			// The API requires "input" to be present for tool_use blocks.
-			// Our MarshalJSON on ContentBlock handles serialization, but
-			// we also set it here for in-memory consistency.
 			if block.Type == "tool_use" && block.Input == nil {
 				block.Input = map[string]interface{}{}
 			}
@@ -239,13 +209,15 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			case "tool_use":
 				toolUseBlocks = append(toolUseBlocks, block)
 			case "thinking":
-				// Display thinking trace
-				if block.Thinking != "" {
-					a.emitThinking(block.Thinking)
+				// Emit full thinking trace unconditionally
+				if block.Thinking != "" && a.thinkingCallback != nil {
+					a.thinkingCallback(block.Thinking)
 				}
 			case "redacted_thinking":
-				// Redacted thinking — note it but don't display content
-				a.emit(loglevel.Debug, "🔒 Redacted thinking block (encrypted by safety system)")
+				// Redacted thinking — note it via diagnostics
+				if a.diagnosticCallback != nil {
+					a.diagnosticCallback("🔒 Redacted thinking block (encrypted by safety system)")
+				}
 			}
 		}
 
@@ -278,11 +250,11 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 				continue
 			}
 
-			// Display progress message (Quiet and above — the → lines)
-			if reg.Display != nil {
+			// Emit progress message unconditionally (the → lines)
+			if reg.Display != nil && a.progressCallback != nil {
 				displayMsg := reg.Display(toolBlock.Input)
 				if displayMsg != "" {
-					a.emit(loglevel.Quiet, displayMsg)
+					a.progressCallback(displayMsg)
 				}
 			}
 
@@ -323,12 +295,12 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 				}
 			}
 
-			// Display tool output body (Normal and above).
-			// Apply truncation based on log level: 25-line limit at Normal,
-			// full output at Verbose/Debug.
+			// Emit tool output body unconditionally (full, untruncated).
+			// The CLI layer handles truncation and display filtering.
 			if resultContent != "" && !strings.HasPrefix(resultContent, "Image loaded") {
-				truncatedOutput := truncate.ToolOutput(resultContent, a.logLevel)
-				a.emit(loglevel.Normal, truncatedOutput)
+				if a.outputCallback != nil {
+					a.outputCallback(resultContent)
+				}
 			}
 
 			toolResults = append(toolResults, providers.ContentBlock{
