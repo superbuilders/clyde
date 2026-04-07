@@ -293,8 +293,13 @@ func TestFormatSpinnerMessage(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "browse tool",
+			name:     "browse tool (web fetch)",
 			input:    "→ Browsing: https://example.com/very/long/path?q=foo",
+			expected: "Reading Webpage...",
+		},
+		{
+			name:     "browser tool (playwright)",
+			input:    "→ Browser: navigate https://example.com",
 			expected: "Browsing...",
 		},
 		{
@@ -370,7 +375,7 @@ func TestFormatSpinnerMessage(t *testing.T) {
 		{
 			name:     "browse with extract prompt",
 			input:    "→ Browsing: https://pkg.go.dev/net/http (extract: \"What are the main types?\")",
-			expected: "Browsing...",
+			expected: "Reading Webpage...",
 		},
 		{
 			name:     "unknown tool falls back to colon stripping",

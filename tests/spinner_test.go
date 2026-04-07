@@ -308,8 +308,13 @@ func TestFormatSpinnerMessage_Integration(t *testing.T) {
 			expected: "Searching...",
 		},
 		{
-			name:     "browse tool",
+			name:     "browse tool (web fetch)",
 			input:    "→ Browsing: https://pkg.go.dev/net/http",
+			expected: "Reading Webpage...",
+		},
+		{
+			name:     "browser tool (playwright)",
+			input:    "→ Browser: navigate https://example.com",
 			expected: "Browsing...",
 		},
 		{
@@ -330,7 +335,7 @@ func TestFormatSpinnerMessage_Integration(t *testing.T) {
 		{
 			name:     "browse with very long URL",
 			input:    "→ Browsing: https://example.com/api/v1/documents?page=1&format=json&filter=active&sort=date&limit=100&offset=200",
-			expected: "Browsing...",
+			expected: "Reading Webpage...",
 		},
 		{
 			name:     "run_bash with multi-line command",
