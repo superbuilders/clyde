@@ -284,6 +284,8 @@ func TestRestartAfterStop(t *testing.T) {
 }
 
 // TestFormatSpinnerMessage verifies message formatting for the spinner.
+// Spinner messages should be verb-only (e.g., "Browsing...") to prevent
+// the frame-bleed bug caused by long messages wrapping past terminal width.
 func TestFormatSpinnerMessage(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -291,17 +293,22 @@ func TestFormatSpinnerMessage(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "strips arrow prefix",
-			input:    "→ Patching file: agent.go (+48 bytes)",
-			expected: "Patching file: agent.go (+48 bytes)...",
+			name:     "browse tool",
+			input:    "→ Browsing: https://example.com/very/long/path?q=foo",
+			expected: "Browsing...",
 		},
 		{
-			name:     "strips arrow prefix with running bash",
+			name:     "run_bash tool",
 			input:    "→ Running bash: go test ./...",
-			expected: "Running bash: go test ./...",
+			expected: "Running...",
 		},
 		{
-			name:     "no arrow prefix",
+			name:     "run_bash multi-line command",
+			input:    "→ Running bash: cd /tmp\nls -la\ngrep foo bar",
+			expected: "Running...",
+		},
+		{
+			name:     "thinking (no arrow prefix)",
 			input:    "Thinking",
 			expected: "Thinking...",
 		},
@@ -318,22 +325,57 @@ func TestFormatSpinnerMessage(t *testing.T) {
 		{
 			name:     "listing files",
 			input:    "→ Listing files: . (current directory)",
-			expected: "Listing files: . (current directory)...",
+			expected: "Listing...",
 		},
 		{
 			name:     "reading file",
 			input:    "→ Reading file: main.go",
-			expected: "Reading file: main.go...",
+			expected: "Reading...",
 		},
 		{
 			name:     "writing file with size",
 			input:    "→ Writing file: progress.md (42.5 KB)",
-			expected: "Writing file: progress.md (42.5 KB)...",
+			expected: "Writing...",
 		},
 		{
 			name:     "searching pattern",
 			input:    "→ Searching: 'TODO' in ./tools/*.go",
-			expected: "Searching: 'TODO' in ./tools/*.go...",
+			expected: "Searching...",
+		},
+		{
+			name:     "web search",
+			input:    "→ Searching web: \"golang http client best practices\"",
+			expected: "Searching...",
+		},
+		{
+			name:     "patching file",
+			input:    "→ Patching file: agent.go (+48 bytes)",
+			expected: "Patching...",
+		},
+		{
+			name:     "multi-patch",
+			input:    "→ Applying multi-patch: 3 files",
+			expected: "Patching...",
+		},
+		{
+			name:     "include file",
+			input:    "→ Including file: /path/to/screenshot.png",
+			expected: "Loading...",
+		},
+		{
+			name:     "finding files (glob)",
+			input:    "→ Finding files: **/*.go in current directory",
+			expected: "Finding...",
+		},
+		{
+			name:     "browse with extract prompt",
+			input:    "→ Browsing: https://pkg.go.dev/net/http (extract: \"What are the main types?\")",
+			expected: "Browsing...",
+		},
+		{
+			name:     "unknown tool falls back to colon stripping",
+			input:    "→ Frobnicating: some long argument",
+			expected: "Frobnicating...",
 		},
 	}
 

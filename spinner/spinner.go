@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -156,18 +157,38 @@ func (s *Spinner) clearLine() {
 	fmt.Fprintf(s.writer, "\r\033[K")
 }
 
-// FormatSpinnerMessage formats a tool progress message for the spinner.
-// It strips the "→ " prefix (used in permanent logs) and adds "..." suffix.
+// FormatSpinnerMessage extracts a short verb-only label from a tool progress
+// message for the spinner. The spinner is an ephemeral preview — full details
+// (URLs, file paths, commands, byte counts) appear in the permanent → scrollback
+// line that prints when the operation completes.
+//
+// Verb-only messages are always short enough to fit on a single terminal line,
+// which prevents the frame-bleed bug where \r\033[K fails to clear wrapped or
+// multi-line content.
 //
 // Example:
 //
-//	"→ Patching file: agent.go (+48 bytes)" → "Patching file: agent.go (+48 bytes)..."
-//	"→ Running bash: go test ./..." → "Running bash: go test ./..."
+//	"→ Browsing: https://example.com/very/long/path?q=foo" → "Browsing..."
+//	"→ Running bash: cd /tmp && find . -name '*.go'"       → "Running..."
+//	"→ Patching file: agent.go (+48 bytes)"                → "Patching..."
+//	"Thinking"                                             → "Thinking..."
 func FormatSpinnerMessage(progressMsg string) string {
 	// Strip the "→ " prefix if present
 	msg := progressMsg
 	if len(msg) >= 4 && msg[:4] == "→ " {
 		msg = msg[4:]
+	}
+
+	// Match known verb prefixes → return short form
+	for prefix, verb := range spinnerVerbs {
+		if strings.HasPrefix(msg, prefix) {
+			return verb
+		}
+	}
+
+	// Fallback: take text up to first ":" or newline, add "..."
+	if idx := strings.IndexAny(msg, ":\n"); idx > 0 {
+		return msg[:idx] + "..."
 	}
 
 	// Add "..." if not already ending with dots
@@ -179,4 +200,21 @@ func FormatSpinnerMessage(progressMsg string) string {
 	}
 
 	return msg
+}
+
+// spinnerVerbs maps the "→ Action" prefix of a progress message to a short
+// verb for the spinner. The spinner is an ephemeral preview — full details
+// appear in the permanent → scrollback line.
+var spinnerVerbs = map[string]string{
+	"Browsing":             "Browsing...",
+	"Running bash":         "Running...",
+	"Searching web":        "Searching...",
+	"Searching":            "Searching...",
+	"Reading file":         "Reading...",
+	"Patching file":        "Patching...",
+	"Writing file":         "Writing...",
+	"Listing files":        "Listing...",
+	"Finding files":        "Finding...",
+	"Applying multi-patch": "Patching...",
+	"Including file":       "Loading...",
 }

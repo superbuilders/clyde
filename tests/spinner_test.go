@@ -86,8 +86,9 @@ func TestSpinnerShownAtQuietLevel(t *testing.T) {
 	}
 
 	output := buf.String()
-	if !strings.Contains(output, "Reading file: main.go") {
-		t.Errorf("Spinner output should contain operation message, got: %q",
+	// Spinner now shows verb-only messages
+	if !strings.Contains(output, "Reading...") {
+		t.Errorf("Spinner output should contain verb-only message, got: %q",
 			output[:min(200, len(output))])
 	}
 }
@@ -112,8 +113,9 @@ func TestSpinnerShownAtNormalLevel(t *testing.T) {
 	sp.Stop()
 
 	output := buf.String()
-	if !strings.Contains(output, "Patching file: agent.go") {
-		t.Errorf("Spinner should show operation at Normal level, got: %q",
+	// Spinner now shows verb-only messages
+	if !strings.Contains(output, "Patching...") {
+		t.Errorf("Spinner should show verb-only operation at Normal level, got: %q",
 			output[:min(200, len(output))])
 	}
 }
@@ -268,46 +270,72 @@ func TestSpinnerMessageUpdate(t *testing.T) {
 
 // TestFormatSpinnerMessage_Integration verifies FormatSpinnerMessage works
 // correctly with real tool progress messages from the codebase.
+// Spinner messages should be verb-only to prevent the frame-bleed bug.
 func TestFormatSpinnerMessage_Integration(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
-		wantText string // Text that must appear in the output
+		expected string // Exact expected verb-only output
 	}{
 		{
 			name:     "list_files tool",
 			input:    "→ Listing files: . (current directory)",
-			wantText: "Listing files: . (current directory)",
+			expected: "Listing...",
 		},
 		{
 			name:     "read_file tool",
 			input:    "→ Reading file: agent/agent.go",
-			wantText: "Reading file: agent/agent.go",
+			expected: "Reading...",
 		},
 		{
 			name:     "patch_file tool",
 			input:    "→ Patching file: main.go (+100 bytes)",
-			wantText: "Patching file: main.go (+100 bytes)",
+			expected: "Patching...",
 		},
 		{
 			name:     "write_file tool",
 			input:    "→ Writing file: output.txt (42.5 KB)",
-			wantText: "Writing file: output.txt (42.5 KB)",
+			expected: "Writing...",
 		},
 		{
 			name:     "run_bash tool",
 			input:    "→ Running bash: go test -v ./...",
-			wantText: "Running bash: go test -v ./...",
+			expected: "Running...",
 		},
 		{
 			name:     "grep tool",
 			input:    "→ Searching: 'TODO' in . (*.go)",
-			wantText: "Searching: 'TODO' in . (*.go)",
+			expected: "Searching...",
 		},
 		{
 			name:     "browse tool",
 			input:    "→ Browsing: https://pkg.go.dev/net/http",
-			wantText: "Browsing: https://pkg.go.dev/net/http",
+			expected: "Browsing...",
+		},
+		{
+			name:     "web_search tool",
+			input:    "→ Searching web: \"golang HTTP client\"",
+			expected: "Searching...",
+		},
+		{
+			name:     "include_file tool",
+			input:    "→ Including file: screenshot.png",
+			expected: "Loading...",
+		},
+		{
+			name:     "multi_patch tool",
+			input:    "→ Applying multi-patch: 5 files",
+			expected: "Patching...",
+		},
+		{
+			name:     "browse with very long URL",
+			input:    "→ Browsing: https://example.com/api/v1/documents?page=1&format=json&filter=active&sort=date&limit=100&offset=200",
+			expected: "Browsing...",
+		},
+		{
+			name:     "run_bash with multi-line command",
+			input:    "→ Running bash: cd /tmp\nfind . -name '*.go'\nxargs grep TODO",
+			expected: "Running...",
 		},
 	}
 
@@ -320,14 +348,19 @@ func TestFormatSpinnerMessage_Integration(t *testing.T) {
 				t.Errorf("FormatSpinnerMessage should strip '→ ' prefix, got: %q", result)
 			}
 
-			// Must contain the operation text
-			if !strings.Contains(result, tt.wantText) {
-				t.Errorf("FormatSpinnerMessage should contain %q, got: %q", tt.wantText, result)
+			// Must be the exact verb-only form
+			if result != tt.expected {
+				t.Errorf("FormatSpinnerMessage(%q) = %q, want %q", tt.input, result, tt.expected)
 			}
 
 			// Must end with "..."
 			if !strings.HasSuffix(result, "...") {
 				t.Errorf("FormatSpinnerMessage should end with '...', got: %q", result)
+			}
+
+			// Must be short — verb-only messages should never exceed 20 chars
+			if len(result) > 20 {
+				t.Errorf("Spinner message too long (%d chars): %q — should be verb-only to prevent frame bleed", len(result), result)
 			}
 		})
 	}
