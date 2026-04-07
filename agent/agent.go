@@ -222,6 +222,13 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 		var toolUseBlocks []api.ContentBlock
 
 		for _, block := range resp.Content {
+			// Ensure tool_use blocks always have a non-nil Input map.
+			// The API requires "input" to be present for tool_use blocks.
+			// Our MarshalJSON on ContentBlock handles serialization, but
+			// we also set it here for in-memory consistency.
+			if block.Type == "tool_use" && block.Input == nil {
+				block.Input = map[string]interface{}{}
+			}
 			assistantContent = append(assistantContent, block)
 
 			switch block.Type {

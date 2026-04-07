@@ -970,6 +970,165 @@ Created demo showing all error message improvements:
 **Philosophy**:
 Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
 
+## Current Status (2026-07-14)
+
+**Latest Update**: Playwright MCP Integration — Browser Automation via MCP ✅
+
+### Playwright MCP Integration (Completed 2026-07-14)
+
+**Epic**: Add Playwright browser automation to clyde via MCP (Model Context Protocol), enabling navigation, clicking, form filling, screenshots, and DOM inspection.
+
+**Design**: See `docs/playwright-mcp.md` for the full research, comparison, and architecture.
+
+**What Was Built** (5 stories):
+
+#### Story 1: Raw MCP Stdio Client (`mcp/client.go`, `mcp/types.go`)
+- Hand-rolled JSON-RPC 2.0 client over stdin/stdout — zero external dependencies
+- `NewClient(command, args...)` spawns the MCP server subprocess
+- `Initialize(ctx)` performs the MCP handshake (sends `initialize` + `notifications/initialized`)
+- `ListTools(ctx)` retrieves tool definitions from the server
+- `CallTool(ctx, name, args)` invokes a tool and returns the result
+- `Close()` kills the subprocess
+- Sequential request IDs, context-based timeout, notification skipping
+- ~200 lines of production code
+
+#### Story 2: Playwright Tool Snapshot (`mcp/playwright_tools.json`, `mcp/snapshot.go`)
+- 21 default Playwright tools captured from a live server and embedded via `//go:embed`
+- `PlaywrightTools()` parses the snapshot and returns Anthropic-formatted tool definitions
+- All tools prefixed with `mcp_playwright_` to avoid collisions with built-in tools
+- `StripPrefix()` and `HasPrefix()` helpers for name manipulation
+- Snapshot drift detection test verifies embedded tools match live server
+- ~12 KB embedded JSON, ~60 lines of Go
+
+#### Story 3: Playwright Server Lifecycle (`mcp/playwright.go`)
+- `PlaywrightServer` struct manages the subprocess lifecycle
+- `NewPlaywrightServer(extraArgs)` configures but does NOT start the server
+- `EnsureRunning(ctx)` starts lazily via `sync.Once` — no startup cost when browser unused
+- `CallTool(ctx, name, args)` forwards calls to the running MCP client
+- `Close()` kills the subprocess cleanly (safe to call multiple times)
+- Always adds `--headless` flag
+- ~140 lines
+
+#### Story 4: Agent Wiring (`mcp/register.go`, `config/config.go`, `main.go`)
+- New config fields: `MCPPlaywright bool`, `MCPPlaywrightArgs string`
+- Configured via `MCP_PLAYWRIGHT=true` and `MCP_PLAYWRIGHT_ARGS=...` in `~/.clyde/config`
+- `RegisterPlaywrightTools(server)` registers all 21 tools into `tools.Registry`
+- Each tool executor: lazy-starts server → strips prefix → forwards call → returns result
+- Display function: `→ Browser: navigate https://example.com`, `→ Browser: snapshot capturing page`
+- Image results from Playwright returned as `IMAGE_LOADED:` markers for vision inclusion
+- `defer mcpServer.Close()` in both CLI and REPL modes for clean process cleanup
+- ~100 lines of glue code
+
+#### Story 5: Integration Test (`tests/mcp_playwright_test.go`, `mcp/mcp_test.go`)
+**MCP package tests** (13 tests):
+- `TestNewClientMockServer` — full lifecycle with mock MCP server (Go subprocess)
+- `TestClientRPCError` — unknown tool returns JSON-RPC error
+- `TestClientContextTimeout` — cancelled context handled properly
+- `TestPlaywrightToolsSnapshot` — 21 tools, all prefixed, schemas valid
+- `TestStripPrefix`, `TestHasPrefix` — name manipulation
+- `TestPlaywrightToolsMatchLiveServer` — snapshot matches live `npx @playwright/mcp@latest`
+- `TestPlaywrightServerLazyStart` — server not started until EnsureRunning
+- `TestPlaywrightServerCallToolWithoutStart` — clear error before start
+- `TestPlaywrightServerCloseIdempotent` — safe multiple close
+- `TestPlaywrightServerEnsureRunningWithNpx` — real server start + tool call
+- `TestPlaywrightServerCloseAfterUse` — close then call → error
+- `TestClientTypes` — compile-time type assertions
+
+**Tests/ package tests** (8 tests):
+- `TestMCPPlaywrightToolRegistration` — 21 tools with correct Anthropic format
+- `TestMCPToolsNoCollisionWithBuiltins` — no name collisions with 12 built-in tools
+- `TestMCPToolRegistrationWithServer` — tools added to registry, display functions work
+- `TestMCPDisplayMessages` — progress messages for navigate, click, snapshot, type (4 subtests)
+- `TestMCPPlaywrightIntegration` — **full end-to-end**: local HTTP server → navigate → snapshot → verify page content
+- `TestMCPPlaywrightBrowserStatePersists` — navigate page1 → navigate page2 → snapshot → content from page2
+- `TestMCPPlaywrightDisabledByDefault` — no MCP tools without config
+- `TestMCPPlaywrightProcessCleanup` — subprocess killed on Close
+
+**Bug Fix During Implementation**: ContentBlock MarshalJSON
+
+**Issue**: `messages.3.content.0.tool_use.input: Field required` — 400 error from Claude API.
+
+**Root Cause**: Go's `encoding/json` `omitempty` treats empty maps (`map[string]interface{}{}`) as "empty" and omits them. When Claude calls a tool with no parameters (like `browser_snapshot`), the `input` field is `{}` which gets serialized correctly. But when Claude's response is parsed and the `Input` field is nil (because the API returned no input for a parameterless tool_use), `omitempty` drops the field entirely. The Claude API requires `input` to always be present on tool_use blocks.
+
+**Fix**: Added a custom `MarshalJSON` method on `ContentBlock` that always includes `"input": {}` for tool_use blocks (even when the Go map is nil/empty), while preserving `omitempty` behavior for all other block types (text, thinking, tool_result).
+
+```go
+func (b ContentBlock) MarshalJSON() ([]byte, error) {
+    type Alias ContentBlock
+    if b.Type == "tool_use" {
+        inputVal := b.Input
+        if inputVal == nil {
+            inputVal = map[string]interface{}{}
+        }
+        return json.Marshal(&struct {
+            Alias
+            Input map[string]interface{} `json:"input"` // no omitempty
+        }{Alias: Alias(b), Input: inputVal})
+    }
+    return json.Marshal(&struct{ Alias }{Alias: Alias(b)})
+}
+```
+
+**Lesson**: Go's `omitempty` for maps omits both nil AND empty (length-0) maps. This is different from structs/slices where only nil is considered empty. When an API requires a field to always be present (even as `{}`), you need a custom marshaler.
+
+**Files Changed**:
+- `mcp/client.go` (new) — JSON-RPC stdio client (~200 lines)
+- `mcp/types.go` (new) — MCP type definitions (~95 lines)
+- `mcp/snapshot.go` (new) — Tool snapshot loading (~50 lines)
+- `mcp/playwright.go` (new) — Server lifecycle (~120 lines)
+- `mcp/register.go` (new) — Tool registration bridge (~110 lines)
+- `mcp/playwright_tools.json` (new) — 21 tool definitions (~12 KB)
+- `mcp/mcp_test.go` (new) — 13 MCP package tests (~400 lines)
+- `tests/mcp_playwright_test.go` (new) — 8 integration tests (~350 lines)
+- `config/config.go` — Added MCPPlaywright, MCPPlaywrightArgs fields
+- `api/types.go` — Added MarshalJSON to ContentBlock
+- `agent/agent.go` — Ensure tool_use Input non-nil
+- `main.go` — setupMCPPlaywright(), defer Close()
+
+**Test Results**:
+```
+=== MCP package (13 tests) ===
+TestNewClientMockServer              PASS (0.22s)
+TestClientRPCError                   PASS (0.23s)
+TestClientContextTimeout             PASS (0.11s)
+TestPlaywrightToolsSnapshot          PASS (0.00s)
+TestStripPrefix                      PASS (0.00s)
+TestHasPrefix                        PASS (0.00s)
+TestPlaywrightToolsMatchLiveServer   PASS (0.72s)
+TestPlaywrightServerLazyStart        PASS (0.00s)
+TestPlaywrightServerCallToolWithoutStart PASS (0.00s)
+TestPlaywrightServerCloseIdempotent  PASS (0.00s)
+TestPlaywrightServerEnsureRunningWithNpx PASS (1.11s)
+TestPlaywrightServerCloseAfterUse    PASS (0.55s)
+TestClientTypes                      PASS (0.00s)
+
+=== Tests package (8 MCP tests) ===
+TestMCPPlaywrightToolRegistration    PASS (0.00s)
+TestMCPToolsNoCollisionWithBuiltins  PASS (0.00s)
+TestMCPToolRegistrationWithServer    PASS (0.00s)
+TestMCPDisplayMessages               PASS (0.00s) — 4 subtests
+TestMCPPlaywrightIntegration         PASS (7.5s) — navigate + snapshot + verify content
+TestMCPPlaywrightBrowserStatePersists PASS (7.3s) — page1 → page2 → verify state
+TestMCPPlaywrightDisabledByDefault   PASS (0.00s)
+TestMCPPlaywrightProcessCleanup      PASS (0.53s)
+```
+
+**Configuration** (`~/.clyde/config`):
+```bash
+# Playwright MCP (optional)
+MCP_PLAYWRIGHT=true
+MCP_PLAYWRIGHT_ARGS=--headless  # Optional extra args
+```
+
+**Impact**:
+- 21 new browser automation tools available to Claude
+- ~3,900 token overhead (1.9% of 200k context) when enabled
+- Zero startup cost (lazy — server starts only on first browser tool call)
+- Zero new Go dependencies
+- ~575 lines of production code + ~750 lines of tests
+- Existing tests all pass (no regressions)
+- Same browser experience as Claude Code's Playwright MCP integration
+
 ## Current Status (2026-07-10)
 
 **Latest Update**: TUI-9: Alt+Enter & Ctrl+J for Multiline Input ✅

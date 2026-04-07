@@ -13,6 +13,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/config"
 	"github.com/this-is-alpha-iota/clyde/input"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
+	"github.com/this-is-alpha-iota/clyde/mcp"
 	"github.com/this-is-alpha-iota/clyde/prompt"
 	"github.com/this-is-alpha-iota/clyde/prompts"
 	"github.com/this-is-alpha-iota/clyde/spinner"
@@ -36,6 +37,22 @@ func main() {
 	} else {
 		runREPLMode(flags.Level, flags.NoThink)
 	}
+}
+
+// setupMCPPlaywright registers Playwright MCP tools if configured.
+// Returns the server (for later cleanup) or nil if not enabled.
+func setupMCPPlaywright(cfg *config.Config) *mcp.PlaywrightServer {
+	if !cfg.MCPPlaywright {
+		return nil
+	}
+
+	server := mcp.NewPlaywrightServer(cfg.MCPPlaywrightArgs)
+	if err := mcp.RegisterPlaywrightTools(server); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to register Playwright MCP tools: %v\n", err)
+		return nil
+	}
+
+	return server
 }
 
 // createAPIClient creates an API client with optional thinking enabled.
@@ -111,6 +128,12 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 	// Create API client with thinking
 	apiClient := createAPIClient(cfg, noThink)
 
+	// Setup Playwright MCP if configured
+	mcpServer := setupMCPPlaywright(cfg)
+	if mcpServer != nil {
+		defer mcpServer.Close()
+	}
+
 	// Create agent with progress callback (print to stderr so stdout is clean)
 	agentInstance := agent.NewAgent(
 		apiClient,
@@ -158,6 +181,12 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 
 	// Create API client with thinking
 	apiClient := createAPIClient(cfg, noThink)
+
+	// Setup Playwright MCP if configured
+	mcpServer := setupMCPPlaywright(cfg)
+	if mcpServer != nil {
+		defer mcpServer.Close()
+	}
 
 	// Create spinner for animated progress display (REPL mode only).
 	// The spinner shows a live preview on the second-to-last terminal line.

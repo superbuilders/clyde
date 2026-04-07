@@ -15,8 +15,10 @@ type Config struct {
 	APIURL               string
 	ModelID              string
 	MaxTokens            int
-	ContextWindowSize    int // Maximum context window for the model in tokens
-	ThinkingBudgetTokens int // Budget for extended thinking (0 = use default 8192)
+	ContextWindowSize    int    // Maximum context window for the model in tokens
+	ThinkingBudgetTokens int    // Budget for extended thinking (0 = use default 8192)
+	MCPPlaywright        bool   // Enable Playwright MCP browser automation
+	MCPPlaywrightArgs    string // Extra args for npx @playwright/mcp (e.g. "--headless")
 }
 
 // LoadFromFile loads configuration from a specific file path
@@ -62,5 +64,7 @@ func LoadFromFile(path string) (*Config, error) {
 		MaxTokens:            64000,
 		ContextWindowSize:    200000, // Claude Opus 4.6 context window
 		ThinkingBudgetTokens: thinkingBudget,
+		MCPPlaywright:        os.Getenv("MCP_PLAYWRIGHT") == "true",
+		MCPPlaywrightArgs:    os.Getenv("MCP_PLAYWRIGHT_ARGS"),
 	}, nil
 }

@@ -34,3 +34,6 @@ Thumbs.db
 test_*.txt
 test_edit_*.txt
 test_read_*.txt
+
+# Playwright MCP trace artifacts
+.playwright-mcp/

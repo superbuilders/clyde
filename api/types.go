@@ -1,5 +1,7 @@
 package api
 
+import "encoding/json"
+
 // Message represents a single message in the conversation
 type Message struct {
 	Role    string      `json:"role"`
@@ -75,6 +77,35 @@ type ContentBlock struct {
 	Thinking  string `json:"thinking,omitempty"`  // Thinking trace text (type="thinking")
 	Signature string `json:"signature,omitempty"` // Signature for verification (type="thinking")
 	Data      string `json:"data,omitempty"`      // Encrypted data (type="redacted_thinking")
+}
+
+// MarshalJSON implements custom JSON marshaling for ContentBlock.
+// For tool_use blocks, the "input" field is always included (even when empty),
+// because the Claude API requires it. For other block types, input is omitted
+// when nil/empty (standard omitempty behavior).
+func (b ContentBlock) MarshalJSON() ([]byte, error) {
+	// Use an alias to avoid infinite recursion
+	type Alias ContentBlock
+	if b.Type == "tool_use" {
+		// For tool_use: ensure input is always present
+		inputVal := b.Input
+		if inputVal == nil {
+			inputVal = map[string]interface{}{}
+		}
+		return json.Marshal(&struct {
+			Alias
+			Input map[string]interface{} `json:"input"` // no omitempty
+		}{
+			Alias: Alias(b),
+			Input: inputVal,
+		})
+	}
+	// For all other types: use default serialization (with omitempty on input)
+	return json.Marshal(&struct {
+		Alias
+	}{
+		Alias: Alias(b),
+	})
 }
 
 // Usage represents token usage information in a response
