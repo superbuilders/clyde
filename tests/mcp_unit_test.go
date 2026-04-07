@@ -1,16 +1,15 @@
-package mcp
+package main
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/this-is-alpha-iota/clyde/mcp"
 )
 
 // --- Story 1: MCP Client Unit Tests ---
@@ -22,7 +21,7 @@ func TestNewClientMockServer(t *testing.T) {
 	// Build the mock server
 	mockPath := buildMockServer(t)
 
-	client, err := NewClient(mockPath)
+	client, err := mcp.NewClient(mockPath)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -88,7 +87,7 @@ func TestNewClientMockServer(t *testing.T) {
 func TestClientRPCError(t *testing.T) {
 	mockPath := buildMockServer(t)
 
-	client, err := NewClient(mockPath)
+	client, err := mcp.NewClient(mockPath)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -116,7 +115,7 @@ func TestClientRPCError(t *testing.T) {
 func TestClientContextTimeout(t *testing.T) {
 	mockPath := buildMockServer(t)
 
-	client, err := NewClient(mockPath)
+	client, err := mcp.NewClient(mockPath)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -135,7 +134,7 @@ func TestClientContextTimeout(t *testing.T) {
 // --- Story 2: Snapshot Tests ---
 
 func TestPlaywrightToolsSnapshot(t *testing.T) {
-	tools, err := PlaywrightTools()
+	tools, err := mcp.PlaywrightTools()
 	if err != nil {
 		t.Fatalf("PlaywrightTools: %v", err)
 	}
@@ -182,19 +181,19 @@ func TestPlaywrightToolsSnapshot(t *testing.T) {
 }
 
 func TestStripPrefix(t *testing.T) {
-	if got := StripPrefix("mcp_playwright_browser_navigate"); got != "browser_navigate" {
+	if got := mcp.StripPrefix("mcp_playwright_browser_navigate"); got != "browser_navigate" {
 		t.Errorf("StripPrefix = %q, want %q", got, "browser_navigate")
 	}
-	if got := StripPrefix("list_files"); got != "list_files" {
+	if got := mcp.StripPrefix("list_files"); got != "list_files" {
 		t.Errorf("StripPrefix should not modify non-prefixed name, got %q", got)
 	}
 }
 
 func TestHasPrefix(t *testing.T) {
-	if !HasPrefix("mcp_playwright_browser_navigate") {
+	if !mcp.HasPrefix("mcp_playwright_browser_navigate") {
 		t.Error("HasPrefix should return true for prefixed name")
 	}
-	if HasPrefix("list_files") {
+	if mcp.HasPrefix("list_files") {
 		t.Error("HasPrefix should return false for non-prefixed name")
 	}
 }
@@ -211,7 +210,7 @@ func TestPlaywrightToolsMatchLiveServer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	client, err := NewClient("npx", "@playwright/mcp@latest", "--headless")
+	client, err := mcp.NewClient("npx", "@playwright/mcp@latest", "--headless")
 	if err != nil {
 		t.Skipf("Failed to spawn Playwright MCP server: %v", err)
 	}
@@ -228,7 +227,7 @@ func TestPlaywrightToolsMatchLiveServer(t *testing.T) {
 	}
 
 	// Compare with embedded snapshot
-	snapshotTools, err := PlaywrightTools()
+	snapshotTools, err := mcp.PlaywrightTools()
 	if err != nil {
 		t.Fatalf("PlaywrightTools: %v", err)
 	}
@@ -246,7 +245,7 @@ func TestPlaywrightToolsMatchLiveServer(t *testing.T) {
 
 	// Check all snapshot tools exist in live server
 	for _, tool := range snapshotTools {
-		originalName := StripPrefix(tool.Name)
+		originalName := mcp.StripPrefix(tool.Name)
 		if !liveNames[originalName] {
 			t.Errorf("Snapshot tool %q not found in live server", originalName)
 		}
@@ -255,7 +254,7 @@ func TestPlaywrightToolsMatchLiveServer(t *testing.T) {
 	// Check for new tools in live server not in snapshot
 	snapshotNames := make(map[string]bool)
 	for _, tool := range snapshotTools {
-		snapshotNames[StripPrefix(tool.Name)] = true
+		snapshotNames[mcp.StripPrefix(tool.Name)] = true
 	}
 	for _, tool := range liveTools {
 		if !snapshotNames[tool.Name] {
@@ -268,14 +267,14 @@ func TestPlaywrightToolsMatchLiveServer(t *testing.T) {
 
 func TestPlaywrightServerLazyStart(t *testing.T) {
 	// Verify the server is NOT started until EnsureRunning is called
-	server := NewPlaywrightServer("--headless")
-	if server.client != nil {
-		t.Error("Server client should be nil before EnsureRunning")
+	server := mcp.NewPlaywrightServer("--headless")
+	if server.IsRunning() {
+		t.Error("Server should not be running before EnsureRunning")
 	}
 }
 
 func TestPlaywrightServerCallToolWithoutStart(t *testing.T) {
-	server := NewPlaywrightServer("--headless")
+	server := mcp.NewPlaywrightServer("--headless")
 	ctx := context.Background()
 	_, err := server.CallTool(ctx, "browser_navigate", nil)
 	if err == nil {
@@ -287,7 +286,7 @@ func TestPlaywrightServerCallToolWithoutStart(t *testing.T) {
 }
 
 func TestPlaywrightServerCloseIdempotent(t *testing.T) {
-	server := NewPlaywrightServer("--headless")
+	server := mcp.NewPlaywrightServer("--headless")
 	// Close without starting should be safe
 	if err := server.Close(); err != nil {
 		t.Errorf("Close on unstarted server: %v", err)
@@ -303,7 +302,7 @@ func TestPlaywrightServerEnsureRunningWithNpx(t *testing.T) {
 		t.Skip("npx not available")
 	}
 
-	server := NewPlaywrightServer("--headless")
+	server := mcp.NewPlaywrightServer("--headless")
 	defer server.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -337,7 +336,7 @@ func TestPlaywrightServerCloseAfterUse(t *testing.T) {
 		t.Skip("npx not available")
 	}
 
-	server := NewPlaywrightServer("--headless")
+	server := mcp.NewPlaywrightServer("--headless")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -504,26 +503,19 @@ func main() {
 
 // --- Type assertions (compile-time) ---
 
-var _ io.Closer = (*Client)(nil)
+var _ io.Closer = (*mcp.Client)(nil)
 
 // Verify scanner is available on the Client
 func TestClientTypes(t *testing.T) {
 	// Verify types are correctly defined
-	var r Response
+	var r mcp.Response
 	_ = r.ID
 	_ = r.Result
 	_ = r.Error
 
-	var tr CallToolResult
+	var tr mcp.CallToolResult
 	_ = tr.Content
 	_ = tr.IsError
 }
 
-// skipIfNoStdin is not needed but keeping structure clean
-func init() {
-	// Ensure test package compiles with all used symbols
-	_ = bufio.Scanner{}
-	_ = context.Background
-	_ = fmt.Sprint
-	_ = json.Marshal
-}
+

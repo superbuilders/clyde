@@ -134,9 +134,9 @@ func New(cfg Config) (*Reader, error) {
 	return reader, nil
 }
 
-// continuationPrompt is shown for subsequent lines in multiline mode.
+// ContinuationPrompt is shown for subsequent lines in multiline mode.
 // It is indented to align with the content after "You: " in the main prompt.
-const continuationPrompt = "  > "
+const ContinuationPrompt = "  > "
 
 // ReadLine reads a line (or multiline block) of input from the user.
 //
@@ -177,7 +177,7 @@ func (r *Reader) ReadLine() (string, error) {
 			r.ctrlJPressed.Store(false)
 			r.lines = append(r.lines, line)
 			r.multiline = true
-			r.rl.SetPrompt(continuationPrompt)
+			r.rl.SetPrompt(ContinuationPrompt)
 			continue
 		}
 
@@ -187,7 +187,7 @@ func (r *Reader) ReadLine() (string, error) {
 			line = line[:len(line)-1] // strip the backslash
 			r.lines = append(r.lines, line)
 			r.multiline = true
-			r.rl.SetPrompt(continuationPrompt)
+			r.rl.SetPrompt(ContinuationPrompt)
 			continue
 		}
 
@@ -273,11 +273,22 @@ func (r *Reader) AccumulatedLines() []string {
 // Thread safety: Read is called by readline's internal goroutine (terminal
 // ioloop), so it must not race with other methods. The pending byte state
 // is contained within Read's sequential call chain — no concurrent access.
+// MetaCRReader wraps an io.ReadCloser and translates the byte sequence
+// ESC CR (0x1B 0x0D) — sent by terminals when Alt+Enter is pressed —
+// into a single LF byte (0x0A).
+type MetaCRReader = metaCRReader
+
 type metaCRReader struct {
 	rc      io.ReadCloser
 	buf     [1]byte
 	pending byte // buffered byte from a non-Alt+Enter ESC sequence
 	hasPend bool // true if pending contains a valid byte
+}
+
+// NewMetaCRReader creates a new MetaCRReader wrapping the given ReadCloser.
+// Exported for testing.
+func NewMetaCRReader(rc io.ReadCloser) *MetaCRReader {
+	return &metaCRReader{rc: rc}
 }
 
 // Read implements io.Reader. It reads from the underlying reader one byte

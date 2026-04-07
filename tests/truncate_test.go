@@ -1,10 +1,11 @@
-package truncate
+package main
 
 import (
 	"strings"
 	"testing"
 
 	"github.com/this-is-alpha-iota/clyde/loglevel"
+	"github.com/this-is-alpha-iota/clyde/truncate"
 )
 
 // helper to build a string with N lines
@@ -20,7 +21,7 @@ func nLines(n int) string {
 
 func TestLinesNoTruncationBelowLimit(t *testing.T) {
 	text := nLines(24)
-	result := Lines(text, 25, loglevel.Normal)
+	result := truncate.Lines(text, 25, loglevel.Normal)
 	if result != text {
 		t.Error("24 lines should not be truncated at limit 25")
 	}
@@ -28,7 +29,7 @@ func TestLinesNoTruncationBelowLimit(t *testing.T) {
 
 func TestLinesNoTruncationAtExactLimit(t *testing.T) {
 	text := nLines(25)
-	result := Lines(text, 25, loglevel.Normal)
+	result := truncate.Lines(text, 25, loglevel.Normal)
 	if result != text {
 		t.Error("25 lines should not be truncated at limit 25")
 	}
@@ -36,7 +37,7 @@ func TestLinesNoTruncationAtExactLimit(t *testing.T) {
 
 func TestLinesTruncationOneOverLimit(t *testing.T) {
 	text := nLines(26)
-	result := Lines(text, 25, loglevel.Normal)
+	result := truncate.Lines(text, 25, loglevel.Normal)
 
 	resultLines := strings.Split(result, "\n")
 	// 25 kept lines + 1 overflow message = 26 lines in result
@@ -52,7 +53,7 @@ func TestLinesTruncationOneOverLimit(t *testing.T) {
 
 func TestLinesTruncationManyOver(t *testing.T) {
 	text := nLines(100)
-	result := Lines(text, 25, loglevel.Normal)
+	result := truncate.Lines(text, 25, loglevel.Normal)
 
 	if !strings.Contains(result, "... (75 more lines)") {
 		t.Error("Expected overflow message showing 75 more lines")
@@ -61,7 +62,7 @@ func TestLinesTruncationManyOver(t *testing.T) {
 
 func TestLinesBypassedAtVerbose(t *testing.T) {
 	text := nLines(100)
-	result := Lines(text, 25, loglevel.Verbose)
+	result := truncate.Lines(text, 25, loglevel.Verbose)
 	if result != text {
 		t.Error("Verbose level should bypass line truncation")
 	}
@@ -69,7 +70,7 @@ func TestLinesBypassedAtVerbose(t *testing.T) {
 
 func TestLinesBypassedAtDebug(t *testing.T) {
 	text := nLines(100)
-	result := Lines(text, 25, loglevel.Debug)
+	result := truncate.Lines(text, 25, loglevel.Debug)
 	if result != text {
 		t.Error("Debug level should bypass line truncation")
 	}
@@ -77,7 +78,7 @@ func TestLinesBypassedAtDebug(t *testing.T) {
 
 func TestLinesAppliedAtNormal(t *testing.T) {
 	text := nLines(30)
-	result := Lines(text, 25, loglevel.Normal)
+	result := truncate.Lines(text, 25, loglevel.Normal)
 	if !strings.Contains(result, "... (5 more lines)") {
 		t.Error("Normal level should truncate")
 	}
@@ -85,7 +86,7 @@ func TestLinesAppliedAtNormal(t *testing.T) {
 
 func TestLinesAppliedAtQuiet(t *testing.T) {
 	text := nLines(30)
-	result := Lines(text, 25, loglevel.Quiet)
+	result := truncate.Lines(text, 25, loglevel.Quiet)
 	if !strings.Contains(result, "... (5 more lines)") {
 		t.Error("Quiet level should truncate")
 	}
@@ -93,7 +94,7 @@ func TestLinesAppliedAtQuiet(t *testing.T) {
 
 func TestLinesAppliedAtSilent(t *testing.T) {
 	text := nLines(30)
-	result := Lines(text, 25, loglevel.Silent)
+	result := truncate.Lines(text, 25, loglevel.Silent)
 	if !strings.Contains(result, "... (5 more lines)") {
 		t.Error("Silent level should truncate")
 	}
@@ -103,7 +104,7 @@ func TestLinesAppliedAtSilent(t *testing.T) {
 
 func TestCharsNoTruncationBelowLimit(t *testing.T) {
 	line := strings.Repeat("x", 1999)
-	result := Chars(line, loglevel.Normal)
+	result := truncate.Chars(line, loglevel.Normal)
 	if result != line {
 		t.Error("1999 chars should not be truncated")
 	}
@@ -111,7 +112,7 @@ func TestCharsNoTruncationBelowLimit(t *testing.T) {
 
 func TestCharsNoTruncationAtExactLimit(t *testing.T) {
 	line := strings.Repeat("x", 2000)
-	result := Chars(line, loglevel.Normal)
+	result := truncate.Chars(line, loglevel.Normal)
 	if result != line {
 		t.Error("2000 chars should not be truncated")
 	}
@@ -119,7 +120,7 @@ func TestCharsNoTruncationAtExactLimit(t *testing.T) {
 
 func TestCharsTruncationOneOverLimit(t *testing.T) {
 	line := strings.Repeat("x", 2001)
-	result := Chars(line, loglevel.Normal)
+	result := truncate.Chars(line, loglevel.Normal)
 	if len(result) != 2003 { // 2000 + "..."
 		t.Errorf("Expected length 2003 (2000 + ...), got %d", len(result))
 	}
@@ -130,7 +131,7 @@ func TestCharsTruncationOneOverLimit(t *testing.T) {
 
 func TestCharsBypassedAtVerbose(t *testing.T) {
 	line := strings.Repeat("x", 5000)
-	result := Chars(line, loglevel.Verbose)
+	result := truncate.Chars(line, loglevel.Verbose)
 	if result != line {
 		t.Error("Verbose level should bypass character truncation")
 	}
@@ -138,7 +139,7 @@ func TestCharsBypassedAtVerbose(t *testing.T) {
 
 func TestCharsBypassedAtDebug(t *testing.T) {
 	line := strings.Repeat("x", 5000)
-	result := Chars(line, loglevel.Debug)
+	result := truncate.Chars(line, loglevel.Debug)
 	if result != line {
 		t.Error("Debug level should bypass character truncation")
 	}
@@ -154,7 +155,7 @@ func TestTextCombinedTruncation(t *testing.T) {
 	}
 	text := strings.Join(lines, "\n")
 
-	result := Text(text, 25, loglevel.Normal)
+	result := truncate.Text(text, 25, loglevel.Normal)
 
 	resultLines := strings.Split(result, "\n")
 
@@ -184,7 +185,7 @@ func TestTextBypassedAtVerbose(t *testing.T) {
 	}
 	text := strings.Join(lines, "\n")
 
-	result := Text(text, 25, loglevel.Verbose)
+	result := truncate.Text(text, 25, loglevel.Verbose)
 	if result != text {
 		t.Error("Verbose should bypass all truncation")
 	}
@@ -194,7 +195,7 @@ func TestTextBypassedAtVerbose(t *testing.T) {
 
 func TestThinkingUsesCorrectLimit(t *testing.T) {
 	text := nLines(55)
-	result := Thinking(text, loglevel.Normal)
+	result := truncate.Thinking(text, loglevel.Normal)
 
 	if !strings.Contains(result, "... (5 more lines)") {
 		t.Error("Thinking should truncate at 50 lines, showing 5 overflow")
@@ -203,7 +204,7 @@ func TestThinkingUsesCorrectLimit(t *testing.T) {
 
 func TestThinkingNoTruncationAtLimit(t *testing.T) {
 	text := nLines(50)
-	result := Thinking(text, loglevel.Normal)
+	result := truncate.Thinking(text, loglevel.Normal)
 	if result != text {
 		t.Error("50 lines should not be truncated at ThinkingLineLimit=50")
 	}
@@ -211,7 +212,7 @@ func TestThinkingNoTruncationAtLimit(t *testing.T) {
 
 func TestThinkingBypassedAtVerbose(t *testing.T) {
 	text := nLines(100)
-	result := Thinking(text, loglevel.Verbose)
+	result := truncate.Thinking(text, loglevel.Verbose)
 	if result != text {
 		t.Error("Verbose should bypass thinking truncation")
 	}
@@ -221,7 +222,7 @@ func TestThinkingBypassedAtVerbose(t *testing.T) {
 
 func TestToolOutputUsesCorrectLimit(t *testing.T) {
 	text := nLines(30)
-	result := ToolOutput(text, loglevel.Normal)
+	result := truncate.ToolOutput(text, loglevel.Normal)
 
 	if !strings.Contains(result, "... (5 more lines)") {
 		t.Error("ToolOutput should truncate at 25 lines, showing 5 overflow")
@@ -230,15 +231,15 @@ func TestToolOutputUsesCorrectLimit(t *testing.T) {
 
 func TestToolOutputNoTruncationAtLimit(t *testing.T) {
 	text := nLines(25)
-	result := ToolOutput(text, loglevel.Normal)
+	result := truncate.ToolOutput(text, loglevel.Normal)
 	if result != text {
-		t.Error("25 lines should not be truncated at ToolOutputLineLimit=25")
+		t.Error("25 lines should not be truncated at truncate.ToolOutputLineLimit=25")
 	}
 }
 
 func TestToolOutputBypassedAtVerbose(t *testing.T) {
 	text := nLines(100)
-	result := ToolOutput(text, loglevel.Verbose)
+	result := truncate.ToolOutput(text, loglevel.Verbose)
 	if result != text {
 		t.Error("Verbose should bypass tool output truncation")
 	}
@@ -247,21 +248,21 @@ func TestToolOutputBypassedAtVerbose(t *testing.T) {
 // --- Empty/edge cases ---
 
 func TestLinesEmptyString(t *testing.T) {
-	result := Lines("", 25, loglevel.Normal)
+	result := truncate.Lines("", 25, loglevel.Normal)
 	if result != "" {
 		t.Errorf("Empty string should remain empty, got %q", result)
 	}
 }
 
 func TestLinesSingleLine(t *testing.T) {
-	result := Lines("hello", 25, loglevel.Normal)
+	result := truncate.Lines("hello", 25, loglevel.Normal)
 	if result != "hello" {
 		t.Errorf("Single line should remain unchanged, got %q", result)
 	}
 }
 
 func TestCharsEmptyString(t *testing.T) {
-	result := Chars("", loglevel.Normal)
+	result := truncate.Chars("", loglevel.Normal)
 	if result != "" {
 		t.Errorf("Empty string should remain empty, got %q", result)
 	}
@@ -275,7 +276,7 @@ func TestSingleLineCommandNeverTruncated(t *testing.T) {
 	// A very long single-line command. Line truncation (25 lines) doesn't apply
 	// because it's only 1 line. Character truncation still applies at Normal.
 	longCmd := "run_bash: " + strings.Repeat("x", 500)
-	result := Lines(longCmd, ToolOutputLineLimit, loglevel.Normal)
+	result := truncate.Lines(longCmd, truncate.ToolOutputLineLimit, loglevel.Normal)
 	if result != longCmd {
 		t.Error("Single-line command should never be line-truncated")
 	}
@@ -284,7 +285,7 @@ func TestSingleLineCommandNeverTruncated(t *testing.T) {
 func TestMultiLineBashFollowsStandardTruncation(t *testing.T) {
 	// A multi-line bash command/output should follow standard truncation
 	text := nLines(30)
-	result := Lines(text, ToolOutputLineLimit, loglevel.Normal)
+	result := truncate.Lines(text, truncate.ToolOutputLineLimit, loglevel.Normal)
 	if !strings.Contains(result, "... (5 more lines)") {
 		t.Error("Multi-line content should be truncated at 25 lines")
 	}

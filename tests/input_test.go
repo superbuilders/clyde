@@ -1,4 +1,4 @@
-package input
+package main
 
 import (
 	"io"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/this-is-alpha-iota/clyde/input"
 )
 
 // mockReadCloser wraps a strings.Reader as an io.ReadCloser for testing.
@@ -35,7 +37,7 @@ func TestNew_DefaultConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	historyFile := filepath.Join(tmpDir, "test-history")
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "test> ",
 		HistoryFile: historyFile,
 		Stdin:       newMockStdin("hello\r"),
@@ -43,20 +45,16 @@ func TestNew_DefaultConfig(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
-
-	if r.rl == nil {
-		t.Error("Expected non-nil readline instance")
-	}
 }
 
 // TestReadLine_SingleLine tests basic single-line input submission.
 func TestReadLine_SingleLine(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin("hello world\r"),
@@ -64,7 +62,7 @@ func TestReadLine_SingleLine(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -82,7 +80,7 @@ func TestReadLine_SingleLine(t *testing.T) {
 func TestReadLine_EmptyLine(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin("\r"),
@@ -90,7 +88,7 @@ func TestReadLine_EmptyLine(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -109,7 +107,7 @@ func TestReadLine_EOF(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Empty stdin simulates immediate EOF
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin(""),
@@ -117,7 +115,7 @@ func TestReadLine_EOF(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -131,7 +129,7 @@ func TestReadLine_EOF(t *testing.T) {
 func TestReadLine_MultipleLines(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin("first\rsecond\rthird\r"),
@@ -139,7 +137,7 @@ func TestReadLine_MultipleLines(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -162,17 +160,17 @@ func TestReadLine_Multiline_BackslashContinuation(t *testing.T) {
 
 	// Lines ending with \ continue to the next line.
 	// \r simulates pressing Enter to submit each line to readline.
-	input := "line one\\\rline two\\\rline three\r"
+	testInput := "line one\\\rline two\\\rline three\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -192,17 +190,17 @@ func TestReadLine_Multiline_BackslashContinuation(t *testing.T) {
 func TestReadLine_Multiline_SingleBackslashLine(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	input := "start\\\rend\r"
+	testInput := "start\\\rend\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -221,17 +219,17 @@ func TestReadLine_Multiline_SingleBackslashLine(t *testing.T) {
 func TestReadLine_Multiline_OnlyBackslash(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	input := "\\\rsecond line\r"
+	testInput := "\\\rsecond line\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -251,7 +249,7 @@ func TestReadLine_HistorySaved(t *testing.T) {
 	tmpDir := t.TempDir()
 	historyFile := filepath.Join(tmpDir, "history")
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: historyFile,
 		Stdin:       newMockStdin("first input\rsecond input\r"),
@@ -259,7 +257,7 @@ func TestReadLine_HistorySaved(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 
 	// Read two lines
@@ -289,7 +287,7 @@ func TestReadLine_EmptyNotSavedToHistory(t *testing.T) {
 	tmpDir := t.TempDir()
 	historyFile := filepath.Join(tmpDir, "history")
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: historyFile,
 		Stdin:       newMockStdin("\rreal input\r"),
@@ -297,7 +295,7 @@ func TestReadLine_EmptyNotSavedToHistory(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 
 	_, _ = r.ReadLine() // empty
@@ -323,17 +321,17 @@ func TestReadLine_Multiline_HistorySavedAsBlock(t *testing.T) {
 	tmpDir := t.TempDir()
 	historyFile := filepath.Join(tmpDir, "history")
 
-	input := "first line\\\rsecond line\r"
+	testInput := "first line\\\rsecond line\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: historyFile,
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 
 	result, _ := r.ReadLine()
@@ -359,7 +357,7 @@ func TestReadLine_Multiline_HistorySavedAsBlock(t *testing.T) {
 func TestSetPrompt(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "initial> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin("test\r"),
@@ -367,7 +365,7 @@ func TestSetPrompt(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -388,7 +386,7 @@ func TestSetPrompt(t *testing.T) {
 func TestClose(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin(""),
@@ -396,7 +394,7 @@ func TestClose(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 
 	// First close should succeed
@@ -410,7 +408,7 @@ func TestClose(t *testing.T) {
 func TestStdout(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin("test\r"),
@@ -418,7 +416,7 @@ func TestStdout(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -438,7 +436,7 @@ func TestStdout(t *testing.T) {
 func TestStderr(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin("test\r"),
@@ -446,7 +444,7 @@ func TestStderr(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -460,7 +458,7 @@ func TestStderr(t *testing.T) {
 func TestIsMultiline(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin("normal\r"),
@@ -468,7 +466,7 @@ func TestIsMultiline(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -489,7 +487,7 @@ func TestIsMultiline(t *testing.T) {
 func TestAccumulatedLines_Nil(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin("normal\r"),
@@ -497,7 +495,7 @@ func TestAccumulatedLines_Nil(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -509,12 +507,12 @@ func TestAccumulatedLines_Nil(t *testing.T) {
 
 // TestContinuationPrompt verifies the continuation prompt constant.
 func TestContinuationPrompt(t *testing.T) {
-	if continuationPrompt == "" {
-		t.Error("continuationPrompt should not be empty")
+	if input.ContinuationPrompt == "" {
+		t.Error("input.ContinuationPrompt should not be empty")
 	}
 	// Should be indented (not ">" at column 0)
-	if !strings.HasPrefix(continuationPrompt, " ") {
-		t.Errorf("continuationPrompt should be indented, got %q", continuationPrompt)
+	if !strings.HasPrefix(input.ContinuationPrompt, " ") {
+		t.Errorf("input.ContinuationPrompt should be indented, got %q", input.ContinuationPrompt)
 	}
 }
 
@@ -525,7 +523,7 @@ func TestReadLine_LongInput(t *testing.T) {
 	// Create a long input line (3000 chars)
 	longLine := strings.Repeat("a", 3000) + "\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin(longLine),
@@ -533,7 +531,7 @@ func TestReadLine_LongInput(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -559,7 +557,7 @@ func TestReadLine_Multiline_ManyLines(t *testing.T) {
 	}
 	sb.WriteString("final line\r")
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
 		Stdin:       newMockStdin(sb.String()),
@@ -567,7 +565,7 @@ func TestReadLine_Multiline_ManyLines(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -593,7 +591,7 @@ func TestNew_NoHistoryFile(t *testing.T) {
 	// to avoid touching the real ~/.clyde/history
 	tmpDir := t.TempDir()
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "nonexistent-dir", "history"),
 		Stdin:       newMockStdin("test\r"),
@@ -603,7 +601,7 @@ func TestNew_NoHistoryFile(t *testing.T) {
 	// readline should still work even if history file can't be created
 	if err != nil {
 		// This is acceptable — some systems may error on missing parent dirs
-		t.Logf("New() returned error (acceptable): %v", err)
+		t.Logf("input.New() returned error (acceptable): %v", err)
 		return
 	}
 	defer r.Close()
@@ -622,7 +620,7 @@ func TestReadLine_WhitespaceOnly(t *testing.T) {
 	tmpDir := t.TempDir()
 	historyFile := filepath.Join(tmpDir, "history")
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: historyFile,
 		Stdin:       newMockStdin("   \rreal\r"),
@@ -630,7 +628,7 @@ func TestReadLine_WhitespaceOnly(t *testing.T) {
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 
 	line1, _ := r.ReadLine() // whitespace-only
@@ -658,17 +656,17 @@ func TestReadLine_SequentialSingleAndMultiline(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// single -> multiline -> single
-	input := "single one\rfirst\\\rsecond\rsingle two\r"
+	testInput := "single one\rfirst\\\rsecond\rsingle two\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -710,17 +708,17 @@ func TestReadLine_CtrlJ_BasicMultiline(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// "hello" + Ctrl+J (0x0A) + "world" + Enter (0x0D)
-	input := "hello\nworld\r"
+	testInput := "hello\nworld\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -740,17 +738,17 @@ func TestReadLine_CtrlJ_ThreeLines(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// "line1" + Ctrl+J + "line2" + Ctrl+J + "line3" + Enter
-	input := "line1\nline2\nline3\r"
+	testInput := "line1\nline2\nline3\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -771,17 +769,17 @@ func TestReadLine_CtrlJ_EmptyFirstLine(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Ctrl+J (empty first line) + "content" + Enter
-	input := "\ncontent\r"
+	testInput := "\ncontent\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -802,17 +800,17 @@ func TestReadLine_AltEnter_BasicMultiline(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// "hello" + Alt+Enter (ESC CR) + "world" + Enter (CR)
-	input := "hello\x1b\x0dworld\r"
+	testInput := "hello\x1b\x0dworld\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -832,17 +830,17 @@ func TestReadLine_AltEnter_ThreeLines(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// "a" + Alt+Enter + "b" + Alt+Enter + "c" + Enter
-	input := "a\x1b\x0db\x1b\x0dc\r"
+	testInput := "a\x1b\x0db\x1b\x0dc\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -866,17 +864,17 @@ func TestReadLine_MixedMultiline(t *testing.T) {
 	// + "line2" + Ctrl+J (0x0A)
 	// + "line3" + Alt+Enter (ESC CR)
 	// + "line4" + Enter (submit)
-	input := "line1\\\rline2\nline3\x1b\x0dline4\r"
+	testInput := "line1\\\rline2\nline3\x1b\x0dline4\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -898,17 +896,17 @@ func TestReadLine_CtrlJ_HistorySavedAsBlock(t *testing.T) {
 	historyFile := filepath.Join(tmpDir, "history")
 
 	// "part1" + Ctrl+J + "part2" + Enter
-	input := "part1\npart2\r"
+	testInput := "part1\npart2\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: historyFile,
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 
 	result, _ := r.ReadLine()
@@ -942,17 +940,17 @@ func TestReadLine_CtrlJ_BackslashPreserved(t *testing.T) {
 
 	// "path\to\" + Ctrl+J + "file" + Enter
 	// The backslash should be preserved because Ctrl+J, not Enter, was used
-	input := "path\\to\\\nfile\r"
+	testInput := "path\\to\\\nfile\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -975,17 +973,17 @@ func TestReadLine_CtrlJ_ThenSingleLine(t *testing.T) {
 
 	// First: "a" + Ctrl+J + "b" + Enter
 	// Second: "single" + Enter
-	input := "a\nb\rsingle\r"
+	testInput := "a\nb\rsingle\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -1015,17 +1013,17 @@ func TestReadLine_CtrlC_DuringCtrlJMultiline(t *testing.T) {
 
 	// "partial" + Ctrl+J + Ctrl+C (interrupt) + "after" + Enter
 	// Ctrl+C is 0x03 (CharInterrupt)
-	input := "partial\n\x03after\r"
+	testInput := "partial\n\x03after\r"
 
-	r, err := New(Config{
+	r, err := input.New(input.Config{
 		Prompt:      "> ",
 		HistoryFile: filepath.Join(tmpDir, "history"),
-		Stdin:       newMockStdin(input),
+		Stdin:       newMockStdin(testInput),
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("input.New() error = %v", err)
 	}
 	defer r.Close()
 
@@ -1057,8 +1055,8 @@ func TestReadLine_CtrlC_DuringCtrlJMultiline(t *testing.T) {
 
 // TestMetaCRReader_PassThrough tests that normal bytes pass through unchanged.
 func TestMetaCRReader_PassThrough(t *testing.T) {
-	input := "hello\rworld\r"
-	m := &metaCRReader{rc: newMockStdin(input)}
+	testInput := "hello\rworld\r"
+	m := input.NewMetaCRReader(newMockStdin(testInput))
 
 	var result []byte
 	buf := make([]byte, 1)
@@ -1072,16 +1070,16 @@ func TestMetaCRReader_PassThrough(t *testing.T) {
 		}
 	}
 
-	if string(result) != input {
-		t.Errorf("metaCRReader passthrough = %q, want %q", string(result), input)
+	if string(result) != testInput {
+		t.Errorf("metaCRReader passthrough = %q, want %q", string(result),testInput)
 	}
 }
 
 // TestMetaCRReader_AltEnterTranslation tests that ESC+CR is translated to LF.
 func TestMetaCRReader_AltEnterTranslation(t *testing.T) {
 	// "hello" + ESC CR + "world" + CR
-	input := "hello\x1b\x0dworld\r"
-	m := &metaCRReader{rc: newMockStdin(input)}
+	testInput := "hello\x1b\x0dworld\r"
+	m := input.NewMetaCRReader(newMockStdin(testInput))
 
 	var result []byte
 	buf := make([]byte, 1)
@@ -1106,8 +1104,8 @@ func TestMetaCRReader_AltEnterTranslation(t *testing.T) {
 // sequences (like ESC [ A for up arrow) pass through correctly.
 func TestMetaCRReader_EscapeSequencePreserved(t *testing.T) {
 	// ESC + '[' + 'A' = up arrow escape sequence
-	input := "\x1b[A"
-	m := &metaCRReader{rc: newMockStdin(input)}
+	testInput := "\x1b[A"
+	m := input.NewMetaCRReader(newMockStdin(testInput))
 
 	var result []byte
 	buf := make([]byte, 1)
@@ -1122,16 +1120,16 @@ func TestMetaCRReader_EscapeSequencePreserved(t *testing.T) {
 	}
 
 	// ESC + non-CR should pass through: ESC, then '[', then 'A'
-	if string(result) != input {
-		t.Errorf("metaCRReader escape seq = %q, want %q", string(result), input)
+	if string(result) != testInput {
+		t.Errorf("metaCRReader escape seq = %q, want %q", string(result),testInput)
 	}
 }
 
 // TestMetaCRReader_MultipleAltEnters tests multiple Alt+Enter sequences.
 func TestMetaCRReader_MultipleAltEnters(t *testing.T) {
 	// "a" + ESC CR + "b" + ESC CR + "c" + CR
-	input := "a\x1b\x0db\x1b\x0dc\r"
-	m := &metaCRReader{rc: newMockStdin(input)}
+	testInput := "a\x1b\x0db\x1b\x0dc\r"
+	m := input.NewMetaCRReader(newMockStdin(testInput))
 
 	var result []byte
 	buf := make([]byte, 1)
@@ -1153,8 +1151,8 @@ func TestMetaCRReader_MultipleAltEnters(t *testing.T) {
 
 // TestMetaCRReader_EscAtEOF tests that ESC at the end of input passes through.
 func TestMetaCRReader_EscAtEOF(t *testing.T) {
-	input := "hello\x1b"
-	m := &metaCRReader{rc: newMockStdin(input)}
+	testInput := "hello\x1b"
+	m := input.NewMetaCRReader(newMockStdin(testInput))
 
 	var result []byte
 	buf := make([]byte, 1)
@@ -1169,15 +1167,15 @@ func TestMetaCRReader_EscAtEOF(t *testing.T) {
 	}
 
 	// ESC at EOF should be passed through
-	if string(result) != input {
-		t.Errorf("metaCRReader ESC at EOF = %q, want %q", string(result), input)
+	if string(result) != testInput {
+		t.Errorf("metaCRReader ESC at EOF = %q, want %q", string(result),testInput)
 	}
 }
 
 // TestMetaCRReader_Close tests that Close delegates to underlying reader.
 func TestMetaCRReader_Close(t *testing.T) {
 	mock := newMockStdin("test")
-	m := &metaCRReader{rc: mock}
+	m := input.NewMetaCRReader(mock)
 
 	err := m.Close()
 	if err != nil {

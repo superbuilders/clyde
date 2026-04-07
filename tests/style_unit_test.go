@@ -1,9 +1,11 @@
-package style
+package main
 
 import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/this-is-alpha-iota/clyde/style"
 )
 
 // resetTestEnv ensures a clean environment and cache for each test.
@@ -11,21 +13,21 @@ func resetTestEnv(t *testing.T) {
 	t.Helper()
 	os.Unsetenv("NO_COLOR")
 	os.Unsetenv("TERM")
-	ResetColorCache()
+	style.ResetColorCache()
 }
 
 // setNoColor sets the NO_COLOR environment variable and resets cache.
 func setNoColor(t *testing.T, value string) {
 	t.Helper()
 	os.Setenv("NO_COLOR", value)
-	ResetColorCache()
+	style.ResetColorCache()
 }
 
 // setTermDumb sets TERM=dumb and resets cache.
 func setTermDumb(t *testing.T) {
 	t.Helper()
 	os.Setenv("TERM", "dumb")
-	ResetColorCache()
+	style.ResetColorCache()
 }
 
 // containsANSI returns true if the string contains any ANSI escape sequence.
@@ -39,7 +41,7 @@ func TestIsColorEnabled_Default(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	if !IsColorEnabled() {
+	if !style.IsColorEnabled() {
 		t.Error("Expected color to be enabled by default (no NO_COLOR, no TERM=dumb)")
 	}
 }
@@ -49,7 +51,7 @@ func TestIsColorEnabled_NoColor_Set(t *testing.T) {
 	defer resetTestEnv(t)
 
 	setNoColor(t, "1")
-	if IsColorEnabled() {
+	if style.IsColorEnabled() {
 		t.Error("Expected color to be disabled when NO_COLOR=1")
 	}
 }
@@ -60,7 +62,7 @@ func TestIsColorEnabled_NoColor_Empty(t *testing.T) {
 
 	// Per https://no-color.org/, presence of the variable (even empty) disables color
 	setNoColor(t, "")
-	if IsColorEnabled() {
+	if style.IsColorEnabled() {
 		t.Error("Expected color to be disabled when NO_COLOR is set to empty string")
 	}
 }
@@ -70,7 +72,7 @@ func TestIsColorEnabled_TermDumb(t *testing.T) {
 	defer resetTestEnv(t)
 
 	setTermDumb(t)
-	if IsColorEnabled() {
+	if style.IsColorEnabled() {
 		t.Error("Expected color to be disabled when TERM=dumb")
 	}
 }
@@ -80,9 +82,9 @@ func TestIsColorEnabled_TermOther(t *testing.T) {
 	defer resetTestEnv(t)
 
 	os.Setenv("TERM", "xterm-256color")
-	ResetColorCache()
+	style.ResetColorCache()
 
-	if !IsColorEnabled() {
+	if !style.IsColorEnabled() {
 		t.Error("Expected color to be enabled when TERM=xterm-256color")
 	}
 }
@@ -92,11 +94,11 @@ func TestIsColorEnabled_Cached(t *testing.T) {
 	defer resetTestEnv(t)
 
 	// First call caches the result
-	result1 := IsColorEnabled()
+	result1 := style.IsColorEnabled()
 
 	// Set NO_COLOR after cache — should NOT change the result (cached)
 	os.Setenv("NO_COLOR", "1")
-	result2 := IsColorEnabled()
+	result2 := style.IsColorEnabled()
 
 	if result1 != result2 {
 		t.Error("Expected cached result to be consistent, but it changed")
@@ -108,14 +110,14 @@ func TestResetColorCache(t *testing.T) {
 	defer resetTestEnv(t)
 
 	// Cache the "enabled" result
-	if !IsColorEnabled() {
+	if !style.IsColorEnabled() {
 		t.Skip("Color is unexpectedly disabled in test environment")
 	}
 
-	// Now set NO_COLOR and reset cache
+	// Now set NO_COLOR and style.Reset cache
 	setNoColor(t, "1")
 
-	if IsColorEnabled() {
+	if style.IsColorEnabled() {
 		t.Error("After ResetColorCache + NO_COLOR, expected color to be disabled")
 	}
 }
@@ -126,7 +128,7 @@ func TestUserLabel_WithColor(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	result := UserLabel("You:")
+	result := style.UserLabel("You:")
 	if !containsANSI(result) {
 		t.Error("UserLabel should contain ANSI codes when color is enabled")
 	}
@@ -137,9 +139,9 @@ func TestUserLabel_WithColor(t *testing.T) {
 	if !strings.Contains(result, "1;36m") {
 		t.Errorf("UserLabel should use bold cyan (1;36m), got: %q", result)
 	}
-	// Should end with reset
-	if !strings.HasSuffix(result, reset) {
-		t.Errorf("UserLabel should end with reset sequence, got: %q", result)
+	// Should end with style.Reset
+	if !strings.HasSuffix(result, style.Reset) {
+		t.Errorf("UserLabel should end with style.Reset sequence, got: %q", result)
 	}
 }
 
@@ -147,7 +149,7 @@ func TestAgentLabel_WithColor(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	result := AgentLabel("Claude:")
+	result := style.AgentLabel("Claude:")
 	if !containsANSI(result) {
 		t.Error("AgentLabel should contain ANSI codes when color is enabled")
 	}
@@ -164,7 +166,7 @@ func TestToolLabel_WithColor(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	result := ToolLabel("→ Reading file:")
+	result := style.ToolLabel("→ Reading file:")
 	if !containsANSI(result) {
 		t.Error("ToolLabel should contain ANSI codes when color is enabled")
 	}
@@ -181,7 +183,7 @@ func TestDim_WithColor(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	result := Dim("some secondary text")
+	result := style.Dim("some secondary text")
 	if !containsANSI(result) {
 		t.Error("Dim should contain ANSI codes when color is enabled")
 	}
@@ -198,7 +200,7 @@ func TestThinkingStyle_WithColor(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	result := ThinkingStyle("I need to think about this...")
+	result := style.ThinkingStyle("I need to think about this...")
 	if !containsANSI(result) {
 		t.Error("ThinkingStyle should contain ANSI codes when color is enabled")
 	}
@@ -215,7 +217,7 @@ func TestDebugStyle_WithColor(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	result := DebugStyle("🔍 Tokens: input=500")
+	result := style.DebugStyle("🔍 Tokens: input=500")
 	if !containsANSI(result) {
 		t.Error("DebugStyle should contain ANSI codes when color is enabled")
 	}
@@ -235,7 +237,7 @@ func TestUserLabel_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := UserLabel("You:")
+	result := style.UserLabel("You:")
 	if containsANSI(result) {
 		t.Errorf("UserLabel should not contain ANSI codes when NO_COLOR is set, got: %q", result)
 	}
@@ -249,7 +251,7 @@ func TestAgentLabel_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := AgentLabel("Claude:")
+	result := style.AgentLabel("Claude:")
 	if containsANSI(result) {
 		t.Errorf("AgentLabel should not contain ANSI codes when NO_COLOR is set, got: %q", result)
 	}
@@ -263,7 +265,7 @@ func TestToolLabel_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := ToolLabel("→ Reading file:")
+	result := style.ToolLabel("→ Reading file:")
 	if containsANSI(result) {
 		t.Errorf("ToolLabel should not contain ANSI codes when NO_COLOR is set, got: %q", result)
 	}
@@ -277,7 +279,7 @@ func TestDim_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := Dim("some text")
+	result := style.Dim("some text")
 	if containsANSI(result) {
 		t.Errorf("Dim should not contain ANSI codes when NO_COLOR is set, got: %q", result)
 	}
@@ -291,7 +293,7 @@ func TestThinkingStyle_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := ThinkingStyle("thinking...")
+	result := style.ThinkingStyle("thinking...")
 	if containsANSI(result) {
 		t.Errorf("ThinkingStyle should not contain ANSI codes when NO_COLOR is set, got: %q", result)
 	}
@@ -305,7 +307,7 @@ func TestDebugStyle_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := DebugStyle("debug info")
+	result := style.DebugStyle("debug info")
 	if containsANSI(result) {
 		t.Errorf("DebugStyle should not contain ANSI codes when NO_COLOR is set, got: %q", result)
 	}
@@ -326,12 +328,12 @@ func TestAllStyles_TermDumb(t *testing.T) {
 		fn     func(string) string
 		input  string
 	}{
-		{"UserLabel", UserLabel, "You:"},
-		{"AgentLabel", AgentLabel, "Claude:"},
-		{"ToolLabel", ToolLabel, "→ Tool:"},
-		{"Dim", Dim, "dimmed text"},
-		{"ThinkingStyle", ThinkingStyle, "thinking"},
-		{"DebugStyle", DebugStyle, "debug"},
+		{"UserLabel", style.UserLabel, "You:"},
+		{"AgentLabel", style.AgentLabel, "Claude:"},
+		{"ToolLabel", style.ToolLabel, "→ Tool:"},
+		{"Dim", style.Dim, "dimmed text"},
+		{"ThinkingStyle", style.ThinkingStyle, "thinking"},
+		{"DebugStyle", style.DebugStyle, "debug"},
 	}
 
 	for _, tt := range tests {
@@ -353,7 +355,7 @@ func TestFormatUserPrompt_WithColor(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	result := FormatUserPrompt()
+	result := style.FormatUserPrompt()
 	if !containsANSI(result) {
 		t.Error("FormatUserPrompt should contain ANSI codes when color is enabled")
 	}
@@ -367,7 +369,7 @@ func TestFormatUserPrompt_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := FormatUserPrompt()
+	result := style.FormatUserPrompt()
 	if containsANSI(result) {
 		t.Errorf("FormatUserPrompt should not contain ANSI codes with NO_COLOR, got: %q", result)
 	}
@@ -380,7 +382,7 @@ func TestFormatAgentPrefix_WithColor(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	result := FormatAgentPrefix()
+	result := style.FormatAgentPrefix()
 	if !containsANSI(result) {
 		t.Error("FormatAgentPrefix should contain ANSI codes when color is enabled")
 	}
@@ -394,7 +396,7 @@ func TestFormatAgentPrefix_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := FormatAgentPrefix()
+	result := style.FormatAgentPrefix()
 	if containsANSI(result) {
 		t.Errorf("FormatAgentPrefix should not contain ANSI codes with NO_COLOR, got: %q", result)
 	}
@@ -441,18 +443,18 @@ func TestFormatToolProgress_WithColor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := FormatToolProgress(tt.message)
+			result := style.FormatToolProgress(tt.message)
 
 			if !containsANSI(result) {
 				t.Error("FormatToolProgress should contain ANSI codes when color is enabled")
 			}
 
 			// The action part should be styled (bold yellow)
-			styledAction := ToolLabel(tt.wantAction)
+			styledAction := style.ToolLabel(tt.wantAction)
 			if tt.wantDetail != "" {
 				expected := styledAction + tt.wantDetail
 				if result != expected {
-					t.Errorf("FormatToolProgress(%q) = %q, want %q", tt.message, result, expected)
+					t.Errorf("style.FormatToolProgress(%q) = %q, want %q", tt.message, result, expected)
 				}
 			}
 
@@ -469,7 +471,7 @@ func TestFormatToolProgress_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := FormatToolProgress("→ Reading file: main.go")
+	result := style.FormatToolProgress("→ Reading file: main.go")
 	if containsANSI(result) {
 		t.Errorf("FormatToolProgress should not contain ANSI codes with NO_COLOR, got: %q", result)
 	}
@@ -482,7 +484,7 @@ func TestFormatThinking_WithColor(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	result := FormatThinking("considering the options...")
+	result := style.FormatThinking("considering the options...")
 	if !containsANSI(result) {
 		t.Error("FormatThinking should contain ANSI codes when color is enabled")
 	}
@@ -499,7 +501,7 @@ func TestFormatThinking_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := FormatThinking("considering the options...")
+	result := style.FormatThinking("considering the options...")
 	if containsANSI(result) {
 		t.Errorf("FormatThinking should not contain ANSI codes with NO_COLOR, got: %q", result)
 	}
@@ -512,7 +514,7 @@ func TestFormatDebug_WithColor(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	result := FormatDebug("🔍 Tokens: input=500 output=200")
+	result := style.FormatDebug("🔍 Tokens: input=500 output=200")
 	if !containsANSI(result) {
 		t.Error("FormatDebug should contain ANSI codes when color is enabled")
 	}
@@ -526,7 +528,7 @@ func TestFormatDebug_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := FormatDebug("debug info")
+	result := style.FormatDebug("debug info")
 	if containsANSI(result) {
 		t.Errorf("FormatDebug should not contain ANSI codes with NO_COLOR, got: %q", result)
 	}
@@ -539,7 +541,7 @@ func TestFormatDim_WithColor(t *testing.T) {
 	resetTestEnv(t)
 	defer resetTestEnv(t)
 
-	result := FormatDim("secondary content")
+	result := style.FormatDim("secondary content")
 	if !containsANSI(result) {
 		t.Error("FormatDim should contain ANSI codes when color is enabled")
 	}
@@ -550,7 +552,7 @@ func TestFormatDim_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := FormatDim("secondary content")
+	result := style.FormatDim("secondary content")
 	if containsANSI(result) {
 		t.Errorf("FormatDim should not contain ANSI codes with NO_COLOR, got: %q", result)
 	}
@@ -566,16 +568,16 @@ func TestEmptyString(t *testing.T) {
 	defer resetTestEnv(t)
 
 	// With color enabled, empty string wrapped should still have ANSI codes
-	result := UserLabel("")
+	result := style.UserLabel("")
 	if !containsANSI(result) {
-		t.Error("UserLabel('') should still contain ANSI codes when color is enabled")
+		t.Error("style.UserLabel('') should still contain ANSI codes when color is enabled")
 	}
 
 	// The text between the codes should be empty
 	// Format: \033[1;36m\033[0m
 	expected := "\033[1;36m\033[0m"
 	if result != expected {
-		t.Errorf("UserLabel('') = %q, want %q", result, expected)
+		t.Errorf("style.UserLabel('') = %q, want %q", result, expected)
 	}
 }
 
@@ -584,9 +586,9 @@ func TestEmptyString_NoColor(t *testing.T) {
 	defer resetTestEnv(t)
 	setNoColor(t, "1")
 
-	result := UserLabel("")
+	result := style.UserLabel("")
 	if result != "" {
-		t.Errorf("UserLabel('') with NO_COLOR should return empty string, got: %q", result)
+		t.Errorf("style.UserLabel('') with NO_COLOR should return empty string, got: %q", result)
 	}
 }
 
@@ -595,7 +597,7 @@ func TestMultilineText(t *testing.T) {
 	defer resetTestEnv(t)
 
 	multiline := "line 1\nline 2\nline 3"
-	result := Dim(multiline)
+	result := style.Dim(multiline)
 	if !containsANSI(result) {
 		t.Error("Dim should contain ANSI codes for multiline text")
 	}
@@ -610,7 +612,7 @@ func TestTextWithExistingANSI(t *testing.T) {
 
 	// Text that already has ANSI codes should still be wrapped
 	existing := "\033[31mred text\033[0m"
-	result := UserLabel(existing)
+	result := style.UserLabel(existing)
 	if !strings.Contains(result, existing) {
 		t.Error("UserLabel should preserve text that already contains ANSI codes")
 	}
@@ -634,12 +636,12 @@ func TestFormatToolProgress_EdgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Should not panic
-			result := FormatToolProgress(tt.message)
+			result := style.FormatToolProgress(tt.message)
 			// Should contain the original text somewhere
 			if !strings.Contains(result, tt.message) && !containsANSI(result) {
 				// If no ANSI, should be exact match
 				if result != tt.message {
-					t.Errorf("FormatToolProgress(%q) = %q, expected it to contain the original text", tt.message, result)
+					t.Errorf("style.FormatToolProgress(%q) = %q, expected it to contain the original text", tt.message, result)
 				}
 			}
 		})
@@ -658,12 +660,12 @@ func TestANSICodeValues(t *testing.T) {
 		fn       func(string) string
 		wantCode string
 	}{
-		{"UserLabel", UserLabel, "\033[1;36m"},         // bold cyan
-		{"AgentLabel", AgentLabel, "\033[1;32m"},       // bold green
-		{"ToolLabel", ToolLabel, "\033[1;33m"},         // bold yellow
-		{"Dim", Dim, "\033[2m"},                        // faint
-		{"ThinkingStyle", ThinkingStyle, "\033[2;35m"}, // dim magenta
-		{"DebugStyle", DebugStyle, "\033[31m"},         // red
+		{"UserLabel", style.UserLabel, "\033[1;36m"},         // bold cyan
+		{"AgentLabel", style.AgentLabel, "\033[1;32m"},       // bold green
+		{"ToolLabel", style.ToolLabel, "\033[1;33m"},         // bold yellow
+		{"Dim", style.Dim, "\033[2m"},                        // faint
+		{"ThinkingStyle", style.ThinkingStyle, "\033[2;35m"}, // dim magenta
+		{"DebugStyle", style.DebugStyle, "\033[31m"},         // red
 	}
 
 	for _, tt := range tests {
@@ -673,7 +675,7 @@ func TestANSICodeValues(t *testing.T) {
 				t.Errorf("%s should start with %q, got: %q", tt.name, tt.wantCode, result)
 			}
 			if !strings.HasSuffix(result, "\033[0m") {
-				t.Errorf("%s should end with reset (\\033[0m), got: %q", tt.name, result)
+				t.Errorf("%s should end with style.Reset (\\033[0m), got: %q", tt.name, result)
 			}
 		})
 	}
@@ -690,18 +692,18 @@ func TestBodyTextIsDefaultForeground(t *testing.T) {
 	//
 	// FormatUserPrompt styles only the "You: " label.
 	// The user's actual input text should be appended WITHOUT styling.
-	prompt := FormatUserPrompt()
+	prompt := style.FormatUserPrompt()
 	userInput := "What is 2+2?"
 	fullLine := prompt + userInput
 
 	// The user input should NOT be wrapped in any ANSI codes
-	// (it comes after the reset of the label)
+	// (it comes after the style.Reset of the label)
 	if !strings.HasSuffix(fullLine, userInput) {
 		t.Error("User input text should be plain (default foreground), appended after styled label")
 	}
 
 	// Same for agent response
-	prefix := FormatAgentPrefix()
+	prefix := style.FormatAgentPrefix()
 	responseText := "The answer is 4."
 	fullResponse := prefix + responseText
 

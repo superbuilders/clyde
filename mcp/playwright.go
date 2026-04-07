@@ -101,6 +101,12 @@ func (s *PlaywrightServer) CallTool(ctx context.Context, name string, args map[s
 	return s.client.CallTool(ctx, name, args)
 }
 
+// IsRunning returns true if the server has been started and not yet closed.
+// Exported for testing.
+func (s *PlaywrightServer) IsRunning() bool {
+	return s.client != nil && !s.closed
+}
+
 // Close kills the Playwright subprocess and releases resources.
 // It is safe to call multiple times.
 func (s *PlaywrightServer) Close() error {

@@ -1,4 +1,4 @@
-package mcp
+package main
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/this-is-alpha-iota/clyde/mcp"
 )
 
 func TestTwoConcurrentPlaywrightServers(t *testing.T) {
@@ -22,7 +24,7 @@ func TestTwoConcurrentPlaywrightServers(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			server := NewPlaywrightServer("--headless")
+			server := mcp.NewPlaywrightServer("--headless")
 			defer server.Close()
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

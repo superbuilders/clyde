@@ -1,21 +1,23 @@
-package spinner
+package main
 
 import (
 	"bytes"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/this-is-alpha-iota/clyde/spinner"
 )
 
 // TestFrameSequence verifies the braille dot frame sequence is correct.
 func TestFrameSequence(t *testing.T) {
 	expected := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-	if len(Frames) != len(expected) {
-		t.Fatalf("Expected %d frames, got %d", len(expected), len(Frames))
+	if len(spinner.Frames) != len(expected) {
+		t.Fatalf("Expected %d frames, got %d", len(expected), len(spinner.Frames))
 	}
 
-	for i, frame := range Frames {
+	for i, frame := range spinner.Frames {
 		if frame != expected[i] {
 			t.Errorf("Frame[%d] = %q, want %q", i, frame, expected[i])
 		}
@@ -24,30 +26,30 @@ func TestFrameSequence(t *testing.T) {
 
 // TestFrameCount verifies there are exactly 10 braille dot frames.
 func TestFrameCount(t *testing.T) {
-	if len(Frames) != 10 {
-		t.Errorf("Expected 10 frames, got %d", len(Frames))
+	if len(spinner.Frames) != 10 {
+		t.Errorf("Expected 10 frames, got %d", len(spinner.Frames))
 	}
 }
 
 // TestFrameDelay verifies the frame delay is approximately 1/60s (~16.7ms).
 func TestFrameDelay(t *testing.T) {
 	expected := time.Second / 60
-	if FrameDelay != expected {
-		t.Errorf("FrameDelay = %v, want %v", FrameDelay, expected)
+	if spinner.FrameDelay != expected {
+		t.Errorf("spinner.FrameDelay = %v, want %v", spinner.FrameDelay, expected)
 	}
 }
 
 // TestFramesPerSymbol verifies 2 frames per symbol for ~30 symbols/second.
 func TestFramesPerSymbol(t *testing.T) {
-	if FramesPerSymbol != 2 {
-		t.Errorf("FramesPerSymbol = %d, want 2", FramesPerSymbol)
+	if spinner.FramesPerSymbol != 2 {
+		t.Errorf("spinner.FramesPerSymbol = %d, want 2", spinner.FramesPerSymbol)
 	}
 }
 
 // TestEffectiveRate verifies the effective symbol rate is ~30/second.
 func TestEffectiveRate(t *testing.T) {
 	// At 60fps with 2 frames per symbol: 60/2 = 30 symbols/second
-	effectiveRate := float64(time.Second) / float64(FrameDelay) / float64(FramesPerSymbol)
+	effectiveRate := float64(time.Second) / float64(spinner.FrameDelay) / float64(spinner.FramesPerSymbol)
 	if effectiveRate < 29 || effectiveRate > 31 {
 		t.Errorf("Effective symbol rate = %.1f/s, want ~30/s", effectiveRate)
 	}
@@ -55,9 +57,9 @@ func TestEffectiveRate(t *testing.T) {
 
 // TestNewSpinner verifies a new spinner is created in inactive state.
 func TestNewSpinner(t *testing.T) {
-	s := New()
+	s := spinner.New()
 	if s == nil {
-		t.Fatal("New() returned nil")
+		t.Fatal("spinner.New() returned nil")
 	}
 	if s.IsActive() {
 		t.Error("New spinner should not be active")
@@ -70,11 +72,11 @@ func TestNewSpinner(t *testing.T) {
 // TestNewWithWriter verifies a spinner can be created with a custom writer.
 func TestNewWithWriter(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 	if s == nil {
-		t.Fatal("NewWithWriter() returned nil")
+		t.Fatal("spinner.NewWithWriter() returned nil")
 	}
-	if s.writer != &buf {
+	if s.GetWriter() != &buf {
 		t.Error("Writer was not set correctly")
 	}
 }
@@ -82,7 +84,7 @@ func TestNewWithWriter(t *testing.T) {
 // TestStartStop verifies the spinner lifecycle: start → active → stop → inactive.
 func TestStartStop(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 
 	// Start the spinner
 	s.Start("Testing...")
@@ -120,7 +122,7 @@ func TestStartStop(t *testing.T) {
 // updates the message without restarting.
 func TestStartUpdatesMessage(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 
 	s.Start("First message")
 	time.Sleep(50 * time.Millisecond)
@@ -148,7 +150,7 @@ func TestStartUpdatesMessage(t *testing.T) {
 // TestStopWhenNotActive verifies that calling Stop when not active is a no-op.
 func TestStopWhenNotActive(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 
 	// Should not panic or block
 	s.Stop()
@@ -164,7 +166,7 @@ func TestStopWhenNotActive(t *testing.T) {
 // TestDoubleStop verifies that calling Stop twice does not panic.
 func TestDoubleStop(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 
 	s.Start("Test")
 	time.Sleep(50 * time.Millisecond)
@@ -177,7 +179,7 @@ func TestDoubleStop(t *testing.T) {
 // dot characters from the frame sequence.
 func TestOutputContainsBrailleFrames(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 
 	s.Start("Working")
 	// Let it run for enough time to produce several frames
@@ -188,7 +190,7 @@ func TestOutputContainsBrailleFrames(t *testing.T) {
 
 	// At least one braille frame should appear in the output
 	foundFrame := false
-	for _, frame := range Frames {
+	for _, frame := range spinner.Frames {
 		if strings.Contains(output, frame) {
 			foundFrame = true
 			break
@@ -204,7 +206,7 @@ func TestOutputContainsBrailleFrames(t *testing.T) {
 // TestOutputContainsMessage verifies that the output includes the operation message.
 func TestOutputContainsMessage(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 
 	msg := "Patching file: agent.go"
 	s.Start(msg)
@@ -221,9 +223,9 @@ func TestOutputContainsMessage(t *testing.T) {
 // TestRenderFrameFormat verifies the format of a single rendered frame.
 func TestRenderFrameFormat(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 
-	s.renderFrame("⠹", "Testing operation")
+	s.RenderFrame("⠹", "Testing operation")
 
 	output := buf.String()
 	expected := "\r\033[K⠹ Testing operation"
@@ -235,9 +237,9 @@ func TestRenderFrameFormat(t *testing.T) {
 // TestClearLine verifies the clear line escape sequence.
 func TestClearLine(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 
-	s.clearLine()
+	s.ClearLine()
 
 	output := buf.String()
 	expected := "\r\033[K"
@@ -249,7 +251,7 @@ func TestClearLine(t *testing.T) {
 // TestRestartAfterStop verifies the spinner can be restarted after stopping.
 func TestRestartAfterStop(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 
 	// First run
 	s.Start("Run 1")
@@ -386,9 +388,9 @@ func TestFormatSpinnerMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := FormatSpinnerMessage(tt.input)
+			result := spinner.FormatSpinnerMessage(tt.input)
 			if result != tt.expected {
-				t.Errorf("FormatSpinnerMessage(%q) = %q, want %q",
+				t.Errorf("spinner.FormatSpinnerMessage(%q) = %q, want %q",
 					tt.input, result, tt.expected)
 			}
 		})
@@ -398,7 +400,7 @@ func TestFormatSpinnerMessage(t *testing.T) {
 // TestConcurrentStartStop verifies thread safety of Start/Stop operations.
 func TestConcurrentStartStop(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 
 	// Rapidly start and stop in parallel - should not panic or deadlock
 	done := make(chan struct{})
@@ -422,7 +424,7 @@ func TestConcurrentStartStop(t *testing.T) {
 // TestSymbolCycling verifies that the spinner cycles through all symbols.
 func TestSymbolCycling(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewWithWriter(&buf)
+	s := spinner.NewWithWriter(&buf)
 
 	// Run long enough to cycle through all 10 symbols
 	// At 60fps with 2 frames/symbol: 10 symbols = 20 frames = 20/60s ≈ 333ms
@@ -434,7 +436,7 @@ func TestSymbolCycling(t *testing.T) {
 
 	// Count unique frames found in the output
 	foundFrames := make(map[string]bool)
-	for _, frame := range Frames {
+	for _, frame := range spinner.Frames {
 		if strings.Contains(output, frame) {
 			foundFrames[frame] = true
 		}
@@ -445,18 +447,4 @@ func TestSymbolCycling(t *testing.T) {
 		t.Errorf("Expected to find at least 3 unique braille frames, found %d: %v",
 			len(foundFrames), foundFrames)
 	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -27,6 +27,12 @@ import (
 const (
 	esc   = "\033["
 	reset = esc + "0m"
+)
+
+// Reset is the ANSI reset sequence, exported for testing.
+const Reset = "\033[0m"
+
+const (
 
 	bold = "1"
 	dim  = "2"

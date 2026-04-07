@@ -94,7 +94,7 @@ func (s *Spinner) Stop() {
 	<-doneCh
 
 	// Clear the spinner line
-	s.clearLine()
+	s.ClearLine()
 }
 
 // IsActive returns whether the spinner is currently running.
@@ -139,22 +139,27 @@ func (s *Spinner) run() {
 			s.mu.Unlock()
 
 			// Render: \r clears the line, then write spinner frame + message
-			s.renderFrame(Frames[symbolIdx], msg)
+			s.RenderFrame(Frames[symbolIdx], msg)
 			frameCount++
 		}
 	}
 }
 
-// renderFrame writes a single spinner frame to the writer.
-func (s *Spinner) renderFrame(symbol, message string) {
+// RenderFrame writes a single spinner frame to the writer.
+func (s *Spinner) RenderFrame(symbol, message string) {
 	// \r returns cursor to start of line
 	// \033[K clears from cursor to end of line (prevents leftover chars)
 	fmt.Fprintf(s.writer, "\r\033[K%s %s", symbol, message)
 }
 
-// clearLine clears the spinner line.
-func (s *Spinner) clearLine() {
+// ClearLine clears the spinner line.
+func (s *Spinner) ClearLine() {
 	fmt.Fprintf(s.writer, "\r\033[K")
+}
+
+// GetWriter returns the spinner's output writer. Exported for testing.
+func (s *Spinner) GetWriter() io.Writer {
+	return s.writer
 }
 
 // FormatSpinnerMessage extracts a short verb-only label from a tool progress

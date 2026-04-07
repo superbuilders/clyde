@@ -33,16 +33,16 @@ type GitInfo struct {
 // GetGitInfo queries git for the current branch and dirty state.
 // Returns GitInfo with IsRepo=false if not in a git repository.
 func GetGitInfo() GitInfo {
-	return getGitInfoWith(runGitCommand)
+	return GetGitInfoWith(runGitCommand)
 }
 
-// gitRunner is a function that executes a git command and returns its output.
+// GitRunner is a function that executes a git command and returns its output.
 // It is used for dependency injection in tests.
-type gitRunner func(args ...string) (string, error)
+type GitRunner func(args ...string) (string, error)
 
-// getGitInfoWith queries git state using the provided runner function.
+// GetGitInfoWith queries git state using the provided runner function.
 // This allows testing without actual git commands.
-func getGitInfoWith(run gitRunner) GitInfo {
+func GetGitInfoWith(run GitRunner) GitInfo {
 	// Get branch name
 	branch, err := run("rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {

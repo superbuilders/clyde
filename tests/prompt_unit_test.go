@@ -1,4 +1,4 @@
-package prompt
+package main
 
 import (
 	"fmt"
@@ -6,13 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/this-is-alpha-iota/clyde/prompt"
 	"github.com/this-is-alpha-iota/clyde/style"
 )
 
 // TestGetGitInfo tests the live git info retrieval.
 // This test runs in the actual clyde repo, so we know it's a git repo.
 func TestGetGitInfo(t *testing.T) {
-	info := GetGitInfo()
+	info := prompt.GetGitInfo()
 
 	if !info.IsRepo {
 		t.Fatal("Expected IsRepo=true when running inside the clyde git repo")
@@ -39,7 +40,7 @@ func TestGetGitInfoWith_CleanRepo(t *testing.T) {
 		return "", fmt.Errorf("unexpected git command: %v", args)
 	}
 
-	info := getGitInfoWith(runner)
+	info := prompt.GetGitInfoWith(runner)
 
 	if !info.IsRepo {
 		t.Error("Expected IsRepo=true")
@@ -66,7 +67,7 @@ func TestGetGitInfoWith_DirtyRepo(t *testing.T) {
 		return "", fmt.Errorf("unexpected git command: %v", args)
 	}
 
-	info := getGitInfoWith(runner)
+	info := prompt.GetGitInfoWith(runner)
 
 	if !info.IsRepo {
 		t.Error("Expected IsRepo=true")
@@ -96,7 +97,7 @@ func TestGetGitInfoWith_DetachedHead(t *testing.T) {
 		return "", fmt.Errorf("unexpected git command: %v", args)
 	}
 
-	info := getGitInfoWith(runner)
+	info := prompt.GetGitInfoWith(runner)
 
 	if !info.IsRepo {
 		t.Error("Expected IsRepo=true")
@@ -115,7 +116,7 @@ func TestGetGitInfoWith_NotAGitRepo(t *testing.T) {
 		return "", fmt.Errorf("fatal: not a git repository")
 	}
 
-	info := getGitInfoWith(runner)
+	info := prompt.GetGitInfoWith(runner)
 
 	if info.IsRepo {
 		t.Error("Expected IsRepo=false when not in a git repo")
@@ -142,7 +143,7 @@ func TestGetGitInfoWith_StatusFails(t *testing.T) {
 		return "", fmt.Errorf("unexpected git command: %v", args)
 	}
 
-	info := getGitInfoWith(runner)
+	info := prompt.GetGitInfoWith(runner)
 
 	if !info.IsRepo {
 		t.Error("Expected IsRepo=true (branch lookup succeeded)")
@@ -167,66 +168,66 @@ func TestFormatPrompt(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		git            GitInfo
+		git            prompt.GitInfo
 		contextPercent int
 		wantContains   []string
 		wantAbsent     []string
 	}{
 		{
 			name:           "clean repo with context",
-			git:            GitInfo{IsRepo: true, Branch: "main", Dirty: false},
+			git:            prompt.GitInfo{IsRepo: true, Branch: "main", Dirty: false},
 			contextPercent: 12,
 			wantContains:   []string{"main", "12%", "You: "},
 			wantAbsent:     []string{"*"},
 		},
 		{
 			name:           "dirty repo with context",
-			git:            GitInfo{IsRepo: true, Branch: "main", Dirty: true},
+			git:            prompt.GitInfo{IsRepo: true, Branch: "main", Dirty: true},
 			contextPercent: 45,
 			wantContains:   []string{"main*", "45%", "You: "},
 		},
 		{
 			name:           "detached head",
-			git:            GitInfo{IsRepo: true, Branch: "a1b2c3d", Dirty: false},
+			git:            prompt.GitInfo{IsRepo: true, Branch: "a1b2c3d", Dirty: false},
 			contextPercent: 5,
 			wantContains:   []string{"a1b2c3d", "5%", "You: "},
 		},
 		{
 			name:           "not a git repo with context",
-			git:            GitInfo{IsRepo: false},
+			git:            prompt.GitInfo{IsRepo: false},
 			contextPercent: 30,
 			wantContains:   []string{"30%", "You: "},
 			wantAbsent:     []string{"main"},
 		},
 		{
 			name:           "no context yet (before first API call)",
-			git:            GitInfo{IsRepo: true, Branch: "main", Dirty: false},
+			git:            prompt.GitInfo{IsRepo: true, Branch: "main", Dirty: false},
 			contextPercent: -1,
 			wantContains:   []string{"main", "You: "},
 			wantAbsent:     []string{"%"},
 		},
 		{
 			name:           "not a git repo and no context",
-			git:            GitInfo{IsRepo: false},
+			git:            prompt.GitInfo{IsRepo: false},
 			contextPercent: -1,
 			wantContains:   []string{"You: "},
 			wantAbsent:     []string{"%", "main"},
 		},
 		{
 			name:           "0% context",
-			git:            GitInfo{IsRepo: true, Branch: "develop", Dirty: false},
+			git:            prompt.GitInfo{IsRepo: true, Branch: "develop", Dirty: false},
 			contextPercent: 0,
 			wantContains:   []string{"develop", "0%", "You: "},
 		},
 		{
 			name:           "99% context",
-			git:            GitInfo{IsRepo: true, Branch: "main", Dirty: true},
+			git:            prompt.GitInfo{IsRepo: true, Branch: "main", Dirty: true},
 			contextPercent: 99,
 			wantContains:   []string{"main*", "99%", "You: "},
 		},
 		{
 			name:           "feature branch with slash",
-			git:            GitInfo{IsRepo: true, Branch: "feature/tui-4", Dirty: true},
+			git:            prompt.GitInfo{IsRepo: true, Branch: "feature/tui-4", Dirty: true},
 			contextPercent: 50,
 			wantContains:   []string{"feature/tui-4*", "50%", "You: "},
 		},
@@ -234,20 +235,20 @@ func TestFormatPrompt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := FormatPrompt(tt.git, tt.contextPercent)
+			result := prompt.FormatPrompt(tt.git, tt.contextPercent)
 
 			// Strip ANSI codes for content checking
 			stripped := stripANSI(result)
 
 			for _, want := range tt.wantContains {
 				if !strings.Contains(stripped, want) {
-					t.Errorf("FormatPrompt() stripped = %q, want to contain %q", stripped, want)
+					t.Errorf("prompt.FormatPrompt() stripped = %q, want to contain %q", stripped, want)
 				}
 			}
 
 			for _, absent := range tt.wantAbsent {
 				if strings.Contains(stripped, absent) {
-					t.Errorf("FormatPrompt() stripped = %q, should NOT contain %q", stripped, absent)
+					t.Errorf("prompt.FormatPrompt() stripped = %q, should NOT contain %q", stripped, absent)
 				}
 			}
 		})
@@ -263,14 +264,14 @@ func TestFormatPrompt_NoColor(t *testing.T) {
 		style.ResetColorCache()
 	})
 
-	result := FormatPrompt(
-		GitInfo{IsRepo: true, Branch: "main", Dirty: true},
+	result := prompt.FormatPrompt(
+		prompt.GitInfo{IsRepo: true, Branch: "main", Dirty: true},
 		25,
 	)
 
 	// No ANSI codes should be present
 	if strings.Contains(result, "\033[") {
-		t.Errorf("FormatPrompt() with NO_COLOR should not contain ANSI codes, got %q", result)
+		t.Errorf("prompt.FormatPrompt() with NO_COLOR should not contain ANSI codes, got %q", result)
 	}
 
 	// Content should still be correct
@@ -294,8 +295,8 @@ func TestFormatPrompt_Ordering(t *testing.T) {
 		style.ResetColorCache()
 	})
 
-	result := FormatPrompt(
-		GitInfo{IsRepo: true, Branch: "main", Dirty: true},
+	result := prompt.FormatPrompt(
+		prompt.GitInfo{IsRepo: true, Branch: "main", Dirty: true},
 		42,
 	)
 
@@ -337,9 +338,9 @@ func TestCalculateContextPercent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := CalculateContextPercent(tt.inputTokens, tt.windowSize)
+			got := prompt.CalculateContextPercent(tt.inputTokens, tt.windowSize)
 			if got != tt.want {
-				t.Errorf("CalculateContextPercent(%d, %d) = %d, want %d",
+				t.Errorf("prompt.CalculateContextPercent(%d, %d) = %d, want %d",
 					tt.inputTokens, tt.windowSize, got, tt.want)
 			}
 		})
@@ -355,7 +356,7 @@ func TestFormatPrompt_UserLabelStyled(t *testing.T) {
 		style.ResetColorCache()
 	})
 
-	result := FormatPrompt(GitInfo{IsRepo: false}, -1)
+	result := prompt.FormatPrompt(prompt.GitInfo{IsRepo: false}, -1)
 
 	// Should contain bold cyan ANSI code for "You: "
 	// Bold cyan = \033[1;36m
@@ -376,8 +377,8 @@ func TestFormatPrompt_GitInfoDimmed(t *testing.T) {
 		style.ResetColorCache()
 	})
 
-	result := FormatPrompt(
-		GitInfo{IsRepo: true, Branch: "main", Dirty: false},
+	result := prompt.FormatPrompt(
+		prompt.GitInfo{IsRepo: true, Branch: "main", Dirty: false},
 		-1,
 	)
 
