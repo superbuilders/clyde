@@ -168,7 +168,8 @@ func (s *Spinner) clearLine() {
 //
 // Example:
 //
-//	"→ Browsing: https://example.com/very/long/path?q=foo" → "Browsing..."
+//	"→ Browsing: https://example.com/very/long/path?q=foo" → "Reading Webpage..."
+//	"→ Browser: navigate https://example.com"             → "Browsing..."
 //	"→ Running bash: cd /tmp && find . -name '*.go'"       → "Running..."
 //	"→ Patching file: agent.go (+48 bytes)"                → "Patching..."
 //	"Thinking"                                             → "Thinking..."
@@ -206,7 +207,8 @@ func FormatSpinnerMessage(progressMsg string) string {
 // verb for the spinner. The spinner is an ephemeral preview — full details
 // appear in the permanent → scrollback line.
 var spinnerVerbs = map[string]string{
-	"Browsing":             "Browsing...",
+	"Browsing":             "Reading Webpage...",
+	"Browser":              "Browsing...",
 	"Running bash":         "Running...",
 	"Searching web":        "Searching...",
 	"Searching":            "Searching...",
