@@ -1,19 +1,19 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"fmt"
 )
 
 // ExecutorFunc is a function that executes a tool
-type ExecutorFunc func(input map[string]interface{}, apiClient *api.Client, conversationHistory []api.Message) (string, error)
+type ExecutorFunc func(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error)
 
 // DisplayFunc is a function that formats a display message for a tool
 type DisplayFunc func(input map[string]interface{}) string
 
 // Registration holds a tool registration
 type Registration struct {
-	Tool     api.Tool
+	Tool     providers.Tool
 	Execute  ExecutorFunc
 	Display  DisplayFunc
 }
@@ -22,7 +22,7 @@ type Registration struct {
 var Registry = make(map[string]*Registration)
 
 // Register registers a tool with its executor and display functions
-func Register(tool api.Tool, execute ExecutorFunc, display DisplayFunc) {
+func Register(tool providers.Tool, execute ExecutorFunc, display DisplayFunc) {
 	Registry[tool.Name] = &Registration{
 		Tool:    tool,
 		Execute: execute,
@@ -40,8 +40,8 @@ func GetTool(name string) (*Registration, error) {
 }
 
 // GetAllTools returns all registered tools
-func GetAllTools() []api.Tool {
-	tools := make([]api.Tool, 0, len(Registry))
+func GetAllTools() []providers.Tool {
+	tools := make([]providers.Tool, 0, len(Registry))
 	for _, reg := range Registry {
 		tools = append(tools, reg.Tool)
 	}

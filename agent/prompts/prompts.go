@@ -16,7 +16,7 @@ var SystemPrompt = loadSystemPrompt()
 
 func loadSystemPrompt() string {
 	// Try to load from file first (development mode)
-	if content, err := os.ReadFile("prompts/system.txt"); err == nil {
+	if content, err := os.ReadFile("agent/prompts/system.txt"); err == nil {
 		return string(content)
 	}
 	

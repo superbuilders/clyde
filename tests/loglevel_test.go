@@ -5,14 +5,14 @@ import (
 	"testing"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
-	"github.com/this-is-alpha-iota/clyde/prompts"
+	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 )
 
 // TestLogLevelDefault verifies that a new agent defaults to Normal log level
 func TestLogLevelDefault(t *testing.T) {
-	apiClient := api.NewClient("test-key", "https://api.example.com", "test-model", 4096)
+	apiClient := providers.NewClient("test-key", "https://api.example.com", "test-model", 4096)
 	a := agent.NewAgent(apiClient, prompts.SystemPrompt)
 
 	if a.LogLevel() != loglevel.Normal {
@@ -22,7 +22,7 @@ func TestLogLevelDefault(t *testing.T) {
 
 // TestLogLevelWithOption verifies WithLogLevel sets the level correctly
 func TestLogLevelWithOption(t *testing.T) {
-	apiClient := api.NewClient("test-key", "https://api.example.com", "test-model", 4096)
+	apiClient := providers.NewClient("test-key", "https://api.example.com", "test-model", 4096)
 
 	tests := []struct {
 		name  string
@@ -61,7 +61,7 @@ type capturedMessage struct {
 func TestLogLevelGating(t *testing.T) {
 	// This test verifies the callback signature and that WithLogLevel + WithProgressCallback
 	// can be composed correctly.
-	apiClient := api.NewClient("test-key", "https://api.example.com", "test-model", 4096)
+	apiClient := providers.NewClient("test-key", "https://api.example.com", "test-model", 4096)
 
 	var captured []capturedMessage
 
@@ -141,7 +141,7 @@ func TestLogLevelParseFlagsIntegration(t *testing.T) {
 			}
 
 			// Thread into agent and verify
-			apiClient := api.NewClient("test-key", "https://api.example.com", "test-model", 4096)
+			apiClient := providers.NewClient("test-key", "https://api.example.com", "test-model", 4096)
 			a := agent.NewAgent(apiClient, prompts.SystemPrompt,
 				agent.WithLogLevel(level))
 

@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
-	"github.com/this-is-alpha-iota/clyde/prompts"
+	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 )
 
 // TestCacheDisplaySuppressedAtNormal verifies that cache display messages are
@@ -48,7 +48,7 @@ func TestCacheDisplaySuppressedAtNormal(t *testing.T) {
 			}
 
 			// Verify agent options compile and apply cleanly
-			apiClient := api.NewClient("dummy-key", "http://localhost", "test-model", 100)
+			apiClient := providers.NewClient("dummy-key", "http://localhost", "test-model", 100)
 			a := agent.NewAgent(apiClient, "test prompt", agentOpts...)
 			if a.LogLevel() != level {
 				t.Errorf("Expected log level %s, got %s", level, a.LogLevel())
@@ -65,7 +65,7 @@ func TestCacheDisplayVerboseFormat(t *testing.T) {
 		t.Skip("TS_AGENT_API_KEY not set, skipping integration test")
 	}
 
-	apiClient := api.NewClient(
+	apiClient := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-sonnet-4-5-20250929",
@@ -132,7 +132,7 @@ func TestCacheDisplayDebugFormat(t *testing.T) {
 		t.Skip("TS_AGENT_API_KEY not set, skipping integration test")
 	}
 
-	apiClient := api.NewClient(
+	apiClient := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-sonnet-4-5-20250929",
@@ -195,7 +195,7 @@ func TestCacheDisplayDebugFormat(t *testing.T) {
 // making API calls. Simulates what the agent would emit.
 func TestCacheDisplayFormatUnit(t *testing.T) {
 	// Simulate usage values
-	usage := api.Usage{
+	usage := providers.Usage{
 		InputTokens:              387,
 		OutputTokens:             50,
 		CacheCreationInputTokens: 500,
@@ -252,7 +252,7 @@ func TestCacheDisplayFormatUnit(t *testing.T) {
 
 	t.Run("debug_format_high_usage", func(t *testing.T) {
 		// Test with high context usage
-		highUsage := api.Usage{
+		highUsage := providers.Usage{
 			InputTokens:              50000,
 			CacheCreationInputTokens: 0,
 			CacheReadInputTokens:     150000,
@@ -278,7 +278,7 @@ func TestCacheDisplayFormatUnit(t *testing.T) {
 	t.Run("verbose_format_zero_cache", func(t *testing.T) {
 		// When CacheReadInputTokens is 0, no cache message should be emitted.
 		// This test verifies the condition check.
-		zeroUsage := api.Usage{
+		zeroUsage := providers.Usage{
 			InputTokens:              1000,
 			CacheReadInputTokens:     0,
 			CacheCreationInputTokens: 500,
@@ -308,7 +308,7 @@ func TestCacheDisplayLevelGating(t *testing.T) {
 		t.Run(tt.level.String(), func(t *testing.T) {
 			var messages []string
 			a := agent.NewAgent(
-				api.NewClient("dummy", "http://localhost", "test", 100),
+				providers.NewClient("dummy", "http://localhost", "test", 100),
 				"test prompt",
 				agent.WithLogLevel(tt.level),
 				agent.WithContextWindowSize(200000),
@@ -339,7 +339,7 @@ func TestCacheDisplayOldFormatRemoved(t *testing.T) {
 		t.Skip("TS_AGENT_API_KEY not set, skipping integration test")
 	}
 
-	apiClient := api.NewClient(
+	apiClient := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-sonnet-4-5-20250929",
@@ -376,7 +376,7 @@ func TestCacheDisplayOldFormatRemoved(t *testing.T) {
 func TestWithContextWindowSizeOption(t *testing.T) {
 	t.Run("default_is_zero", func(t *testing.T) {
 		a := agent.NewAgent(
-			api.NewClient("dummy", "http://localhost", "test", 100),
+			providers.NewClient("dummy", "http://localhost", "test", 100),
 			"test",
 		)
 		// Default agent has no context window size set
@@ -389,7 +389,7 @@ func TestWithContextWindowSizeOption(t *testing.T) {
 	t.Run("set_via_option", func(t *testing.T) {
 		var messages []string
 		a := agent.NewAgent(
-			api.NewClient("dummy", "http://localhost", "test", 100),
+			providers.NewClient("dummy", "http://localhost", "test", 100),
 			"test",
 			agent.WithContextWindowSize(128000),
 			agent.WithLogLevel(loglevel.Debug),

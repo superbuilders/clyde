@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/this-is-alpha-iota/clyde/mcp"
+	"github.com/this-is-alpha-iota/clyde/agent/mcp"
 )
 
 // --- Story 1: MCP Client Unit Tests ---

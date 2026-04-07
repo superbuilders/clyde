@@ -9,14 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 )
 
 func init() {
 	Register(includeFileTool, executeIncludeFile, displayIncludeFile)
 }
 
-var includeFileTool = api.Tool{
+var includeFileTool = providers.Tool{
 	Name:        "include_file",
 	Description: "Include a file's contents in the conversation. For images (jpg, png, gif, webp), this sends the image to Claude for vision analysis. Can load from local filesystem or remote URLs. Use this tool when the user asks you to look at, analyze, or work with a specific file.",
 	InputSchema: map[string]interface{}{
@@ -31,7 +31,7 @@ var includeFileTool = api.Tool{
 	},
 }
 
-func executeIncludeFile(input map[string]interface{}, apiClient *api.Client, history []api.Message) (string, error) {
+func executeIncludeFile(input map[string]interface{}, apiClient *providers.Client, history []providers.Message) (string, error) {
 	path, ok := input["path"].(string)
 	if !ok || path == "" {
 		return "", fmt.Errorf("path is required. Example: include_file(\"./screenshot.png\")")

@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,7 +12,7 @@ func init() {
 	Register(grepTool, executeGrep, displayGrep)
 }
 
-var grepTool = api.Tool{
+var grepTool = providers.Tool{
 	Name:        "grep",
 	Description: "Search for patterns across multiple files. Returns file paths and matching lines with context. Useful for finding function definitions, variable references, TODO comments, error messages, and configuration values.",
 	InputSchema: map[string]interface{}{
@@ -35,7 +35,7 @@ var grepTool = api.Tool{
 	},
 }
 
-func executeGrep(input map[string]interface{}, apiClient *api.Client, conversationHistory []api.Message) (string, error) {
+func executeGrep(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
 	pattern, patternOk := input["pattern"].(string)
 	if !patternOk || pattern == "" {
 		return "", fmt.Errorf("pattern is required. Example: grep(\"func main\") or grep(\"TODO\", \"src\", \"*.go\")")

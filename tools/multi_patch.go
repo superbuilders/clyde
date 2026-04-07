@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -11,7 +11,7 @@ func init() {
 	Register(multiPatchTool, executeMultiPatch, displayMultiPatch)
 }
 
-var multiPatchTool = api.Tool{
+var multiPatchTool = providers.Tool{
 	Name:        "multi_patch",
 	Description: "Apply coordinated changes to multiple files atomically. If any patch fails, all previous changes are rolled back using git. Best for refactoring function names, updating imports, or applying consistent changes across files.",
 	InputSchema: map[string]interface{}{
@@ -50,7 +50,7 @@ type patchInfo struct {
 	NewText string
 }
 
-func executeMultiPatch(input map[string]interface{}, apiClient *api.Client, conversationHistory []api.Message) (string, error) {
+func executeMultiPatch(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
 	patches, ok := input["patches"].([]interface{})
 	if !ok || len(patches) == 0 {
 		return "", fmt.Errorf("multi_patch requires at least one patch. Example: {\"patches\": [{\"path\": \"file.go\", \"old_text\": \"...\", \"new_text\": \"...\"}]}")

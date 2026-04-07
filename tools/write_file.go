@@ -5,14 +5,14 @@ import (
 	"os"
 	"strings"
 
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 )
 
 func init() {
 	Register(writeFileTool, executeWriteFile, displayWriteFile)
 }
 
-var writeFileTool = api.Tool{
+var writeFileTool = providers.Tool{
 	Name:        "write_file",
 	Description: "Write content to a file. This will create a new file or completely replace the contents of an existing file. Use this for creating new files or when you need to replace the entire file contents. For partial edits, use patch_file instead.",
 	InputSchema: map[string]interface{}{
@@ -31,7 +31,7 @@ var writeFileTool = api.Tool{
 	},
 }
 
-func executeWriteFile(input map[string]interface{}, apiClient *api.Client, conversationHistory []api.Message) (string, error) {
+func executeWriteFile(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
 	path, pathOk := input["path"].(string)
 	content, contentOk := input["content"].(string)
 

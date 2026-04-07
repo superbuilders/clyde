@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"fmt"
 	"os"
 )
@@ -10,7 +10,7 @@ func init() {
 	Register(readFileTool, executeReadFile, displayReadFile)
 }
 
-var readFileTool = api.Tool{
+var readFileTool = providers.Tool{
 	Name:        "read_file",
 	Description: "Read the contents of a file at the specified path.",
 	InputSchema: map[string]interface{}{
@@ -25,7 +25,7 @@ var readFileTool = api.Tool{
 	},
 }
 
-func executeReadFile(input map[string]interface{}, apiClient *api.Client, conversationHistory []api.Message) (string, error) {
+func executeReadFile(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
 	path, ok := input["path"].(string)
 	if !ok || path == "" {
 		return "", fmt.Errorf("file path is required. Example: read_file(\"main.go\")")

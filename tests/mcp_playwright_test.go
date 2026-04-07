@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
-	"github.com/this-is-alpha-iota/clyde/mcp"
-	"github.com/this-is-alpha-iota/clyde/prompts"
+	"github.com/this-is-alpha-iota/clyde/agent/mcp"
+	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 	"github.com/this-is-alpha-iota/clyde/tools"
 )
 
@@ -226,7 +226,7 @@ func TestMCPPlaywrightIntegration(t *testing.T) {
 	}
 	defer cleanupMCPTools(t)
 
-	apiClient := api.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
+	apiClient := providers.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
 
 	var progressMessages []string
 	agentInstance := agent.NewAgent(
@@ -313,7 +313,7 @@ func TestMCPPlaywrightBrowserStatePersists(t *testing.T) {
 	mcp.RegisterPlaywrightTools(mcpServer)
 	defer cleanupMCPTools(t)
 
-	apiClient := api.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
+	apiClient := providers.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
 
 	agentInstance := agent.NewAgent(
 		apiClient,

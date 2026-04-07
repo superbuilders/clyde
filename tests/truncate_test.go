@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/this-is-alpha-iota/clyde/loglevel"
-	"github.com/this-is-alpha-iota/clyde/truncate"
+	"github.com/this-is-alpha-iota/clyde/agent/truncate"
 )
 
 // helper to build a string with N lines

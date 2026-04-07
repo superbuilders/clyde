@@ -1268,19 +1268,19 @@ All type/function references must also be updated (e.g. `api.Client` → `provid
 - Tests stay flat in `tests/` — all files are `package main` sharing `test_helpers.go`; splitting into subdirs would require separate packages and break the shared helpers.
 
 **Acceptance Criteria**:
-- [ ] Directory structure matches the target layout above.
-- [ ] `main.go` is ≤10 lines: imports `cli` and calls `cli.Run()`.
-- [ ] `cli/cli.go` contains all former `main.go` logic with exported `Run()` entrypoint.
-- [ ] All import paths updated per the mapping table.
-- [ ] All type references updated (`api.X` → `providers.X` everywhere).
-- [ ] `package` declarations updated (`package api` → `package providers`).
-- [ ] `errors/` directory deleted.
-- [ ] `progress.md`, `todos.md`, `whitepaper.md` moved to `docs/`.
-- [ ] `go build ./...` succeeds with zero errors.
-- [ ] `cd tests && go test ./...` — all tests pass (same count as before).
-- [ ] No circular imports.
-- [ ] The `//go:embed system.txt` in `agent/prompts/prompts.go` still works (relative to file).
-- [ ] The dev-mode `os.ReadFile(...)` fallback path is updated.
+- [x] Directory structure matches the target layout above.
+- [x] `main.go` is ≤10 lines: imports `cli` and calls `cli.Run()`.
+- [x] `cli/cli.go` contains all former `main.go` logic with exported `Run()` entrypoint.
+- [x] All import paths updated per the mapping table.
+- [x] All type references updated (`api.X` → `providers.X` everywhere).
+- [x] `package` declarations updated (`package api` → `package providers`).
+- [x] `errors/` directory deleted.
+- [x] `progress.md`, `todos.md`, `whitepaper.md` moved to `docs/`.
+- [x] `go build ./...` succeeds with zero errors.
+- [x] `cd tests && go test ./...` — all tests pass (same count as before).
+- [x] No circular imports.
+- [x] The `//go:embed system.txt` in `agent/prompts/prompts.go` still works (relative to file).
+- [x] The dev-mode `os.ReadFile(...)` fallback path is updated.
 
 ---
 

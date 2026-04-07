@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,7 +16,7 @@ func init() {
 	Register(browseTool, executeBrowse, displayBrowse)
 }
 
-var browseTool = api.Tool{
+var browseTool = providers.Tool{
 	Name:        "browse",
 	Description: "Fetch a URL and convert HTML to readable markdown. Optionally extract specific information using AI processing. Use for reading documentation pages, following up on search results, or extracting specific information from web pages.",
 	InputSchema: map[string]interface{}{
@@ -40,7 +40,7 @@ var browseTool = api.Tool{
 	},
 }
 
-func executeBrowse(input map[string]interface{}, apiClient *api.Client, conversationHistory []api.Message) (string, error) {
+func executeBrowse(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
 	urlStr, urlOk := input["url"].(string)
 	if !urlOk || urlStr == "" {
 		return "", fmt.Errorf("url is required. Example: browse(\"https://example.com\")")
@@ -173,7 +173,7 @@ func executeBrowse(input map[string]interface{}, apiClient *api.Client, conversa
 	}
 
 	// Create a new conversation with the extraction prompt
-	extractionHistory := []api.Message{
+	extractionHistory := []providers.Message{
 		{
 			Role:    "user",
 			Content: extractionPrompt,
@@ -183,7 +183,7 @@ func executeBrowse(input map[string]interface{}, apiClient *api.Client, conversa
 	// Call Claude to process the content
 	// We need the system prompt here
 	systemPrompt := "You are a helpful AI assistant. Extract the requested information from the webpage content provided."
-	resp2, err := apiClient.Call(systemPrompt, extractionHistory, []api.Tool{})
+	resp2, err := apiClient.Call(systemPrompt, extractionHistory, []providers.Tool{})
 	if err != nil {
 		return "", fmt.Errorf("failed to process page with AI: %w", err)
 	}

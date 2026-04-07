@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/api"
-	"github.com/this-is-alpha-iota/clyde/prompt"
-	"github.com/this-is-alpha-iota/clyde/prompts"
-	"github.com/this-is-alpha-iota/clyde/style"
+	"github.com/this-is-alpha-iota/clyde/providers"
+	"github.com/this-is-alpha-iota/clyde/cli/prompt"
+	"github.com/this-is-alpha-iota/clyde/agent/prompts"
+	"github.com/this-is-alpha-iota/clyde/cli/style"
 )
 
 // TestPromptLine_CLIModeNoPrompt verifies that CLI mode does not render a prompt line.
@@ -44,7 +44,7 @@ func TestPromptLine_FormatWithAgent(t *testing.T) {
 		t.Skip("Skipping: TS_AGENT_API_KEY not set")
 	}
 
-	apiClient := api.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
+	apiClient := providers.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
 	a := agent.NewAgent(apiClient, prompts.SystemPrompt)
 
 	// Before any API call, LastUsage should be zero
@@ -163,7 +163,7 @@ func TestPromptLine_ContextPercentProgression(t *testing.T) {
 		t.Skip("Skipping: TS_AGENT_API_KEY not set")
 	}
 
-	apiClient := api.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
+	apiClient := providers.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
 	a := agent.NewAgent(apiClient, prompts.SystemPrompt)
 
 	// Before any call, usage should be zero

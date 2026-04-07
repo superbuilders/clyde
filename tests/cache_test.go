@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
-	"github.com/this-is-alpha-iota/clyde/prompts"
+	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 )
 
 // TestCacheControlEnabled verifies cache_control is set in requests
@@ -17,7 +17,7 @@ func TestCacheControlEnabled(t *testing.T) {
 		t.Skip("TS_AGENT_API_KEY not set, skipping integration test")
 	}
 
-	apiClient := api.NewClient(
+	apiClient := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-sonnet-4-5-20250929",
@@ -49,7 +49,7 @@ func TestCacheUsageDisplay(t *testing.T) {
 		t.Skip("TS_AGENT_API_KEY not set, skipping integration test")
 	}
 
-	apiClient := api.NewClient(
+	apiClient := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-sonnet-4-5-20250929",
@@ -92,7 +92,7 @@ func TestCacheHitAfterToolUse(t *testing.T) {
 		t.Skip("TS_AGENT_API_KEY not set, skipping integration test")
 	}
 
-	apiClient := api.NewClient(
+	apiClient := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-sonnet-4-5-20250929",
@@ -132,7 +132,7 @@ func TestCacheHitAfterToolUse(t *testing.T) {
 // TestUsageStructFields verifies Usage struct has correct fields
 func TestUsageStructFields(t *testing.T) {
 	// Create a mock Usage struct
-	usage := api.Usage{
+	usage := providers.Usage{
 		InputTokens:              1000,
 		OutputTokens:             200,
 		CacheCreationInputTokens: 500,
@@ -157,7 +157,7 @@ func TestUsageStructFields(t *testing.T) {
 // TestCacheControlStruct verifies CacheControl struct
 func TestCacheControlStruct(t *testing.T) {
 	// Create a CacheControl struct
-	cacheControl := api.CacheControl{Type: "ephemeral"}
+	cacheControl := providers.CacheControl{Type: "ephemeral"}
 
 	if cacheControl.Type != "ephemeral" {
 		t.Errorf("Expected Type='ephemeral', got '%s'", cacheControl.Type)
@@ -166,13 +166,13 @@ func TestCacheControlStruct(t *testing.T) {
 
 // TestRequestWithCacheControl verifies Request includes cache_control
 func TestRequestWithCacheControl(t *testing.T) {
-	req := api.Request{
+	req := providers.Request{
 		Model:        "claude-sonnet-4-5-20250929",
 		MaxTokens:    4096,
-		CacheControl: &api.CacheControl{Type: "ephemeral"},
+		CacheControl: &providers.CacheControl{Type: "ephemeral"},
 		System:       "Test system prompt",
-		Messages:     []api.Message{},
-		Tools:        []api.Tool{},
+		Messages:     []providers.Message{},
+		Tools:        []providers.Tool{},
 	}
 
 	if req.CacheControl == nil {

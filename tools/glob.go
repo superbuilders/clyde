@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,7 +12,7 @@ func init() {
 	Register(globTool, executeGlob, displayGlob)
 }
 
-var globTool = api.Tool{
+var globTool = providers.Tool{
 	Name:        "glob",
 	Description: "Find files matching patterns. More flexible than list_files for navigating projects. Returns file paths that match the pattern. Useful for finding specific files in large codebases.",
 	InputSchema: map[string]interface{}{
@@ -31,7 +31,7 @@ var globTool = api.Tool{
 	},
 }
 
-func executeGlob(input map[string]interface{}, apiClient *api.Client, conversationHistory []api.Message) (string, error) {
+func executeGlob(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
 	pattern, patternOk := input["pattern"].(string)
 	if !patternOk || pattern == "" {
 		return "", fmt.Errorf("pattern is required. Example: glob(\"**/*.go\") or glob(\"*_test.go\", \"src\")")

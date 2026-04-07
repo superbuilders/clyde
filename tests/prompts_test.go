@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/prompts"
+	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 )
 
 func TestSystemPromptLoading(t *testing.T) {
@@ -102,13 +102,13 @@ func TestSystemPromptFileOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create prompts directory and custom file
-	if err := os.MkdirAll("prompts", 0755); err != nil {
+	// Create agent/prompts directory and custom file (matches dev-mode path)
+	if err := os.MkdirAll(filepath.Join("agent", "prompts"), 0755); err != nil {
 		t.Fatal(err)
 	}
 
 	customContent := "This is a custom system prompt for testing"
-	customPath := filepath.Join("prompts", "system.txt")
+	customPath := filepath.Join("agent", "prompts", "system.txt")
 	if err := os.WriteFile(customPath, []byte(customContent), 0644); err != nil {
 		t.Fatal(err)
 	}

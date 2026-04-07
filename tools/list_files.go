@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,7 +12,7 @@ func init() {
 	Register(listFilesTool, executeListFiles, displayListFiles)
 }
 
-var listFilesTool = api.Tool{
+var listFilesTool = providers.Tool{
 	Name:        "list_files",
 	Description: "List files and directories in a specified path. Returns the output of 'ls -la' command.",
 	InputSchema: map[string]interface{}{
@@ -27,7 +27,7 @@ var listFilesTool = api.Tool{
 	},
 }
 
-func executeListFiles(input map[string]interface{}, apiClient *api.Client, conversationHistory []api.Message) (string, error) {
+func executeListFiles(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
 	path := ""
 	if pathVal, ok := input["path"]; ok && pathVal != nil {
 		path, _ = pathVal.(string)

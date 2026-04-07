@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/this-is-alpha-iota/clyde/spinner"
+	"github.com/this-is-alpha-iota/clyde/cli/spinner"
 )
 
 // TestFrameSequence verifies the braille dot frame sequence is correct.

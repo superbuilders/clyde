@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/this-is-alpha-iota/clyde/mcp"
+	"github.com/this-is-alpha-iota/clyde/agent/mcp"
 )
 
 func TestTwoConcurrentPlaywrightServers(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/this-is-alpha-iota/clyde/loglevel"
-	"github.com/this-is-alpha-iota/clyde/spinner"
+	"github.com/this-is-alpha-iota/clyde/cli/spinner"
 )
 
 // TestSpinnerNotShownInCLIMode verifies that CLI mode doesn't use a spinner.

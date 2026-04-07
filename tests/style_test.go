@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/this-is-alpha-iota/clyde/loglevel"
-	"github.com/this-is-alpha-iota/clyde/style"
+	"github.com/this-is-alpha-iota/clyde/cli/style"
 )
 
 // --- styleMessage integration tests ---

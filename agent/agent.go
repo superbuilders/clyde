@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
 	"github.com/this-is-alpha-iota/clyde/tools"
-	"github.com/this-is-alpha-iota/clyde/truncate"
+	"github.com/this-is-alpha-iota/clyde/agent/truncate"
 )
 
 // ProgressCallback receives progress messages during tool execution.
@@ -29,15 +29,15 @@ type ErrorCallback func(err error)
 
 // Agent handles conversation and tool execution
 type Agent struct {
-	apiClient         *api.Client
+	apiClient         *providers.Client
 	systemPrompt      string
-	history           []api.Message
+	history           []providers.Message
 	logLevel          loglevel.Level
 	progressCallback  ProgressCallback
 	thinkingCallback  ThinkingCallback
 	spinnerCallback   SpinnerCallback
 	errorCallback     ErrorCallback
-	lastUsage         api.Usage // Token usage from the most recent API response
+	lastUsage         providers.Usage // Token usage from the most recent API response
 	contextWindowSize int       // Model context window size in tokens (for debug display)
 }
 
@@ -90,11 +90,11 @@ func WithContextWindowSize(size int) AgentOption {
 }
 
 // NewAgent creates a new agent with optional configuration
-func NewAgent(apiClient *api.Client, systemPrompt string, opts ...AgentOption) *Agent {
+func NewAgent(apiClient *providers.Client, systemPrompt string, opts ...AgentOption) *Agent {
 	agent := &Agent{
 		apiClient:    apiClient,
 		systemPrompt: systemPrompt,
-		history:      []api.Message{},
+		history:      []providers.Message{},
 		logLevel:     loglevel.Normal, // Default
 	}
 
@@ -113,7 +113,7 @@ func (a *Agent) LogLevel() loglevel.Level {
 
 // LastUsage returns the token usage from the most recent API response.
 // Returns a zero-value Usage if no API call has been made yet.
-func (a *Agent) LastUsage() api.Usage {
+func (a *Agent) LastUsage() providers.Usage {
 	return a.lastUsage
 }
 
@@ -159,7 +159,7 @@ func (a *Agent) spinnerStop() {
 // HandleMessage processes a user message and returns the response
 func (a *Agent) HandleMessage(userInput string) (string, error) {
 	// Add user message to history
-	a.history = append(a.history, api.Message{
+	a.history = append(a.history, providers.Message{
 		Role:    "user",
 		Content: userInput,
 	})
@@ -217,9 +217,9 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			resp.Usage.InputTokens, resp.Usage.OutputTokens,
 			resp.Usage.CacheReadInputTokens, resp.Usage.CacheCreationInputTokens))
 
-		var assistantContent []api.ContentBlock
+		var assistantContent []providers.ContentBlock
 		var textResponses []string
-		var toolUseBlocks []api.ContentBlock
+		var toolUseBlocks []providers.ContentBlock
 
 		for _, block := range resp.Content {
 			// Ensure tool_use blocks always have a non-nil Input map.
@@ -251,7 +251,7 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 
 		// Add assistant response to history (includes thinking blocks
 		// for proper round-tripping as required by the API)
-		a.history = append(a.history, api.Message{
+		a.history = append(a.history, providers.Message{
 			Role:    "assistant",
 			Content: assistantContent,
 		})
@@ -262,14 +262,14 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 		}
 
 		// Execute tools
-		var toolResults []api.ContentBlock
-		var pendingImages []api.ContentBlock
+		var toolResults []providers.ContentBlock
+		var pendingImages []providers.ContentBlock
 
 		for _, toolBlock := range toolUseBlocks {
 			reg, err := tools.GetTool(toolBlock.Name)
 			if err != nil {
 				// Unknown tool
-				toolResults = append(toolResults, api.ContentBlock{
+				toolResults = append(toolResults, providers.ContentBlock{
 					Type:      "tool_result",
 					ToolUseID: toolBlock.ID,
 					Content:   err.Error(),
@@ -308,9 +308,9 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 						imageData := parts[3]
 
 						// Store image for inclusion in this turn's response
-						pendingImages = append(pendingImages, api.ContentBlock{
+						pendingImages = append(pendingImages, providers.ContentBlock{
 							Type: "image",
-							Source: &api.ImageSource{
+							Source: &providers.ImageSource{
 								Type:      "base64",
 								MediaType: mediaType,
 								Data:      imageData,
@@ -331,7 +331,7 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 				a.emit(loglevel.Normal, truncatedOutput)
 			}
 
-			toolResults = append(toolResults, api.ContentBlock{
+			toolResults = append(toolResults, providers.ContentBlock{
 				Type:      "tool_result",
 				ToolUseID: toolBlock.ID,
 				Content:   resultContent,
@@ -345,7 +345,7 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 		}
 
 		// Add tool results to history
-		a.history = append(a.history, api.Message{
+		a.history = append(a.history, providers.Message{
 			Role:    "user",
 			Content: toolResults,
 		})
@@ -353,6 +353,6 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 }
 
 // GetHistory returns the conversation history
-func (a *Agent) GetHistory() []api.Message {
+func (a *Agent) GetHistory() []providers.Message {
 	return a.history
 }

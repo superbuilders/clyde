@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"github.com/this-is-alpha-iota/clyde/tools"
 )
 
@@ -26,7 +26,7 @@ func RegisterPlaywrightTools(server *PlaywrightServer) error {
 		t := tool
 		originalName := StripPrefix(t.Name)
 
-		executor := func(input map[string]interface{}, apiClient *api.Client, history []api.Message) (string, error) {
+		executor := func(input map[string]interface{}, apiClient *providers.Client, history []providers.Message) (string, error) {
 			// Lazy-start the server on first tool call
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()

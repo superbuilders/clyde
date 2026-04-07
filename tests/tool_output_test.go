@@ -7,11 +7,11 @@ import (
 	"testing"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
-	"github.com/this-is-alpha-iota/clyde/prompts"
-	"github.com/this-is-alpha-iota/clyde/style"
-	"github.com/this-is-alpha-iota/clyde/truncate"
+	"github.com/this-is-alpha-iota/clyde/agent/prompts"
+	"github.com/this-is-alpha-iota/clyde/cli/style"
+	"github.com/this-is-alpha-iota/clyde/agent/truncate"
 )
 
 // --- Unit Tests: Tool Output Level Gating ---
@@ -43,7 +43,7 @@ func TestToolOutputLevelGating(t *testing.T) {
 			// Verify the agent can be created at this level with a callback
 			var messages []string
 			a := agent.NewAgent(
-				api.NewClient("dummy", "http://localhost", "test", 100),
+				providers.NewClient("dummy", "http://localhost", "test", 100),
 				"test prompt",
 				agent.WithLogLevel(tt.level),
 				agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {
@@ -284,7 +284,7 @@ func TestToolOutputAgentCallbackSetup(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.level.String(), func(t *testing.T) {
 			a := agent.NewAgent(
-				api.NewClient("dummy", "http://localhost", "test", 100),
+				providers.NewClient("dummy", "http://localhost", "test", 100),
 				"test prompt",
 				agent.WithLogLevel(tt.level),
 				agent.WithProgressCallback(func(lvl loglevel.Level, msg string) {}),
@@ -420,7 +420,7 @@ func TestToolOutputIntegrationNormal(t *testing.T) {
 	var normalMessages []string
 	var quietMessages []string
 
-	apiClient := api.NewClient(
+	apiClient := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-sonnet-4-5-20250929",
@@ -498,7 +498,7 @@ func TestToolOutputIntegrationQuietSuppressed(t *testing.T) {
 	var normalMessages []string
 	var quietMessages []string
 
-	apiClient := api.NewClient(
+	apiClient := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-sonnet-4-5-20250929",
@@ -553,7 +553,7 @@ func TestToolOutputIntegrationVerboseNoTruncation(t *testing.T) {
 
 	var normalMessages []string
 
-	apiClient := api.NewClient(
+	apiClient := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-sonnet-4-5-20250929",

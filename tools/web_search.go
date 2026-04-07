@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,7 +16,7 @@ func init() {
 	Register(webSearchTool, executeWebSearch, displayWebSearch)
 }
 
-var webSearchTool = api.Tool{
+var webSearchTool = providers.Tool{
 	Name:        "web_search",
 	Description: "Search the internet using Brave Search API. Returns titles, URLs, and snippets for search results. Use for finding current documentation, error solutions, package versions, recent news, or any information beyond your training data.",
 	InputSchema: map[string]interface{}{
@@ -36,7 +36,7 @@ var webSearchTool = api.Tool{
 	},
 }
 
-func executeWebSearch(input map[string]interface{}, apiClient *api.Client, conversationHistory []api.Message) (string, error) {
+func executeWebSearch(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
 	query, queryOk := input["query"].(string)
 	if !queryOk || query == "" {
 		return "", fmt.Errorf("query is required. Example: web_search(\"golang http client\")")

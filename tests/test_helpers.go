@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"github.com/this-is-alpha-iota/clyde/config"
-	"github.com/this-is-alpha-iota/clyde/prompts"
+	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 	"github.com/this-is-alpha-iota/clyde/tools"
 )
 
@@ -18,9 +18,9 @@ import (
 var systemPrompt = prompts.SystemPrompt
 
 // Message type alias for tests
-type Message = api.Message
-type ContentBlock = api.ContentBlock
-type Response = api.Response
+type Message = providers.Message
+type ContentBlock = providers.ContentBlock
+type Response = providers.Response
 
 // Test helpers that call the actual tool implementations
 func executeListFiles(path string) (string, error) {
@@ -94,7 +94,7 @@ func executeBrowse(urlStr, prompt string, maxLength int, apiKey string, conversa
 		ModelID:   "claude-sonnet-4-5-20250929",
 		MaxTokens: 4096,
 	}
-	apiClient := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+	apiClient := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
 	
 	return reg.Execute(input, apiClient, conversationHistory)
 }
@@ -123,7 +123,7 @@ func callClaude(apiKey string, messages []Message) (*Response, error) {
 		ModelID:   "claude-sonnet-4-5-20250929",
 		MaxTokens: 4096,
 	}
-	client := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+	client := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
 	allTools := tools.GetAllTools()
 	return client.Call(systemPrompt, messages, allTools)
 }
@@ -174,7 +174,7 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 	}
 
 	// Create API client and agent
-	apiClient := api.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+	apiClient := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
 	agentInstance := &testAgent{
 		apiClient: apiClient,
 		history:   conversationHistory,
@@ -189,7 +189,7 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 
 // testAgent is a wrapper around the actual agent for testing
 type testAgent struct {
-	apiClient *api.Client
+	apiClient *providers.Client
 	history   []Message
 }
 

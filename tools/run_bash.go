@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -11,7 +11,7 @@ func init() {
 	Register(runBashTool, executeRunBash, displayRunBash)
 }
 
-var runBashTool = api.Tool{
+var runBashTool = providers.Tool{
 	Name:        "run_bash",
 	Description: "Execute arbitrary bash commands and return the output. Use this for running shell commands, scripts, or any command-line operations.",
 	InputSchema: map[string]interface{}{
@@ -26,7 +26,7 @@ var runBashTool = api.Tool{
 	},
 }
 
-func executeRunBash(input map[string]interface{}, apiClient *api.Client, conversationHistory []api.Message) (string, error) {
+func executeRunBash(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
 	command, ok := input["command"].(string)
 	if !ok || command == "" {
 		return "", fmt.Errorf("command is required. Example: run_bash(\"ls -la\")")

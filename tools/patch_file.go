@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"fmt"
 	"os"
 	"strings"
@@ -11,7 +11,7 @@ func init() {
 	Register(patchFileTool, executePatchFile, displayPatchFile)
 }
 
-var patchFileTool = api.Tool{
+var patchFileTool = providers.Tool{
 	Name:        "patch_file",
 	Description: "Edit a file by finding and replacing text. This is a patch-based approach that only requires the specific text to change, not the entire file. To use: (1) use read_file to see current content, (2) identify a unique string to replace, (3) provide the old text and new text. The old_text must match exactly and be unique in the file.",
 	InputSchema: map[string]interface{}{
@@ -34,7 +34,7 @@ var patchFileTool = api.Tool{
 	},
 }
 
-func executePatchFile(input map[string]interface{}, apiClient *api.Client, conversationHistory []api.Message) (string, error) {
+func executePatchFile(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
 	path, pathOk := input["path"].(string)
 	oldText, oldTextOk := input["old_text"].(string)
 	newText, newTextOk := input["new_text"].(string)

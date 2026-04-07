@@ -8,10 +8,10 @@ import (
 	"testing"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 	"github.com/this-is-alpha-iota/clyde/loglevel"
-	"github.com/this-is-alpha-iota/clyde/prompts"
-	"github.com/this-is-alpha-iota/clyde/truncate"
+	"github.com/this-is-alpha-iota/clyde/agent/prompts"
+	"github.com/this-is-alpha-iota/clyde/agent/truncate"
 )
 
 // --- Truncation Engine Tests (exercised here alongside thinking) ---
@@ -117,12 +117,12 @@ func TestSingleLineCommandNeverLineTruncated(t *testing.T) {
 // included in serialized API requests.
 func TestThinkingParameterIncludedInRequest(t *testing.T) {
 	t.Run("adaptive_mode", func(t *testing.T) {
-		req := api.Request{
+		req := providers.Request{
 			Model:     "claude-opus-4-6",
 			MaxTokens: 64000,
 			System:    "test",
-			Messages:  []api.Message{{Role: "user", Content: "hello"}},
-			Thinking: &api.ThinkingConfig{
+			Messages:  []providers.Message{{Role: "user", Content: "hello"}},
+			Thinking: &providers.ThinkingConfig{
 				Type: "adaptive",
 			},
 		}
@@ -146,12 +146,12 @@ func TestThinkingParameterIncludedInRequest(t *testing.T) {
 	})
 
 	t.Run("manual_mode_with_budget", func(t *testing.T) {
-		req := api.Request{
+		req := providers.Request{
 			Model:     "claude-sonnet-4-5-20250929",
 			MaxTokens: 64000,
 			System:    "test",
-			Messages:  []api.Message{{Role: "user", Content: "hello"}},
-			Thinking: &api.ThinkingConfig{
+			Messages:  []providers.Message{{Role: "user", Content: "hello"}},
+			Thinking: &providers.ThinkingConfig{
 				Type:         "enabled",
 				BudgetTokens: 8192,
 			},
@@ -172,11 +172,11 @@ func TestThinkingParameterIncludedInRequest(t *testing.T) {
 	})
 
 	t.Run("thinking_omitted_when_nil", func(t *testing.T) {
-		req := api.Request{
+		req := providers.Request{
 			Model:     "claude-opus-4-6",
 			MaxTokens: 64000,
 			System:    "test",
-			Messages:  []api.Message{{Role: "user", Content: "hello"}},
+			Messages:  []providers.Message{{Role: "user", Content: "hello"}},
 			Thinking:  nil,
 		}
 
@@ -221,7 +221,7 @@ func TestThinkingBlockParsing(t *testing.T) {
 			}
 		}`
 
-		var resp api.Response
+		var resp providers.Response
 		if err := json.Unmarshal([]byte(responseJSON), &resp); err != nil {
 			t.Fatalf("Failed to unmarshal response: %v", err)
 		}
@@ -275,7 +275,7 @@ func TestThinkingBlockParsing(t *testing.T) {
 			}
 		}`
 
-		var resp api.Response
+		var resp providers.Response
 		if err := json.Unmarshal([]byte(responseJSON), &resp); err != nil {
 			t.Fatalf("Failed to unmarshal response: %v", err)
 		}
@@ -319,7 +319,7 @@ func TestThinkingBlockParsing(t *testing.T) {
 			}
 		}`
 
-		var resp api.Response
+		var resp providers.Response
 		if err := json.Unmarshal([]byte(responseJSON), &resp); err != nil {
 			t.Fatalf("Failed to unmarshal response: %v", err)
 		}
@@ -362,7 +362,7 @@ func TestThinkingDisplayGating(t *testing.T) {
 		t.Run(tt.level.String(), func(t *testing.T) {
 			var thinkingMessages []string
 
-			apiClient := api.NewClient("dummy", "http://localhost", "test", 100)
+			apiClient := providers.NewClient("dummy", "http://localhost", "test", 100)
 			a := agent.NewAgent(
 				apiClient,
 				"test prompt",
@@ -477,8 +477,8 @@ func TestNoThinkFlagParsing(t *testing.T) {
 // properly configured client.
 func TestWithThinkingClient(t *testing.T) {
 	t.Run("adaptive_thinking", func(t *testing.T) {
-		client := api.NewClient("key", "http://localhost", "model", 64000)
-		withThinking := client.WithThinking(&api.ThinkingConfig{
+		client := providers.NewClient("key", "http://localhost", "model", 64000)
+		withThinking := client.WithThinking(&providers.ThinkingConfig{
 			Type: "adaptive",
 		})
 
@@ -489,8 +489,8 @@ func TestWithThinkingClient(t *testing.T) {
 	})
 
 	t.Run("nil_disables_thinking", func(t *testing.T) {
-		client := api.NewClient("key", "http://localhost", "model", 64000)
-		withThinking := client.WithThinking(&api.ThinkingConfig{Type: "adaptive"})
+		client := providers.NewClient("key", "http://localhost", "model", 64000)
+		withThinking := client.WithThinking(&providers.ThinkingConfig{Type: "adaptive"})
 		noThinking := withThinking.WithThinking(nil)
 
 		// Verify chain works
@@ -505,7 +505,7 @@ func TestWithThinkingClient(t *testing.T) {
 // TestThinkingConfigJSON verifies proper JSON serialization of ThinkingConfig.
 func TestThinkingConfigJSON(t *testing.T) {
 	t.Run("adaptive_no_budget", func(t *testing.T) {
-		cfg := api.ThinkingConfig{Type: "adaptive"}
+		cfg := providers.ThinkingConfig{Type: "adaptive"}
 		data, err := json.Marshal(cfg)
 		if err != nil {
 			t.Fatal(err)
@@ -518,7 +518,7 @@ func TestThinkingConfigJSON(t *testing.T) {
 	})
 
 	t.Run("enabled_with_budget", func(t *testing.T) {
-		cfg := api.ThinkingConfig{Type: "enabled", BudgetTokens: 8192}
+		cfg := providers.ThinkingConfig{Type: "enabled", BudgetTokens: 8192}
 		data, err := json.Marshal(cfg)
 		if err != nil {
 			t.Fatal(err)
@@ -588,16 +588,16 @@ func TestThinkingIntegration(t *testing.T) {
 	}
 
 	// Create client with adaptive thinking
-	client := api.NewClient(
+	client := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-opus-4-6",
 		64000,
-	).WithThinking(&api.ThinkingConfig{
+	).WithThinking(&providers.ThinkingConfig{
 		Type: "adaptive",
 	})
 
-	messages := []api.Message{
+	messages := []providers.Message{
 		{Role: "user", Content: "What is 15 * 23? Think step by step."},
 	}
 
@@ -657,12 +657,12 @@ func TestThinkingIntegrationWithAgent(t *testing.T) {
 		t.Skip("TS_AGENT_API_KEY not set, skipping integration test")
 	}
 
-	client := api.NewClient(
+	client := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-opus-4-6",
 		64000,
-	).WithThinking(&api.ThinkingConfig{
+	).WithThinking(&providers.ThinkingConfig{
 		Type: "adaptive",
 	})
 
@@ -712,12 +712,12 @@ func TestThinkingIntegrationVerbose(t *testing.T) {
 		t.Skip("TS_AGENT_API_KEY not set, skipping integration test")
 	}
 
-	client := api.NewClient(
+	client := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-opus-4-6",
 		64000,
-	).WithThinking(&api.ThinkingConfig{
+	).WithThinking(&providers.ThinkingConfig{
 		Type: "adaptive",
 	})
 
@@ -754,12 +754,12 @@ func TestThinkingSuppressedAtQuiet(t *testing.T) {
 		t.Skip("TS_AGENT_API_KEY not set, skipping integration test")
 	}
 
-	client := api.NewClient(
+	client := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-opus-4-6",
 		64000,
-	).WithThinking(&api.ThinkingConfig{
+	).WithThinking(&providers.ThinkingConfig{
 		Type: "adaptive",
 	})
 
@@ -793,7 +793,7 @@ func TestNoThinkIntegration(t *testing.T) {
 	}
 
 	// Client WITHOUT thinking (simulating --no-think)
-	client := api.NewClient(
+	client := providers.NewClient(
 		apiKey,
 		"https://api.anthropic.com/v1/messages",
 		"claude-opus-4-6",
@@ -801,7 +801,7 @@ func TestNoThinkIntegration(t *testing.T) {
 	)
 	// No WithThinking call — thinking is nil
 
-	messages := []api.Message{
+	messages := []providers.Message{
 		{Role: "user", Content: "What is 2+2?"},
 	}
 

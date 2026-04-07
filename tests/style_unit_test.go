@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/style"
+	"github.com/this-is-alpha-iota/clyde/cli/style"
 )
 
 // resetTestEnv ensures a clean environment and cache for each test.

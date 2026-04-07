@@ -35,16 +35,32 @@ EOF
 ## Overview
 Built a Go CLI that provides a REPL (Read-Eval-Print Loop) interface for conversing with Claude AI, featuring GitHub integration via the `gh` CLI tool.
 
-**Architecture** (as of 2026-02-13): Modular package-based structure
-- `api/` - Claude API client and types
-- `config/` - Configuration and .env loading
-- `agent/` - Conversation orchestration
-- `tools/` - Tool registry and 10 tool implementations
-- `prompts/` - System prompt (external file, embedded in binary)
-- `main.go` - CLI REPL interface (50 lines)
+**Architecture** (as of ARCH-1 reorg): Modular package-based structure with clear layer separation
+```
+.
+├── main.go                  # Thin entrypoint (7 lines) → cli.Run()
+├── cli/                     # All CLI/REPL orchestration + UI
+│   ├── cli.go               # Run(), runCLIMode, runREPLMode, etc.
+│   ├── input/               # Readline wrapper (multiline, history)
+│   ├── prompt/              # Git info + context % prompt line
+│   ├── spinner/             # Braille dot loading spinner
+│   └── style/               # ANSI color helpers
+├── agent/                   # Agent loop + agent-only deps
+│   ├── agent.go             # Conversation orchestration
+│   ├── mcp/                 # Playwright MCP integration
+│   ├── prompts/             # System prompt (embedded)
+│   └── truncate/            # Thinking/output truncation
+├── providers/               # API types + client (renamed from api/)
+│   ├── client.go
+│   └── types.go
+├── loglevel/                # Shared log level type
+├── config/                  # Shared config loading
+├── tools/                   # Tool registry + 12 tool implementations
+├── tests/                   # All tests (package main, shared helpers)
+└── docs/                    # All docs (progress, todos, specs)
+```
 
-**Original Architecture** (until 2026-02-13): Single-file monolith
-- `main.go` - Everything in one 1,652-line file
+**Previous architecture** (before ARCH-1): Flat structure with all packages at root level
 
 ## What Was Built
 
@@ -972,7 +988,63 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-07-14)
 
-**Latest Update**: Playwright MCP Integration — Browser Automation via MCP ✅
+**Latest Update**: ARCH-1 Project Directory Reorganization ✅
+
+### ARCH-1: Project Directory Reorganization (Completed 2026-07-14)
+
+**Story**: Reorganize the codebase so the directory structure reflects the logical architecture (CLI layer vs agent layer vs shared).
+
+**What Changed**:
+
+| Change | Details |
+|--------|---------|
+| `api/` → `providers/` | Package renamed; all `api.X` references → `providers.X` |
+| `style/`, `spinner/`, `prompt/`, `input/` → `cli/` | CLI-only UI packages nested under `cli/` |
+| `mcp/`, `prompts/`, `truncate/` → `agent/` | Agent-only packages nested under `agent/` |
+| `main.go` → `cli/cli.go` | All CLI logic extracted; `main.go` reduced to 7-line thin wrapper |
+| `progress.md`, `todos.md`, `whitepaper.md` → `docs/` | Documentation consolidated |
+| `errors/` | Deleted (was empty) |
+
+**Import path mapping**:
+| Old | New |
+|-----|-----|
+| `clyde/api` | `clyde/providers` |
+| `clyde/style` | `clyde/cli/style` |
+| `clyde/spinner` | `clyde/cli/spinner` |
+| `clyde/prompt` | `clyde/cli/prompt` |
+| `clyde/input` | `clyde/cli/input` |
+| `clyde/mcp` | `clyde/agent/mcp` |
+| `clyde/prompts` | `clyde/agent/prompts` |
+| `clyde/truncate` | `clyde/agent/truncate` |
+
+**Files changed**: 55 Go files (all source and test files updated with new import paths and type references).
+
+**Tests added** (`tests/arch1_test.go`, 9 tests):
+- `TestARCH1_DirectoryStructure` — required dirs exist, old dirs removed, docs moved
+- `TestARCH1_MainGoThinEntrypoint` — main.go ≤10 lines, imports cli, calls cli.Run()
+- `TestARCH1_CLIPackageExists` — cli/cli.go declares package cli with exported Run()
+- `TestARCH1_ProvidersPackage` — package declaration changed from `api` to `providers`
+- `TestARCH1_NoOldImportPaths` — no Go file uses old import paths
+- `TestARCH1_EmbeddedPromptWorks` — //go:embed in agent/prompts still works
+- `TestARCH1_DevModePathUpdated` — dev-mode path updated to `agent/prompts/system.txt`
+- `TestARCH1_ImportPathsCompile` — all 12 new import paths compile and resolve
+- `TestARCH1_NoCircularImports` — documents dependency graph, compilation proves no cycles
+
+**Additional test fix**: `TestSystemPromptFileOverride` in `tests/prompts_test.go` updated to create custom prompt at `agent/prompts/system.txt` (was `prompts/system.txt`).
+
+**Verification**:
+- `go build .` succeeds
+- `go vet ./...` clean
+- All unit tests pass (API-key-dependent integration tests skip as expected)
+- Binary builds to 9.8 MB, unchanged functionality
+
+**Shared packages at root** (by design):
+- `loglevel/` — imported by both agent and cli (see ARCH-2 for future decoupling)
+- `config/` — used by cli, potentially agent in future
+- `providers/` — used by agent, tools, agent/mcp, and cli
+- `tools/` — separate from agent core; independently registered and testable
+
+**Latest Update (prior)**: Playwright MCP Integration — Browser Automation via MCP ✅
 
 ### Playwright MCP Integration (Completed 2026-07-14)
 

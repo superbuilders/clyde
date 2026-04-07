@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/this-is-alpha-iota/clyde/api"
+	"github.com/this-is-alpha-iota/clyde/providers"
 )
 
 //go:embed playwright_tools.json
@@ -18,13 +18,13 @@ const playwrightToolPrefix = "mcp_playwright_"
 
 // PlaywrightTools parses the embedded tool snapshot and returns Anthropic-
 // formatted tool definitions with the "mcp_playwright_" prefix.
-func PlaywrightTools() ([]api.Tool, error) {
+func PlaywrightTools() ([]providers.Tool, error) {
 	var mcpTools []Tool
 	if err := json.Unmarshal(embeddedPlaywrightTools, &mcpTools); err != nil {
 		return nil, fmt.Errorf("mcp: parse embedded playwright tools: %w", err)
 	}
 
-	apiTools := make([]api.Tool, 0, len(mcpTools))
+	apiTools := make([]providers.Tool, 0, len(mcpTools))
 	for _, t := range mcpTools {
 		// Convert inputSchema from json.RawMessage to interface{}
 		var schema interface{}
@@ -32,7 +32,7 @@ func PlaywrightTools() ([]api.Tool, error) {
 			return nil, fmt.Errorf("mcp: parse schema for %q: %w", t.Name, err)
 		}
 
-		apiTools = append(apiTools, api.Tool{
+		apiTools = append(apiTools, providers.Tool{
 			Name:        playwrightToolPrefix + t.Name,
 			Description: t.Description,
 			InputSchema: schema,
