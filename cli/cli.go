@@ -23,7 +23,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/cli/spinner"
 	"github.com/this-is-alpha-iota/clyde/cli/style"
 	"github.com/this-is-alpha-iota/clyde/config"
-	"github.com/this-is-alpha-iota/clyde/loglevel"
+	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
 	"github.com/this-is-alpha-iota/clyde/providers"
 	_ "github.com/this-is-alpha-iota/clyde/tools" // Import tools to register them
 )

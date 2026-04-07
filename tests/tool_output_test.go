@@ -8,7 +8,7 @@ import (
 
 	"github.com/this-is-alpha-iota/clyde/agent"
 	"github.com/this-is-alpha-iota/clyde/providers"
-	"github.com/this-is-alpha-iota/clyde/loglevel"
+	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 	"github.com/this-is-alpha-iota/clyde/cli/style"
 	"github.com/this-is-alpha-iota/clyde/agent/truncate"

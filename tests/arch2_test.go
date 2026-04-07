@@ -7,7 +7,7 @@ import (
 
 	"github.com/this-is-alpha-iota/clyde/agent"
 	"github.com/this-is-alpha-iota/clyde/agent/truncate"
-	"github.com/this-is-alpha-iota/clyde/loglevel"
+	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
 	"github.com/this-is-alpha-iota/clyde/providers"
 )
 
@@ -24,7 +24,7 @@ import (
 func TestARCH2_AgentNoLogLevelImport(t *testing.T) {
 	// Read agent/agent.go source and verify no loglevel import
 	content := readTestFile(t, "../agent/agent.go")
-	if strings.Contains(content, `"github.com/this-is-alpha-iota/clyde/loglevel"`) {
+	if strings.Contains(content, `"github.com/this-is-alpha-iota/clyde/cli/loglevel"`) {
 		t.Error("agent/agent.go should NOT import loglevel (ARCH-2)")
 	}
 	if strings.Contains(content, "loglevel.") {
@@ -35,7 +35,7 @@ func TestARCH2_AgentNoLogLevelImport(t *testing.T) {
 // TestARCH2_TruncateNoLogLevelImport verifies truncate package has no loglevel dependency.
 func TestARCH2_TruncateNoLogLevelImport(t *testing.T) {
 	content := readTestFile(t, "../agent/truncate/truncate.go")
-	if strings.Contains(content, `"github.com/this-is-alpha-iota/clyde/loglevel"`) {
+	if strings.Contains(content, `"github.com/this-is-alpha-iota/clyde/cli/loglevel"`) {
 		t.Error("agent/truncate/truncate.go should NOT import loglevel (ARCH-2)")
 	}
 }

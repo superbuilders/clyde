@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/this-is-alpha-iota/clyde/loglevel"
+	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
 	"github.com/this-is-alpha-iota/clyde/cli/spinner"
 )
 

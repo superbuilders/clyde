@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/this-is-alpha-iota/clyde/cli"
-	"github.com/this-is-alpha-iota/clyde/loglevel"
+	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
 	"github.com/this-is-alpha-iota/clyde/cli/style"
 )
 

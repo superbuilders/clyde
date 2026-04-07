@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/loglevel"
+	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
 )
 
 func TestLevelString(t *testing.T) {

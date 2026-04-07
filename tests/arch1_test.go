@@ -16,7 +16,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/cli/spinner"
 	"github.com/this-is-alpha-iota/clyde/cli/style"
 	"github.com/this-is-alpha-iota/clyde/config"
-	"github.com/this-is-alpha-iota/clyde/loglevel"
+	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
 	"github.com/this-is-alpha-iota/clyde/providers"
 	"github.com/this-is-alpha-iota/clyde/tools"
 )
@@ -39,7 +39,7 @@ func TestARCH1_DirectoryStructure(t *testing.T) {
 		"agent/prompts",
 		"agent/truncate",
 		"providers",
-		"loglevel",
+		"cli/loglevel",
 		"config",
 		"tools",
 		"tests",
@@ -179,6 +179,7 @@ func TestARCH1_NoOldImportPaths(t *testing.T) {
 		"mcp",
 		"prompts",
 		"truncate",
+		"loglevel",
 	}
 
 	err := filepath.Walk("..", func(path string, info os.FileInfo, err error) error {

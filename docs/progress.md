@@ -35,12 +35,13 @@ EOF
 ## Overview
 Built a Go CLI that provides a REPL (Read-Eval-Print Loop) interface for conversing with Claude AI, featuring GitHub integration via the `gh` CLI tool.
 
-**Architecture** (as of ARCH-1 reorg): Modular package-based structure with clear layer separation
+**Architecture** (as of ARCH-2 + loglevel move): Modular package-based structure with clear layer separation
 ```
 .
 ├── main.go                  # Thin entrypoint (7 lines) → cli.Run()
 ├── cli/                     # All CLI/REPL orchestration + UI
 │   ├── cli.go               # Run(), runCLIMode, runREPLMode, etc.
+│   ├── loglevel/            # Log level types + CLI flag parsing
 │   ├── input/               # Readline wrapper (multiline, history)
 │   ├── prompt/              # Git info + context % prompt line
 │   ├── spinner/             # Braille dot loading spinner
@@ -53,7 +54,6 @@ Built a Go CLI that provides a REPL (Read-Eval-Print Loop) interface for convers
 ├── providers/               # API types + client (renamed from api/)
 │   ├── client.go
 │   └── types.go
-├── loglevel/                # Shared log level type
 ├── config/                  # Shared config loading
 ├── tools/                   # Tool registry + 12 tool implementations
 ├── tests/                   # All tests (package main, shared helpers)
@@ -988,7 +988,29 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-07-14)
 
-**Latest Update**: ARCH-2: Remove I/O Concerns from the Agent ✅
+**Latest Update**: Move `loglevel/` under `cli/loglevel/` ✅
+
+### Move loglevel to cli/loglevel (Completed 2026-07-14)
+
+**Story**: Now that ARCH-2 removed loglevel from the agent, the package is only used by the CLI layer. Move it under `cli/` to reflect that reality.
+
+**What Changed**:
+- Moved `loglevel/loglevel.go` → `cli/loglevel/loglevel.go`
+- Updated import path: `clyde/loglevel` → `clyde/cli/loglevel` (10 files: `cli/cli.go` + 9 test files)
+- Updated `arch1_test.go`: required directory `"loglevel"` → `"cli/loglevel"`; added `"loglevel"` to old-import-path blocklist
+- Updated `arch2_test.go`: source-level assertions now check for new import path in agent/truncate
+
+**Verification**:
+- `go vet ./...` clean
+- `go build .` succeeds
+- All architecture tests pass (ARCH-1 + ARCH-2)
+- All loglevel unit tests pass (37+ subtests)
+- All dependent tests pass (spinner, style, cache_display, tool_output, thinking)
+
+**Import path mapping**:
+| Old | New |
+|-----|-----|
+| `clyde/loglevel` | `clyde/cli/loglevel` |
 
 ### ARCH-2: Remove I/O Concerns from the Agent (Completed 2026-07-14)
 
@@ -1067,14 +1089,14 @@ Truncation functions now always truncate. The CLI decides whether to call them b
 ```
 main.go           → cli
 cli                → agent, agent/mcp, agent/prompts, agent/truncate,
-                     cli/input, cli/prompt, cli/spinner, cli/style,
-                     config, loglevel, providers, tools
+                     cli/input, cli/loglevel, cli/prompt, cli/spinner,
+                     cli/style, config, providers, tools
 agent              → providers, tools            (no loglevel!)
 agent/mcp          → providers, tools
 agent/truncate     → (no clyde imports!)         (no loglevel!)
 cli/prompt         → cli/style
 tools              → providers
-loglevel, config, providers, cli/style, cli/spinner, cli/input,
+cli/loglevel, config, providers, cli/style, cli/spinner, cli/input,
 agent/prompts      → (no clyde imports)
 ```
 
@@ -1127,10 +1149,11 @@ agent/prompts      → (no clyde imports)
 - Binary builds to 9.8 MB, unchanged functionality
 
 **Shared packages at root** (by design):
-- `loglevel/` — imported by both agent and cli (see ARCH-2 for future decoupling)
 - `config/` — used by cli, potentially agent in future
 - `providers/` — used by agent, tools, agent/mcp, and cli
 - `tools/` — separate from agent core; independently registered and testable
+
+Note: `loglevel/` was moved from root to `cli/loglevel/` after ARCH-2 confirmed it is only used by the CLI layer.
 
 **Latest Update (prior)**: Playwright MCP Integration — Browser Automation via MCP ✅
 
