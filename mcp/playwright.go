@@ -49,14 +49,23 @@ func (s *PlaywrightServer) start(ctx context.Context) error {
 	}
 	// Always add --headless if not already present
 	hasHeadless := false
+	hasIsolated := false
 	for _, a := range args {
 		if a == "--headless" {
 			hasHeadless = true
-			break
+		}
+		if a == "--isolated" {
+			hasIsolated = true
 		}
 	}
 	if !hasHeadless {
 		args = append(args, "--headless")
+	}
+	// Always use --isolated so each clyde instance gets its own browser
+	// profile (temp directory). Without this, Playwright locks the shared
+	// profile and subsequent instances fail with "Browser is already in use".
+	if !hasIsolated {
+		args = append(args, "--isolated")
 	}
 
 	// Use a timeout for the startup handshake
