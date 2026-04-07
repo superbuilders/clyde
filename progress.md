@@ -4332,6 +4332,33 @@ Spinner prototype in `spinner_proto.py` — selected braille set at 1/60s frame 
 
 **Date**: 2025-07-10
 
+## Playwright MCP Design Document (2025-07-14)
+
+Created `docs/playwright-mcp.md` — a design document for adding Playwright browser automation to clyde via MCP (Model Context Protocol).
+
+**Research conducted:** Compared MCP implementations across 4 projects:
+- **Pi** (Mario Zechner): No MCP, philosophically opposed. Uses CLI tools + READMEs instead. Token-efficient but no browser state persistence.
+- **oh-my-pi / omp** (can1357): Full custom MCP — ~6,000 lines of TypeScript, 19 files, custom JSON-RPC, OAuth, Smithery registry, reconnection logic. Heavyweight.
+- **OpenCode (sst/Dax Raad)**: TypeScript, ~1,500 lines, uses official `@modelcontextprotocol/sdk`. Full OAuth support.
+- **OpenCode (Go, archived)**: Go, ~200 lines, used `mcp-go` library. Had a critical bug: restarted the MCP server subprocess per tool call, destroying browser state.
+- **Claude Code**: Enterprise-grade — thousands of lines, 3 transports, OAuth, plugins, managed MCP. Way beyond our needs.
+
+**Key finding:** Live measurement of Playwright MCP shows 21 default tools at ~3,900 tokens (1.9% of 200k context), much less than the 13,700 tokens cited by Mario Zechner. The server sends no instructions, no prompts, no resources — just tool definitions.
+
+**Architecture chosen:** Hand-rolled Go stdio client, zero new dependencies, ~620 lines total across 5 user stories:
+1. Raw MCP stdio client (~200 lines)
+2. Embedded Playwright tool snapshot (21 tools as JSON)
+3. Playwright server lifecycle (lazy start, session-persistent)
+4. Agent wiring (register MCP tools, forward calls)
+5. Integration test
+
+**Key decisions:**
+- Hand-rolled over `mcp-go` (zero deps, we only need 3 RPC methods)
+- Vanilla passthrough (no tool curation — what Playwright returns, we register)
+- Lazy server start via `sync.Once` (no startup cost when browser unused)
+- Config via env vars (`MCP_PLAYWRIGHT=true` in `~/.clyde/config`)
+- No approval gates (consistent with clyde's trust model)
+
 ## Future Enhancements (Not Implemented)
 - Streaming responses for faster feedback
 - Configuration file for model selection and parameters
