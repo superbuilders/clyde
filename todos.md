@@ -1143,6 +1143,211 @@ This story delivers the truncation engine *and* thinking traces together as one 
 
 ---
 
+## Architecture Stories
+
+Stories are dependency-ordered: ARCH-1 (directory reorg) must land first, then ARCH-2 (agent I/O refactor) can clean up what ARCH-1 revealed.
+
+---
+
+### ARCH-1: Project Directory Reorganization
+
+**As a** developer working on the codebase,
+**I want** the directory structure to reflect the logical architecture (CLI layer vs agent layer vs shared),
+**so that** it's immediately clear what code belongs where, and import paths communicate intent.
+
+**Depends on**: nothing
+
+**Context & Analysis**:
+
+The current flat structure mixes CLI-only packages (`style`, `spinner`, `prompt`, `input`), agent-only packages (`mcp`, `prompts`, `truncate`), and shared packages (`loglevel`, `config`, `providers`) all at the top level. The `api/` package name is too generic. `main.go` contains ~400 lines of CLI orchestration that obscures the thin-entrypoint pattern.
+
+Current dependency graph (non-test):
+```
+main.go ──→ agent, api, config, input, loglevel, mcp, prompt, prompts, spinner, style, tools
+agent   ──→ api, loglevel, tools, truncate
+mcp     ──→ api, tools
+tools   ──→ api
+truncate──→ loglevel
+prompt  ──→ style
+```
+
+**Target structure**:
+```
+.
+├── main.go                          # 3-line entrypoint: imports cli.Run()
+├── go.mod / go.sum / .gitignore
+├── README.md
+├── clyde                            # Binary
+│
+├── cli/                             # All CLI/REPL orchestration + UI
+│   ├── cli.go                       # Bulk of current main.go (Run, runCLIMode, runREPLMode, etc.)
+│   ├── input/
+│   │   └── input.go
+│   ├── prompt/
+│   │   └── prompt.go
+│   ├── spinner/
+│   │   └── spinner.go
+│   └── style/
+│       └── style.go
+│
+├── agent/                           # Agent loop + agent-only deps
+│   ├── agent.go
+│   ├── mcp/                         # Playwright MCP integration
+│   │   ├── client.go
+│   │   ├── register.go
+│   │   ├── playwright.go
+│   │   ├── snapshot.go
+│   │   ├── types.go
+│   │   └── playwright_tools.json
+│   ├── prompts/                     # System prompt (embedded)
+│   │   ├── prompts.go
+│   │   └── system.txt
+│   └── truncate/
+│       └── truncate.go
+│
+├── providers/                       # Root level — shared API types + client
+│   ├── client.go                    # (renamed from api/)
+│   └── types.go
+│
+├── loglevel/                        # Root level — shared (agent + cli both use it today)
+│   └── loglevel.go
+│
+├── config/                          # Root level — shared
+│   └── config.go
+│
+├── tools/                           # Root level — separate from agent core
+│   └── *.go
+│
+├── audit/                           # Separate binary (stays)
+├── tests/                           # Flat, all package main (stays)
+│   └── *.go
+│
+└── docs/                            # All docs except README.md
+    ├── compaction.md
+    ├── playwright-mcp.md
+    ├── tui.md
+    ├── progress.md
+    ├── todos.md
+    └── whitepaper.md
+```
+
+**Import path mapping**:
+
+| Old import path           | New import path                |
+|---------------------------|--------------------------------|
+| `clyde/api`               | `clyde/providers`              |
+| `clyde/style`             | `clyde/cli/style`              |
+| `clyde/spinner`           | `clyde/cli/spinner`            |
+| `clyde/prompt`            | `clyde/cli/prompt`             |
+| `clyde/input`             | `clyde/cli/input`              |
+| `clyde/mcp`               | `clyde/agent/mcp`              |
+| `clyde/prompts`           | `clyde/agent/prompts`          |
+| `clyde/truncate`          | `clyde/agent/truncate`         |
+
+All type/function references must also be updated (e.g. `api.Client` → `providers.Client`, `api.Message` → `providers.Message`, etc.).
+
+**Execution plan (one atomic commit)**:
+
+1. Safety commit: `git add -A && git commit -m "checkpoint before reorg"`
+2. Delete `errors/` (empty directory)
+3. Move docs: `git mv progress.md docs/`, `git mv todos.md docs/`, `git mv whitepaper.md docs/`
+4. Rename `api/` → `providers/`: `git mv api/ providers/`, change `package api` → `package providers` in both files
+5. Create `cli/` and move UI packages under it: `mkdir -p cli && git mv style/ cli/style/ && git mv spinner/ cli/spinner/ && git mv prompt/ cli/prompt/ && git mv input/ cli/input/`
+6. Move agent-only packages: `git mv mcp/ agent/mcp/ && git mv prompts/ agent/prompts/ && git mv truncate/ agent/truncate/`
+7. Extract `main.go` body → `cli/cli.go` (new file, `package cli`, exports `Run()`); slim `main.go` to thin wrapper
+8. Update `agent/prompts/prompts.go` dev-mode path: `os.ReadFile("prompts/system.txt")` → `os.ReadFile("agent/prompts/system.txt")`
+9. Bulk rewrite all import paths + type references across every `.go` file (source + tests)
+10. Verify: `go build ./...` and `cd tests && go test ./...`
+11. Commit
+
+**Notes on shared packages**:
+- `loglevel/` stays at root because the agent currently imports it (see ARCH-2 for cleanup).
+- `config/` stays at root — used by both CLI (to load config) and potentially agent in the future.
+- `providers/` (née `api/`) stays at root — used by `agent/`, `tools/`, `agent/mcp/`, and `cli/`.
+- `tools/` stays at root and separate from `agent/` — the agent calls into tools, but tools are independently registered and testable.
+- Tests stay flat in `tests/` — all files are `package main` sharing `test_helpers.go`; splitting into subdirs would require separate packages and break the shared helpers.
+
+**Acceptance Criteria**:
+- [ ] Directory structure matches the target layout above.
+- [ ] `main.go` is ≤10 lines: imports `cli` and calls `cli.Run()`.
+- [ ] `cli/cli.go` contains all former `main.go` logic with exported `Run()` entrypoint.
+- [ ] All import paths updated per the mapping table.
+- [ ] All type references updated (`api.X` → `providers.X` everywhere).
+- [ ] `package` declarations updated (`package api` → `package providers`).
+- [ ] `errors/` directory deleted.
+- [ ] `progress.md`, `todos.md`, `whitepaper.md` moved to `docs/`.
+- [ ] `go build ./...` succeeds with zero errors.
+- [ ] `cd tests && go test ./...` — all tests pass (same count as before).
+- [ ] No circular imports.
+- [ ] The `//go:embed system.txt` in `agent/prompts/prompts.go` still works (relative to file).
+- [ ] The dev-mode `os.ReadFile(...)` fallback path is updated.
+
+---
+
+### ARCH-2: Remove I/O Concerns from the Agent (loglevel decoupling)
+
+**As a** developer maintaining the agent package,
+**I want** the agent to have zero display/filtering logic and return all information to callers,
+**so that** the agent is purely a conversation-and-tool-execution engine with no UI coupling.
+
+**Depends on**: ARCH-1 (directory reorg landed first)
+
+**Context & Analysis**:
+
+Today the agent imports `loglevel` and uses it for three things it shouldn't own:
+
+1. **Gating callbacks** — `emit()` checks `a.logLevel.ShouldShow(threshold)` before calling `progressCallback`. The agent decides what the CLI displays. Instead, the agent should emit everything unconditionally; the CLI callback decides whether to show it.
+
+2. **Truncation** — `emitThinking()` passes `a.logLevel` to `truncate.Thinking(text, a.logLevel)`. Truncation is a display concern. The agent should return full text; the CLI truncates before displaying.
+
+3. **Spinner suppression** — `spinnerStart()` checks `a.logLevel != loglevel.Silent`. The CLI provided the callback; it can make this a no-op itself.
+
+After this refactor:
+- `agent/` no longer imports `loglevel/`
+- `agent/truncate/` no longer imports `loglevel/` (truncation functions take plain int limits, or move to `cli/`)
+- `loglevel/` could potentially move under `cli/` (since only the CLI would use it)
+- The agent's callback signatures become simpler (no level parameter needed — the agent just emits, the CLI filters)
+
+**Refactor plan**:
+
+1. **Change `ProgressCallback` signature**: Remove `loglevel.Level` parameter. Instead, use separate callbacks for separate concerns:
+   - `ProgressCallback func(message string)` — tool progress lines (the `→` lines)
+   - `OutputCallback func(output string)` — tool output bodies (the full text)
+   - `DiagnosticCallback func(message string)` — cache info, token counts, etc.
+   - Or: keep one callback but tag with a simple string enum (`"progress"`, `"output"`, `"diagnostic"`) instead of importing loglevel.
+
+2. **Remove `WithLogLevel` from agent**: The agent no longer stores or checks a log level. It emits everything.
+
+3. **Move filtering to CLI**: `cli/cli.go` sets up callbacks that check the log level internally:
+   ```go
+   agent.WithProgressCallback(func(msg string) {
+       if level.ShouldShow(loglevel.Quiet) {
+           // display it
+       }
+   })
+   ```
+
+4. **Move truncation to CLI**: The CLI applies truncation before displaying, not the agent before emitting. `truncate/` either:
+   - Stays under `agent/` but drops its `loglevel` import (takes `maxLines int` instead of `level`), or
+   - Moves to `cli/truncate/` since it's now purely a display concern.
+
+5. **Remove `spinnerCallback` from agent entirely**: The agent doesn't know about spinners. The CLI starts/stops the spinner in its own progress callback based on timing.
+
+6. **Update all tests** that construct agents with `WithLogLevel`.
+
+**Acceptance Criteria**:
+- [ ] `agent/agent.go` has zero imports of `loglevel`.
+- [ ] `agent/truncate/truncate.go` has zero imports of `loglevel` (functions take plain int params or package moves to `cli/`).
+- [ ] The agent emits all progress, output, thinking, and diagnostic information unconditionally via callbacks.
+- [ ] The CLI layer (`cli/cli.go`) is the sole owner of display filtering, truncation, and spinner management.
+- [ ] `loglevel/` is only imported by packages under `cli/` (and could be moved there in a follow-up).
+- [ ] All existing tests pass with updated callback wiring.
+- [ ] No behavioral change from the user's perspective — same output at every log level.
+
+---
+
+---
+
 ### CMP-1: Conversation Token Counting & Automatic Compaction Trigger
 
 **As a** user running a long autonomous session,
