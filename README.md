@@ -1,6 +1,6 @@
 # Clyde
 
-A single-file Go CLI that provides a REPL interface for talking to Claude AI with GitHub integration.
+A modular Go CLI that provides a REPL interface for talking to Claude AI with GitHub integration.
 
 ## Quick Start
 
@@ -141,11 +141,11 @@ BRAVE_SEARCH_API_KEY=BSA-your-key-here
 
 ## Customizing the System Prompt
 
-The system prompt is stored in `prompts/system.txt` and can be customized:
+The system prompt is stored in `agent/prompts/system.txt` and can be customized:
 
-**Development Mode**: If you're running from source, edit `prompts/system.txt` directly. Changes take effect immediately without recompilation.
+**Development Mode**: If you're running from source, edit `agent/prompts/system.txt` directly. Changes take effect immediately without recompilation.
 
-**Production Mode**: When running the compiled binary in a directory without `prompts/system.txt`, it uses the embedded version from compilation time.
+**Production Mode**: When running the compiled binary in a directory without `agent/prompts/system.txt`, it uses the embedded version from compilation time.
 
 This dual-mode approach allows:
 - Fast iteration during development (no rebuild needed)
@@ -154,7 +154,7 @@ This dual-mode approach allows:
 To test prompt changes:
 ```bash
 # Edit the prompt
-vim prompts/system.txt
+vim agent/prompts/system.txt
 
 # Run without rebuilding
 ./clyde
@@ -360,7 +360,7 @@ All three methods can be mixed freely within the same input block. **Ctrl+C** wh
 
 ## Available Tools
 
-The REPL includes eleven integrated tools:
+The REPL includes twelve integrated tools:
 
 1. **list_files**: List files and directories in any path
 2. **read_file**: Read and display file contents
@@ -373,6 +373,7 @@ The REPL includes eleven integrated tools:
 9. **web_search**: Search the internet using Brave Search API
 10. **browse**: Fetch and read web pages (with optional AI extraction)
 11. **include_file**: Include images in conversation for vision analysis
+12. **mcp_playwright_***: 21 browser automation tools via Playwright MCP (optional, enable with `MCP_PLAYWRIGHT=true`)
 
 ## Background Processes & Subagents
 
@@ -467,28 +468,23 @@ Clyde's agent is fully decoupled from the CLI interface and can be embedded in y
 import (
     "fmt"
     "github.com/this-is-alpha-iota/clyde/agent"
-    "github.com/this-is-alpha-iota/clyde/api"
-    "github.com/this-is-alpha-iota/clyde/prompts"
-    _ "github.com/this-is-alpha-iota/clyde/tools" // Register all tools
 )
 
 func main() {
-    // Create API client
-    apiClient := api.NewClient(
-        "your-api-key",
-        "https://api.anthropic.com/v1/messages",
-        "claude-sonnet-4-5-20250929",
-        4096,
-    )
-    
-    // Create agent with progress callback
-    agentInstance := agent.NewAgent(
-        apiClient,
-        prompts.SystemPrompt,
+    // Create agent — it handles client creation, tool registration,
+    // prompt loading, and MCP setup internally.
+    agentInstance := agent.New(
+        agent.Config{
+            APIKey:    "your-api-key",
+            APIURL:    "https://api.anthropic.com/v1/messages",
+            ModelID:   "claude-opus-4-6",
+            MaxTokens: 64000,
+        },
         agent.WithProgressCallback(func(msg string) {
             fmt.Println(msg) // Or send to your UI, log, etc.
         }),
     )
+    defer agentInstance.Close()
     
     // Send messages
     response, err := agentInstance.HandleMessage("What files are in the current directory?")
@@ -506,37 +502,36 @@ func main() {
 The agent provides callback hooks for handling progress messages and errors in your application:
 
 ```go
+cfg := agent.Config{
+    APIKey:  "your-api-key",
+    APIURL:  "https://api.anthropic.com/v1/messages",
+    ModelID: "claude-opus-4-6",
+    MaxTokens: 64000,
+}
+
 // For CLI applications - print to stdout
-agent.NewAgent(apiClient, systemPrompt,
-    agent.WithProgressCallback(func(msg string) {
-        fmt.Println(msg)
-    }),
-)
+agent.New(cfg, agent.WithProgressCallback(func(msg string) {
+    fmt.Println(msg)
+}))
 
 // For HTTP APIs - send via WebSocket
-agent.NewAgent(apiClient, systemPrompt,
-    agent.WithProgressCallback(func(msg string) {
-        websocket.Send(msg)
-    }),
-)
+agent.New(cfg, agent.WithProgressCallback(func(msg string) {
+    websocket.Send(msg)
+}))
 
 // For GUIs - update UI elements
-agent.NewAgent(apiClient, systemPrompt,
-    agent.WithProgressCallback(func(msg string) {
-        statusBar.SetText(msg)
-    }),
-)
+agent.New(cfg, agent.WithProgressCallback(func(msg string) {
+    statusBar.SetText(msg)
+}))
 
 // For logging - capture all progress
 var progressLog []string
-agent.NewAgent(apiClient, systemPrompt,
-    agent.WithProgressCallback(func(msg string) {
-        progressLog = append(progressLog, msg)
-    }),
-)
+agent.New(cfg, agent.WithProgressCallback(func(msg string) {
+    progressLog = append(progressLog, msg)
+}))
 
 // Optional error callback for logging/monitoring
-agent.NewAgent(apiClient, systemPrompt,
+agent.New(cfg,
     agent.WithProgressCallback(progressHandler),
     agent.WithErrorCallback(func(err error) {
         log.Printf("Agent error: %v", err)
@@ -577,10 +572,14 @@ If you don't provide a progress callback, the agent works silently:
 
 ```go
 // Silent agent - no progress output
-agentInstance := agent.NewAgent(apiClient, prompts.SystemPrompt)
+agentInstance := agent.New(agent.Config{
+    APIKey: "your-api-key", APIURL: "https://api.anthropic.com/v1/messages",
+    ModelID: "claude-opus-4-6", MaxTokens: 64000,
+})
+defer agentInstance.Close()
 response, _ := agentInstance.HandleMessage("Hello!")
 ```
 
 ## Documentation
 
-See [PROGRESS.md](PROGRESS.md) for detailed technical documentation.
+See [docs/progress.md](docs/progress.md) for detailed technical documentation.
