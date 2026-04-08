@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/providers"
+	"github.com/this-is-alpha-iota/clyde/agent/providers"
 	"github.com/this-is-alpha-iota/clyde/agent/mcp"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
-	"github.com/this-is-alpha-iota/clyde/tools"
+	"github.com/this-is-alpha-iota/clyde/agent/tools"
 )
 
 // --- Story 4: Registration Tests (unit, no MCP server needed) ---

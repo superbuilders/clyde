@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/providers"
+	"github.com/this-is-alpha-iota/clyde/agent/providers"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 )
 

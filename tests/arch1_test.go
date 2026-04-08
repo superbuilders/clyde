@@ -15,10 +15,10 @@ import (
 	"github.com/this-is-alpha-iota/clyde/cli/prompt"
 	"github.com/this-is-alpha-iota/clyde/cli/spinner"
 	"github.com/this-is-alpha-iota/clyde/cli/style"
-	"github.com/this-is-alpha-iota/clyde/config"
+	"github.com/this-is-alpha-iota/clyde/agent/config"
 	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
-	"github.com/this-is-alpha-iota/clyde/providers"
-	"github.com/this-is-alpha-iota/clyde/tools"
+	"github.com/this-is-alpha-iota/clyde/agent/providers"
+	"github.com/this-is-alpha-iota/clyde/agent/tools"
 )
 
 // TestARCH1_DirectoryStructure verifies the target directory layout from the
@@ -37,11 +37,11 @@ func TestARCH1_DirectoryStructure(t *testing.T) {
 		"agent",
 		"agent/mcp",
 		"agent/prompts",
+		"agent/providers",
+		"agent/tools",
+		"agent/config",
 		"cli/truncate",
-		"providers",
 		"cli/loglevel",
-		"config",
-		"tools",
 		"tests",
 		"docs",
 	}
@@ -60,8 +60,11 @@ func TestARCH1_DirectoryStructure(t *testing.T) {
 
 	// Directories that must NOT exist (old layout remnants)
 	removedDirs := []string{
-		"errors",  // empty, should be deleted
-		"api",     // renamed to providers/
+		"errors",     // empty, should be deleted
+		"api",        // renamed to providers/ (ARCH-1)
+		"providers",  // moved to agent/providers/ (ARCH-3)
+		"config",     // moved to agent/config/ (ARCH-3)
+		"tools",      // moved to agent/tools/ (ARCH-3)
 	}
 
 	for _, dir := range removedDirs {
@@ -151,8 +154,8 @@ func TestARCH1_CLIPackageExists(t *testing.T) {
 
 // TestARCH1_ProvidersPackage verifies the api→providers rename.
 func TestARCH1_ProvidersPackage(t *testing.T) {
-	// Check package declaration
-	for _, f := range []string{"../providers/client.go", "../providers/types.go"} {
+	// Check package declaration (now under agent/providers/)
+	for _, f := range []string{"../agent/providers/client.go", "../agent/providers/types.go"} {
 		content, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatalf("Failed to read %s: %v", f, err)
@@ -180,6 +183,9 @@ func TestARCH1_NoOldImportPaths(t *testing.T) {
 		"prompts",
 		"truncate",
 		"loglevel",
+		"providers", // moved to agent/providers (ARCH-3)
+		"config",    // moved to agent/config (ARCH-3)
+		"tools",     // moved to agent/tools (ARCH-3)
 	}
 
 	err := filepath.Walk("..", func(path string, info os.FileInfo, err error) error {
@@ -192,8 +198,10 @@ func TestARCH1_NoOldImportPaths(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		// Skip this test file itself — it references old paths in test data
-		if strings.HasSuffix(path, "arch1_test.go") {
+		// Skip arch test files — they reference old paths in test assertions
+		if strings.HasSuffix(path, "arch1_test.go") ||
+			strings.HasSuffix(path, "arch2_test.go") ||
+			strings.HasSuffix(path, "arch3_test.go") {
 			return nil
 		}
 
@@ -276,19 +284,20 @@ func TestARCH1_NoCircularImports(t *testing.T) {
 	// The dependency graph (non-test) is:
 	//
 	//   main.go           → cli
-	//   cli                → agent, agent/mcp, agent/prompts, cli/input,
-	//                        cli/prompt, cli/spinner, cli/style, config,
-	//                        loglevel, providers, tools
-	//   agent              → providers, tools
-	//   agent/mcp          → providers, tools
-	//   cli/truncate       → (no clyde imports)
-	//   cli/prompt         → cli/style
-	//   cli                → agent, agent/mcp, agent/prompts, cli/truncate, cli/input,
-	//                        cli/prompt, cli/spinner, cli/style, config,
-	//                        loglevel, providers, tools
-	//   tools              → providers
-	//   loglevel, config, providers, cli/style, cli/spinner, cli/input,
-	//   agent/prompts      → (no clyde imports)
+	//   cli               → agent, cli/input, cli/loglevel, cli/prompt,
+	//                        cli/spinner, cli/style, cli/truncate
+	//   agent             → agent/mcp, agent/providers, agent/prompts, agent/tools
+	//   agent/mcp         → agent/providers, agent/tools
+	//   agent/tools       → agent/providers
+	//   agent/config      → (external: godotenv)
+	//   agent/prompts     → (no clyde imports)
+	//   agent/providers   → (no clyde imports)
+	//   cli/truncate      → (no clyde imports)
+	//   cli/prompt        → cli/style
+	//   cli/loglevel, cli/style, cli/spinner, cli/input → (no clyde imports)
+	//
+	// Key ARCH-3 change: cli only imports agent (not agent/providers,
+	// agent/tools, or agent/config). The agent owns all its internals.
 	//
 	// No circular dependencies exist. If any were introduced, this
 	// test file (which imports all packages) would fail to compile.

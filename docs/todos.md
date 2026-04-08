@@ -1442,15 +1442,15 @@ The agent constructor internally:
 9. Verify: `go build .` and `go vet ./...` and tests pass
 
 **Acceptance Criteria**:
-- [ ] `providers/`, `tools/`, and `config/` are under `agent/` (not at project root).
-- [ ] `cli/cli.go` imports only `agent` (plus its own `cli/*` subpackages) — no `providers`, `tools`, or `config` imports.
-- [ ] `agent.New(cfg agent.Config, ...Option)` is the sole public constructor; it handles client creation, tool registration, MCP setup, and prompt loading internally.
-- [ ] The blank import `_ "clyde/tools"` is eliminated — tool registration is internal to the agent.
-- [ ] `agent.Config` contains all agent-relevant fields; the CLI maps from its own config to `agent.Config`.
-- [ ] The agent package is importable and usable by external consumers: `go get github.com/this-is-alpha-iota/clyde/agent`.
-- [ ] `go build .` succeeds, `go vet ./...` clean, all tests pass.
-- [ ] No circular imports.
-- [ ] No behavioral change from the user's perspective.
+- [x] `providers/`, `tools/`, and `config/` are under `agent/` (not at project root).
+- [x] `cli/cli.go` imports only `agent` (plus its own `cli/*` subpackages) — no `providers`, `tools`, or `config` imports.
+- [x] `agent.New(cfg agent.Config, ...Option)` is the sole public constructor; it handles client creation, tool registration, MCP setup, and prompt loading internally.
+- [x] The blank import `_ "clyde/tools"` is eliminated — tool registration is internal to the agent.
+- [x] `agent.Config` contains all agent-relevant fields; the CLI maps from its own config to `agent.Config`.
+- [x] The agent package is importable and usable by external consumers: `go get github.com/this-is-alpha-iota/clyde/agent`.
+- [x] `go build .` succeeds, `go vet ./...` clean, all tests pass.
+- [x] No circular imports.
+- [x] No behavioral change from the user's perspective.
 
 ---
 

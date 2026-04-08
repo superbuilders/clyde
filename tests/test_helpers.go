@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/providers"
-	"github.com/this-is-alpha-iota/clyde/config"
+	"github.com/this-is-alpha-iota/clyde/agent/providers"
+	"github.com/this-is-alpha-iota/clyde/agent/config"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
-	"github.com/this-is-alpha-iota/clyde/tools"
+	"github.com/this-is-alpha-iota/clyde/agent/tools"
 )
 
 // Test helper functions that wrap the new architecture

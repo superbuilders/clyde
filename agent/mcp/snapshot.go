@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/this-is-alpha-iota/clyde/providers"
+	"github.com/this-is-alpha-iota/clyde/agent/providers"
 )
 
 //go:embed playwright_tools.json

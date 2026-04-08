@@ -8,7 +8,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/agent"
 	"github.com/this-is-alpha-iota/clyde/cli/truncate"
 	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
-	"github.com/this-is-alpha-iota/clyde/providers"
+	"github.com/this-is-alpha-iota/clyde/agent/providers"
 )
 
 // --- ARCH-2: Remove I/O Concerns from the Agent ---

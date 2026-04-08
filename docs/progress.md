@@ -1120,6 +1120,120 @@ cli/loglevel, config, providers, cli/style, cli/spinner, cli/input,
 agent/prompts      → (no clyde imports)
 ```
 
+### ARCH-3: Encapsulate Agent as a Self-Contained Package (Completed 2026-07-14)
+
+**Story**: Move all agent dependencies (`providers/`, `tools/`, `config/`) under `agent/` behind a high-level public API, so the CLI only talks to the `agent` package's public surface.
+
+**Depends on**: ARCH-1 (directory reorg) + ARCH-2 (agent I/O decoupling)
+
+**What Changed**:
+
+| Change | Details |
+|--------|---------|
+| `providers/` → `agent/providers/` | API client + types are agent internals |
+| `tools/` → `agent/tools/` | Tool registry + 12 implementations are agent internals |
+| `config/` → `agent/config/` | Config loading is agent-internal |
+| `agent.New(cfg Config, ...Option)` | New primary constructor handles everything |
+| `agent.Config` struct | All agent-relevant fields in one place |
+| Blank import `_ "agent/tools"` | Moved inside `agent/agent.go` (not in CLI) |
+| `cli/cli.go` | Only imports `agent` — zero `agent/*` internal imports |
+
+**Key API — the agent owns its own construction**:
+```go
+// Before (CLI assembled internals):
+client := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+agentInstance := agent.NewAgent(client, prompts.SystemPrompt, ...opts)
+
+// After (CLI passes config, agent builds itself):
+agentInstance := agent.New(agent.Config{
+    APIKey: cfg.APIKey,
+    APIURL: cfg.APIURL,
+    ...
+}, agent.WithProgressCallback(...))
+```
+
+The agent constructor internally:
+1. Creates its own `providers.Client`
+2. Configures thinking (adaptive/manual/disabled)
+3. Registers tools (blank import triggers init())
+4. Loads the system prompt
+5. Starts MCP Playwright if configured
+
+**Config split**: The CLI reads `~/.clyde/config` using `godotenv` and maps agent-relevant fields into `agent.Config`. The CLI owns config file discovery; the agent owns what happens with the config values.
+
+**Testing approach**: Rather than writing separate functional tests for ARCH-3, the verification is:
+1. `go build .` succeeds (proves no circular imports, all paths resolve)
+2. `go vet ./...` clean (proves no package issues)
+3. All existing tests pass (proves no behavioral regression)
+4. Structural guard tests in `arch3_test.go` (14 tests) verify directory layout, import boundaries, and API surface
+
+The structural tests are guardrails against regression, not functional verification — Go's compiler is the real architectural test.
+
+**Tests** (`tests/arch3_test.go`, 14 tests):
+- `TestARCH3_PackagesUnderAgent` — providers, tools, config under agent/
+- `TestARCH3_CLIImportsOnlyAgent` — cli/cli.go has no agent/* internal imports
+- `TestARCH3_NoBlankToolsImportInCLI` — no `_ "clyde/tools"` in CLI
+- `TestARCH3_AgentNewConstructor` — `agent.New(cfg Config)` exists
+- `TestARCH3_AgentConfigFields` — all 10 config fields compile
+- `TestARCH3_AgentNewCreatesWorkingAgent` — full lifecycle with all callbacks
+- `TestARCH3_AgentCloseMethod` — idempotent close
+- `TestARCH3_AgentUsageTypeExported` — Usage accessible without importing providers
+- `TestARCH3_NewAgentStillWorks` — backward-compatible lower-level constructor
+- `TestARCH3_ToolsRegisteredByAgent` — blank import inside agent.go
+- `TestARCH3_AgentOwnsMCPSetup` — MCP setup in New()
+- `TestARCH3_AgentOwnsPromptLoading` — system prompt loaded internally
+- `TestARCH3_AgentOwnsClientCreation` — providers.NewClient in New()
+- `TestARCH3_NoBehavioralChange` — documents the architecture
+
+**Bug fixed**: `arch1_test.go` "no old import paths" scan was matching string literals in `arch3_test.go` test assertions as false positives. Fixed by skipping all arch test files during the scan (they reference old paths as test data).
+
+**Import path mapping (cumulative from ARCH-1 + ARCH-3)**:
+| Old | New |
+|-----|-----|
+| `clyde/api` | `clyde/agent/providers` |
+| `clyde/providers` | `clyde/agent/providers` |
+| `clyde/tools` | `clyde/agent/tools` |
+| `clyde/config` | `clyde/agent/config` |
+| `clyde/style` | `clyde/cli/style` |
+| `clyde/spinner` | `clyde/cli/spinner` |
+| `clyde/prompt` | `clyde/cli/prompt` |
+| `clyde/input` | `clyde/cli/input` |
+| `clyde/mcp` | `clyde/agent/mcp` |
+| `clyde/prompts` | `clyde/agent/prompts` |
+| `clyde/truncate` | `clyde/cli/truncate` |
+| `clyde/loglevel` | `clyde/cli/loglevel` |
+
+**Dependency graph (final)**:
+```
+main.go           → cli
+cli               → agent, cli/input, cli/loglevel, cli/prompt,
+                     cli/spinner, cli/style, cli/truncate
+agent             → agent/mcp, agent/providers, agent/prompts, agent/tools
+agent/mcp         → agent/providers, agent/tools
+agent/tools       → agent/providers
+agent/config      → (external: godotenv)
+agent/prompts     → (no clyde imports)
+agent/providers   → (no clyde imports)
+cli/truncate      → (no clyde imports)
+cli/prompt        → cli/style
+cli/loglevel, cli/style, cli/spinner, cli/input → (no clyde imports)
+```
+
+**Design decision on ARCH tests**:
+Separate test files for each ARCH story are useful as **structural guards** against regression, but they are NOT the primary verification. The real proof is:
+1. **Compilation** — `go build .` enforces import rules and circular dependency prevention
+2. **Existing tests** — if all functional tests pass, the architecture is serving its purpose
+3. **`go vet`** — catches package-level issues
+
+The arch test files are documentation-as-tests: they codify architectural intent so future changes that violate boundaries are caught. But they shouldn't be over-relied on — source-level string scanning is inherently fragile (as the false positive bug demonstrated).
+
+**Verification**:
+- `go build .` succeeds
+- `go vet ./...` clean
+- 34 ARCH tests pass (9 ARCH-1 + 11 ARCH-2 + 14 ARCH-3)
+- All unit tests pass
+- Zero behavioral change
+
 ### ARCH-1: Project Directory Reorganization (Completed 2026-07-14)
 
 **Story**: Reorganize the codebase so the directory structure reflects the logical architecture (CLI layer vs agent layer vs shared).

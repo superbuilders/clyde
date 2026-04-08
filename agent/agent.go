@@ -4,9 +4,41 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/this-is-alpha-iota/clyde/providers"
-	"github.com/this-is-alpha-iota/clyde/tools"
+	"github.com/this-is-alpha-iota/clyde/agent/mcp"
+	"github.com/this-is-alpha-iota/clyde/agent/prompts"
+	"github.com/this-is-alpha-iota/clyde/agent/providers"
+	"github.com/this-is-alpha-iota/clyde/agent/tools"
+	// Blank-import all tool packages so their init() functions register tools
+	// into the global registry. This is the ONLY place this import exists —
+	// external consumers never need to do it.
+	_ "github.com/this-is-alpha-iota/clyde/agent/tools"
 )
+
+// Config holds the agent-relevant configuration fields.
+// The CLI reads its config file and maps the relevant fields into this struct
+// before constructing the agent.
+type Config struct {
+	// APIKey is the Anthropic API key (required).
+	APIKey string
+	// APIURL is the Claude API endpoint URL (e.g. "https://api.anthropic.com/v1/messages").
+	APIURL string
+	// ModelID is the Claude model identifier (e.g. "claude-opus-4-6").
+	ModelID string
+	// MaxTokens is the maximum output tokens per API call.
+	MaxTokens int
+	// ContextWindowSize is the model's context window in tokens (for diagnostic display).
+	ContextWindowSize int
+	// ThinkingBudget configures extended thinking. 0 = adaptive (default), >0 = manual budget.
+	ThinkingBudget int
+	// NoThink disables extended thinking entirely when true.
+	NoThink bool
+	// BraveSearchAPIKey is the optional Brave Search API key for the web_search tool.
+	BraveSearchAPIKey string
+	// MCPPlaywright enables Playwright MCP browser automation when true.
+	MCPPlaywright bool
+	// MCPPlaywrightArgs are extra args for npx @playwright/mcp (e.g. "--headless").
+	MCPPlaywrightArgs string
+}
 
 // ProgressCallback receives tool progress lines (the → lines).
 // Called unconditionally for every tool execution.
@@ -47,6 +79,7 @@ type Agent struct {
 	errorCallback      ErrorCallback
 	lastUsage          providers.Usage // Token usage from the most recent API response
 	contextWindowSize  int             // Model context window size in tokens (for diagnostic display)
+	mcpServer          *mcp.PlaywrightServer // MCP server (nil if not enabled)
 }
 
 // AgentOption is a functional option for configuring an Agent
@@ -105,7 +138,66 @@ func WithContextWindowSize(size int) AgentOption {
 	}
 }
 
-// NewAgent creates a new agent with optional configuration
+// New creates a new Agent from a Config. This is the primary public
+// constructor. It internally:
+//   - Creates the API client (with optional thinking configuration)
+//   - Loads the system prompt
+//   - Sets up MCP Playwright tools if configured
+//
+// The caller only needs to import the agent package — no need to import
+// providers, tools, config, or prompts.
+func New(cfg Config, opts ...AgentOption) *Agent {
+	// Create API client
+	client := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+
+	// Configure thinking
+	if !cfg.NoThink {
+		thinking := &providers.ThinkingConfig{
+			Type: "adaptive",
+		}
+		if cfg.ThinkingBudget > 0 {
+			thinking = &providers.ThinkingConfig{
+				Type:         "enabled",
+				BudgetTokens: cfg.ThinkingBudget,
+			}
+		}
+		client = client.WithThinking(thinking)
+	}
+
+	// Tool registration is handled by the blank import of agent/tools above,
+	// which triggers init() functions in each tool file. No action needed here.
+
+	a := &Agent{
+		apiClient:         client,
+		systemPrompt:      prompts.SystemPrompt,
+		history:           []providers.Message{},
+		contextWindowSize: cfg.ContextWindowSize,
+	}
+
+	// Apply functional options
+	for _, opt := range opts {
+		opt(a)
+	}
+
+	// Setup Playwright MCP if configured
+	if cfg.MCPPlaywright {
+		server := mcp.NewPlaywrightServer(cfg.MCPPlaywrightArgs)
+		if err := mcp.RegisterPlaywrightTools(server); err != nil {
+			if a.errorCallback != nil {
+				a.errorCallback(fmt.Errorf("failed to register Playwright MCP tools: %w", err))
+			}
+		} else {
+			a.mcpServer = server
+		}
+	}
+
+	return a
+}
+
+// NewAgent creates a new agent with an explicit API client and system prompt.
+// This is a lower-level constructor primarily for tests and advanced library
+// consumers who need full control over the client and prompt. For typical
+// usage, prefer New(cfg, ...opts).
 func NewAgent(apiClient *providers.Client, systemPrompt string, opts ...AgentOption) *Agent {
 	agent := &Agent{
 		apiClient:    apiClient,
@@ -121,9 +213,23 @@ func NewAgent(apiClient *providers.Client, systemPrompt string, opts ...AgentOpt
 	return agent
 }
 
+// Close releases resources owned by the agent (e.g. MCP server subprocess).
+// It is safe to call multiple times. If the agent was created without MCP,
+// Close is a no-op.
+func (a *Agent) Close() error {
+	if a.mcpServer != nil {
+		return a.mcpServer.Close()
+	}
+	return nil
+}
+
+// Usage is re-exported from providers for use by external consumers
+// who should not need to import agent/providers directly.
+type Usage = providers.Usage
+
 // LastUsage returns the token usage from the most recent API response.
 // Returns a zero-value Usage if no API call has been made yet.
-func (a *Agent) LastUsage() providers.Usage {
+func (a *Agent) LastUsage() Usage {
 	return a.lastUsage
 }
 

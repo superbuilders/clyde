@@ -4,6 +4,10 @@
 // management, spinner control, display filtering, truncation, and mode
 // selection (CLI vs REPL). The agent package handles conversation logic;
 // this package handles all display concerns.
+//
+// The CLI imports only the agent package (plus its own cli/* subpackages).
+// It never reaches into agent/providers, agent/tools, or agent/config
+// directly — all agent construction goes through agent.New().
 package cli
 
 import (
@@ -12,20 +16,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/joho/godotenv"
+
 	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/agent/mcp"
-	"github.com/this-is-alpha-iota/clyde/agent/prompts"
-	"github.com/this-is-alpha-iota/clyde/cli/truncate"
 	"github.com/this-is-alpha-iota/clyde/cli/input"
+	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
 	"github.com/this-is-alpha-iota/clyde/cli/prompt"
 	"github.com/this-is-alpha-iota/clyde/cli/spinner"
 	"github.com/this-is-alpha-iota/clyde/cli/style"
-	"github.com/this-is-alpha-iota/clyde/config"
-	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
-	"github.com/this-is-alpha-iota/clyde/providers"
-	_ "github.com/this-is-alpha-iota/clyde/tools" // Import tools to register them
+	"github.com/this-is-alpha-iota/clyde/cli/truncate"
 )
 
 // Run is the main entrypoint for the Clyde CLI application.
@@ -49,45 +51,54 @@ func Run() {
 	}
 }
 
-// setupMCPPlaywright registers Playwright MCP tools if configured.
-// Returns the server (for later cleanup) or nil if not enabled.
-func setupMCPPlaywright(cfg *config.Config) *mcp.PlaywrightServer {
-	if !cfg.MCPPlaywright {
-		return nil
+// loadAgentConfig reads the config file and returns an agent.Config.
+// The CLI owns config file discovery and parsing; it maps the result
+// into the agent's Config struct.
+func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
+	// Check if file exists
+	if _, err := os.Stat(configPath); err != nil {
+		return agent.Config{}, fmt.Errorf("config file '%s' not found: %w", configPath, err)
 	}
 
-	server := mcp.NewPlaywrightServer(cfg.MCPPlaywrightArgs)
-	if err := mcp.RegisterPlaywrightTools(server); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to register Playwright MCP tools: %v\n", err)
-		return nil
+	// Load environment variables from the file
+	if err := godotenv.Load(configPath); err != nil {
+		return agent.Config{}, fmt.Errorf("error loading config file from '%s': %w", configPath, err)
 	}
 
-	return server
-}
+	// Verify required API key is present
+	apiKey := os.Getenv("TS_AGENT_API_KEY")
+	if apiKey == "" {
+		return agent.Config{}, fmt.Errorf("TS_AGENT_API_KEY not found in '%s'\n\n"+
+			"Please add this line to your config file:\n"+
+			"  TS_AGENT_API_KEY=your-anthropic-api-key-here\n\n"+
+			"Get your API key from: https://console.anthropic.com/", configPath)
+	}
 
-// createAPIClient creates an API client with optional thinking enabled.
-// When noThink is false and the model supports it, adaptive thinking is enabled.
-func createAPIClient(cfg *config.Config, noThink bool) *providers.Client {
-	client := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
-
-	if !noThink {
-		// Enable adaptive thinking (recommended for Opus 4.6 and Sonnet 4.6).
-		thinking := &providers.ThinkingConfig{
-			Type: "adaptive",
+	// Parse optional thinking budget tokens
+	thinkingBudget := 0
+	if budgetStr := os.Getenv("THINKING_BUDGET_TOKENS"); budgetStr != "" {
+		budget, err := strconv.Atoi(budgetStr)
+		if err != nil {
+			return agent.Config{}, fmt.Errorf("THINKING_BUDGET_TOKENS must be a number, got %q: %w", budgetStr, err)
 		}
-
-		// If a budget is configured, use manual mode instead
-		if cfg.ThinkingBudgetTokens > 0 {
-			thinking = &providers.ThinkingConfig{
-				Type:         "enabled",
-				BudgetTokens: cfg.ThinkingBudgetTokens,
-			}
+		if budget < 1024 {
+			return agent.Config{}, fmt.Errorf("THINKING_BUDGET_TOKENS must be >= 1024, got %d", budget)
 		}
-
-		client = client.WithThinking(thinking)
+		thinkingBudget = budget
 	}
 
-	return client
+	return agent.Config{
+		APIKey:            apiKey,
+		APIURL:            "https://api.anthropic.com/v1/messages",
+		ModelID:           "claude-opus-4-6",
+		MaxTokens:         64000,
+		ContextWindowSize: 200000, // Claude Opus 4.6 context window
+		ThinkingBudget:    thinkingBudget,
+		NoThink:           noThink,
+		BraveSearchAPIKey: os.Getenv("BRAVE_SEARCH_API_KEY"),
+		MCPPlaywright:     os.Getenv("MCP_PLAYWRIGHT") == "true",
+		MCPPlaywrightArgs: os.Getenv("MCP_PLAYWRIGHT_ARGS"),
+	}, nil
 }
 
 // runCLIMode executes the agent on a single prompt and exits
@@ -125,29 +136,17 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 		os.Exit(1)
 	}
 
-	// Load config
+	// Load config and build agent.Config
 	configPath := getConfigPath()
-	cfg, err := config.LoadFromFile(configPath)
+	cfg, err := loadAgentConfig(configPath, noThink)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	// Create API client with thinking
-	apiClient := createAPIClient(cfg, noThink)
-
-	// Setup Playwright MCP if configured
-	mcpServer := setupMCPPlaywright(cfg)
-	if mcpServer != nil {
-		defer mcpServer.Close()
-	}
-
 	// Create agent — the CLI layer owns all display filtering.
 	// The agent emits everything unconditionally; we filter here.
-	agentInstance := agent.NewAgent(
-		apiClient,
-		prompts.SystemPrompt,
-		agent.WithContextWindowSize(cfg.ContextWindowSize),
+	agentInstance := agent.New(cfg,
 		agent.WithProgressCallback(func(msg string) {
 			if level.ShouldShow(loglevel.Quiet) {
 				fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Quiet, msg))
@@ -185,7 +184,11 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 				}
 			}
 		}),
+		agent.WithErrorCallback(func(err error) {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		}),
 	)
+	defer agentInstance.Close()
 
 	// Execute prompt
 	response, err := agentInstance.HandleMessage(userPrompt)
@@ -201,23 +204,12 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 
 // runREPLMode runs the interactive REPL
 func runREPLMode(level loglevel.Level, noThink bool) {
-	// Determine config file location (CLI layer responsibility)
+	// Load config and build agent.Config
 	configPath := getConfigPath()
-
-	// Load configuration from the determined path
-	cfg, err := config.LoadFromFile(configPath)
+	cfg, err := loadAgentConfig(configPath, noThink)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
-	}
-
-	// Create API client with thinking
-	apiClient := createAPIClient(cfg, noThink)
-
-	// Setup Playwright MCP if configured
-	mcpServer := setupMCPPlaywright(cfg)
-	if mcpServer != nil {
-		defer mcpServer.Close()
 	}
 
 	// Create spinner for animated progress display (REPL mode only).
@@ -229,10 +221,7 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 
 	// Create agent — the CLI layer owns all display filtering, truncation,
 	// and spinner management. The agent emits everything unconditionally.
-	agentInstance := agent.NewAgent(
-		apiClient,
-		prompts.SystemPrompt,
-		agent.WithContextWindowSize(cfg.ContextWindowSize),
+	agentInstance := agent.New(cfg,
 		agent.WithSpinnerCallback(func(start bool, message string) {
 			if level == loglevel.Silent {
 				return
@@ -325,7 +314,11 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 			}
 			fmt.Println(StyleMessage(loglevel.Debug, msg))
 		}),
+		agent.WithErrorCallback(func(err error) {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		}),
 	)
+	defer agentInstance.Close()
 
 	// Start REPL
 	fmt.Println("Clyde - AI Coding Agent - Type 'exit' or 'quit' to exit")
@@ -350,7 +343,7 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 	if err != nil {
 		// Fall back to basic bufio reader if readline fails
 		fmt.Fprintf(os.Stderr, "Warning: Rich input unavailable (%v), using basic input\n", err)
-		runREPLBasicMode(level, noThink, apiClient, sp, cfg)
+		runREPLBasicMode(level, agentInstance, sp, cfg.ContextWindowSize)
 		return
 	}
 	defer reader.Close()
@@ -404,94 +397,12 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 }
 
 // runREPLBasicMode is the fallback REPL when readline is unavailable.
-func runREPLBasicMode(level loglevel.Level, noThink bool, apiClient *providers.Client, sp *spinner.Spinner, cfg *config.Config) {
+func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spinner.Spinner, contextWindowSize int) {
 	var lastProgressMsg string
 
-	agentInstance := agent.NewAgent(
-		apiClient,
-		prompts.SystemPrompt,
-		agent.WithContextWindowSize(cfg.ContextWindowSize),
-		agent.WithSpinnerCallback(func(start bool, message string) {
-			if level == loglevel.Silent {
-				return
-			}
-			if start {
-				sp.Start(message)
-			} else {
-				if sp.IsActive() {
-					sp.Stop()
-				}
-			}
-		}),
-		agent.WithThinkingCallback(func(text string) {
-			if !level.ShouldShow(loglevel.Normal) {
-				return
-			}
-			if sp.IsActive() {
-				sp.Stop()
-			}
-			if lastProgressMsg != "" {
-				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
-				lastProgressMsg = ""
-			}
-			displayed := truncateForLevel(text, truncate.ThinkingLineLimit, level)
-			fmt.Println(style.FormatThinking(displayed))
-		}),
-		agent.WithProgressCallback(func(msg string) {
-			if !level.ShouldShow(loglevel.Quiet) {
-				return
-			}
-			if lastProgressMsg != "" {
-				if sp.IsActive() {
-					sp.Stop()
-				}
-				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
-			}
-			lastProgressMsg = msg
-			if level != loglevel.Silent {
-				sp.Start(spinner.FormatSpinnerMessage(msg))
-			}
-		}),
-		agent.WithOutputCallback(func(output string) {
-			if !level.ShouldShow(loglevel.Normal) {
-				return
-			}
-			if sp.IsActive() {
-				sp.Stop()
-			}
-			if lastProgressMsg != "" {
-				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
-				lastProgressMsg = ""
-			}
-			displayed := truncateForLevel(output, truncate.ToolOutputLineLimit, level)
-			fmt.Println()
-			fmt.Println(StyleMessage(loglevel.Normal, displayed))
-			fmt.Println()
-		}),
-		agent.WithDiagnosticCallback(func(msg string) {
-			if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
-				if !level.ShouldShow(loglevel.Verbose) {
-					return
-				}
-			} else if strings.HasPrefix(msg, "💾 Cache:") && strings.Contains(msg, "|") {
-				if !level.ShouldShow(loglevel.Debug) {
-					return
-				}
-			} else {
-				if !level.ShouldShow(loglevel.Debug) {
-					return
-				}
-			}
-			if sp.IsActive() {
-				sp.Stop()
-				if lastProgressMsg != "" {
-					fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
-					lastProgressMsg = ""
-				}
-			}
-			fmt.Println(StyleMessage(loglevel.Debug, msg))
-		}),
-	)
+	// The agent is already created by the caller. We just need to set up
+	// the basic input loop. The callbacks were already configured when the
+	// agent was created in runREPLMode.
 
 	reader := bufio.NewReader(os.Stdin)
 	contextPercent := -1
@@ -532,7 +443,7 @@ func runREPLBasicMode(level loglevel.Level, noThink bool, apiClient *providers.C
 
 		usage := agentInstance.LastUsage()
 		totalInput := usage.InputTokens + usage.CacheReadInputTokens
-		contextPercent = prompt.CalculateContextPercent(totalInput, cfg.ContextWindowSize)
+		contextPercent = prompt.CalculateContextPercent(totalInput, contextWindowSize)
 	}
 }
 
