@@ -17,7 +17,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/agent"
 	"github.com/this-is-alpha-iota/clyde/agent/mcp"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
-	"github.com/this-is-alpha-iota/clyde/agent/truncate"
+	"github.com/this-is-alpha-iota/clyde/cli/truncate"
 	"github.com/this-is-alpha-iota/clyde/cli/input"
 	"github.com/this-is-alpha-iota/clyde/cli/prompt"
 	"github.com/this-is-alpha-iota/clyde/cli/spinner"

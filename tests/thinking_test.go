@@ -11,7 +11,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/providers"
 	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
-	"github.com/this-is-alpha-iota/clyde/agent/truncate"
+	"github.com/this-is-alpha-iota/clyde/cli/truncate"
 )
 
 // --- Truncation Engine Tests (exercised here alongside thinking) ---

@@ -11,7 +11,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 	"github.com/this-is-alpha-iota/clyde/cli/style"
-	"github.com/this-is-alpha-iota/clyde/agent/truncate"
+	"github.com/this-is-alpha-iota/clyde/cli/truncate"
 )
 
 // --- Unit Tests: Tool Output Truncation ---

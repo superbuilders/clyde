@@ -10,7 +10,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/agent"
 	"github.com/this-is-alpha-iota/clyde/agent/mcp"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
-	"github.com/this-is-alpha-iota/clyde/agent/truncate"
+	"github.com/this-is-alpha-iota/clyde/cli/truncate"
 	"github.com/this-is-alpha-iota/clyde/cli/input"
 	"github.com/this-is-alpha-iota/clyde/cli/prompt"
 	"github.com/this-is-alpha-iota/clyde/cli/spinner"
@@ -37,7 +37,7 @@ func TestARCH1_DirectoryStructure(t *testing.T) {
 		"agent",
 		"agent/mcp",
 		"agent/prompts",
-		"agent/truncate",
+		"cli/truncate",
 		"providers",
 		"cli/loglevel",
 		"config",
@@ -281,9 +281,9 @@ func TestARCH1_NoCircularImports(t *testing.T) {
 	//                        loglevel, providers, tools
 	//   agent              → providers, tools
 	//   agent/mcp          → providers, tools
-	//   agent/truncate     → (no clyde imports)
+	//   cli/truncate       → (no clyde imports)
 	//   cli/prompt         → cli/style
-	//   cli                → agent, agent/mcp, agent/prompts, agent/truncate, cli/input,
+	//   cli                → agent, agent/mcp, agent/prompts, cli/truncate, cli/input,
 	//                        cli/prompt, cli/spinner, cli/style, config,
 	//                        loglevel, providers, tools
 	//   tools              → providers

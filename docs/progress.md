@@ -45,12 +45,12 @@ Built a Go CLI that provides a REPL (Read-Eval-Print Loop) interface for convers
 │   ├── input/               # Readline wrapper (multiline, history)
 │   ├── prompt/              # Git info + context % prompt line
 │   ├── spinner/             # Braille dot loading spinner
-│   └── style/               # ANSI color helpers
+│   ├── style/               # ANSI color helpers
+│   └── truncate/            # Thinking/output truncation
 ├── agent/                   # Agent loop + agent-only deps
 │   ├── agent.go             # Conversation orchestration
 │   ├── mcp/                 # Playwright MCP integration
-│   ├── prompts/             # System prompt (embedded)
-│   └── truncate/            # Thinking/output truncation
+│   └── prompts/             # System prompt (embedded)
 ├── providers/               # API types + client (renamed from api/)
 │   ├── client.go
 │   └── types.go
@@ -988,7 +988,27 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-07-14)
 
-**Latest Update**: Move `loglevel/` under `cli/loglevel/` ✅
+**Latest Update**: Move `truncate/` from `agent/` to `cli/` ✅
+
+### Move truncate to cli/truncate (Completed 2026-07-14)
+
+**Story**: `truncate` is a pure text transformation package with no agent logic. Its only consumer is the CLI layer (which decides whether to call it based on log level). It belongs alongside `loglevel/`, `style/`, and `spinner/` in `cli/`.
+
+**What Changed**:
+- Moved `agent/truncate/truncate.go` → `cli/truncate/truncate.go`
+- Updated import path: `clyde/agent/truncate` → `clyde/cli/truncate` (7 files: `cli/cli.go`, `tests/arch1_test.go`, `tests/arch2_test.go`, `tests/thinking_test.go`, `tests/tool_output_test.go`, `tests/truncate_test.go`)
+- Updated `arch1_test.go`: required directory, dependency graph comments, import path
+- Updated `arch2_test.go`: source-level assertion now checks `cli/truncate/truncate.go`
+
+**Verification**:
+- `go build .` succeeds
+- `go vet ./...` clean
+- All ARCH-1, ARCH-2, and truncate tests pass (26 tests)
+
+**Import path mapping**:
+| Old | New |
+|-----|-----|
+| `clyde/agent/truncate` | `clyde/cli/truncate` |
 
 ### Move loglevel to cli/loglevel (Completed 2026-07-14)
 
@@ -1088,12 +1108,12 @@ Truncation functions now always truncate. The CLI decides whether to call them b
 **Dependency graph (updated)**:
 ```
 main.go           → cli
-cli                → agent, agent/mcp, agent/prompts, agent/truncate,
+cli                → agent, agent/mcp, agent/prompts, cli/truncate,
                      cli/input, cli/loglevel, cli/prompt, cli/spinner,
                      cli/style, config, providers, tools
 agent              → providers, tools            (no loglevel!)
 agent/mcp          → providers, tools
-agent/truncate     → (no clyde imports!)         (no loglevel!)
+cli/truncate       → (no clyde imports!)         (no loglevel!)
 cli/prompt         → cli/style
 tools              → providers
 cli/loglevel, config, providers, cli/style, cli/spinner, cli/input,
