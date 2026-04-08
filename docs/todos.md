@@ -1348,6 +1348,112 @@ After this refactor:
 
 ---
 
+### ARCH-3: Encapsulate Agent as a Self-Contained Package
+
+**As a** developer who wants to distribute the agent as an independent, importable Go package,
+**I want** all agent dependencies (`providers/`, `tools/`, `config/`) moved under `agent/` behind a high-level public API,
+**so that** the CLI only talks to the `agent` package's public surface — never reaching into its internals.
+
+**Depends on**: ARCH-2 (agent I/O decoupling — already done)
+
+**Context & Analysis**:
+
+Today the CLI assembles the agent's internals directly:
+
+```go
+// cli/cli.go — reaches into agent internals
+client := providers.NewClient(apiKey, url, model, maxTokens)   // creates provider client
+_ "clyde/tools"                                                 // blank import for init() registration
+agent := agent.NewAgent(client, systemPrompt, ...opts)
+```
+
+Three root-level packages (`providers/`, `tools/`, `config/`) are shared between `cli/` and `agent/`, but every field in `config.Config` is agent business, every tool is agent business, and `providers` is the agent's API client layer. The CLI imports them only to wire them into the agent.
+
+**Target structure**:
+```
+.
+├── main.go                  # Thin entrypoint → cli.Run()
+├── cli/                     # CLI/REPL orchestration + UI
+│   ├── cli.go
+│   ├── input/
+│   ├── loglevel/
+│   ├── prompt/
+│   ├── spinner/
+│   ├── style/
+│   └── truncate/
+├── agent/                   # Self-contained agent package
+│   ├── agent.go             # Public API: New(Config, ...Option) → *Agent
+│   ├── config/              # Agent config (moved from root)
+│   ├── providers/           # API client + types (moved from root)
+│   ├── tools/               # Tool registry + implementations (moved from root)
+│   ├── mcp/
+│   └── prompts/
+└── tests/
+```
+
+**Key API change** — the agent owns its own construction:
+
+```go
+// Before (CLI assembles internals):
+client := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+client = client.WithThinking(thinkingConfig)
+agentInstance := agent.NewAgent(client, prompts.SystemPrompt,
+    agent.WithContextWindowSize(cfg.ContextWindowSize),
+    agent.WithProgressCallback(func(msg string) { ... }),
+    ...
+)
+
+// After (CLI passes config, agent builds itself):
+agentInstance := agent.New(agent.Config{
+    APIKey:            cfg.APIKey,
+    APIURL:            cfg.APIURL,
+    ModelID:           cfg.ModelID,
+    MaxTokens:         cfg.MaxTokens,
+    BraveSearchAPIKey: cfg.BraveSearchAPIKey,
+    ContextWindowSize: cfg.ContextWindowSize,
+    ThinkingBudget:    cfg.ThinkingBudgetTokens,
+    MCPPlaywright:     cfg.MCPPlaywright,
+    MCPPlaywrightArgs: cfg.MCPPlaywrightArgs,
+},
+    agent.WithProgressCallback(func(msg string) { ... }),
+    agent.WithThinkingCallback(func(text string) { ... }),
+    ...
+)
+```
+
+The agent constructor internally:
+1. Creates its own `providers.Client`
+2. Registers tools (no blank import / init() magic from outside)
+3. Starts MCP if configured
+4. Loads the system prompt
+
+**Config split**: The CLI reads `~/.clyde/config` into its own struct (which includes CLI-specific fields like the config path itself), then maps the agent-relevant fields into `agent.Config`. The `config/` package under `agent/` defines only what the agent needs.
+
+**Execution plan**:
+
+1. Define `agent.Config` struct with all fields the agent needs
+2. Move `config/` → `agent/config/` (or inline into agent if small enough)
+3. Move `providers/` → `agent/providers/`
+4. Move `tools/` → `agent/tools/`
+5. Agent constructor creates its own client + registers tools internally
+6. Remove `providers` and `tools` imports from `cli/cli.go`
+7. CLI loads config file itself (simple key=value parsing), constructs `agent.Config`
+8. Update all import paths across source + tests
+9. Verify: `go build .` and `go vet ./...` and tests pass
+
+**Acceptance Criteria**:
+- [ ] `providers/`, `tools/`, and `config/` are under `agent/` (not at project root).
+- [ ] `cli/cli.go` imports only `agent` (plus its own `cli/*` subpackages) — no `providers`, `tools`, or `config` imports.
+- [ ] `agent.New(cfg agent.Config, ...Option)` is the sole public constructor; it handles client creation, tool registration, MCP setup, and prompt loading internally.
+- [ ] The blank import `_ "clyde/tools"` is eliminated — tool registration is internal to the agent.
+- [ ] `agent.Config` contains all agent-relevant fields; the CLI maps from its own config to `agent.Config`.
+- [ ] The agent package is importable and usable by external consumers: `go get github.com/this-is-alpha-iota/clyde/agent`.
+- [ ] `go build .` succeeds, `go vet ./...` clean, all tests pass.
+- [ ] No circular imports.
+- [ ] No behavioral change from the user's perspective.
+
+---
+
 ### CMP-1: Conversation Token Counting & Automatic Compaction Trigger
 
 **As a** user running a long autonomous session,
