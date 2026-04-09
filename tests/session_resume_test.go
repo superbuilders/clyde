@@ -368,15 +368,15 @@ func TestReconstructHistory_DropsTrailingUserMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Should have warning about dropped message
+	// Should have warning about trimmed message (file preserved on disk)
 	hasDropWarning := false
 	for _, w := range warnings {
-		if strings.Contains(w, "dropping trailing user message") {
+		if strings.Contains(w, "trimming trailing user message") {
 			hasDropWarning = true
 		}
 	}
 	if !hasDropWarning {
-		t.Error("Expected warning about dropped trailing user message")
+		t.Errorf("Expected warning about trimmed trailing user message, got: %v", warnings)
 	}
 
 	// Should be 2 messages: user + assistant (trailing user dropped)

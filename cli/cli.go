@@ -481,7 +481,7 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 			break
 		}
 
-		response, _ := agentInstance.HandleMessage(userInput)
+		response, handleErr := agentInstance.HandleMessage(userInput)
 
 		// Ensure spinner is stopped before printing the response
 		if sp.IsActive() {
@@ -490,6 +490,12 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 		if lastProgressMsg != "" {
 			fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
 			lastProgressMsg = ""
+		}
+
+		// Persist errors to session log so the full history is on disk
+		if handleErr != nil && sess != nil {
+			sess.WriteMessage(session.TypeDiagnostic,
+				fmt.Sprintf("❌ Error: %v\n", handleErr))
 		}
 
 		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
@@ -534,7 +540,7 @@ func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spin
 			break
 		}
 
-		response, _ := agentInstance.HandleMessage(line)
+		response, handleErr := agentInstance.HandleMessage(line)
 
 		if sp.IsActive() {
 			sp.Stop()
@@ -542,6 +548,12 @@ func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spin
 		if lastProgressMsg != "" {
 			fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
 			lastProgressMsg = ""
+		}
+
+		// Persist errors to session log
+		if handleErr != nil && sess != nil {
+			sess.WriteMessage(session.TypeDiagnostic,
+				fmt.Sprintf("❌ Error: %v\n", handleErr))
 		}
 
 		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
@@ -849,7 +861,7 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 			break
 		}
 
-		response, _ := agentInstance.HandleMessage(userInput)
+		response, handleErr := agentInstance.HandleMessage(userInput)
 
 		if sp.IsActive() {
 			sp.Stop()
@@ -857,6 +869,12 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 		if lastProgressMsg != "" {
 			fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
 			lastProgressMsg = ""
+		}
+
+		// Persist errors to session log
+		if handleErr != nil && sess != nil {
+			sess.WriteMessage(session.TypeDiagnostic,
+				fmt.Sprintf("❌ Error: %v\n", handleErr))
 		}
 
 		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
