@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/this-is-alpha-iota/clyde/agent/providers"
@@ -14,6 +15,8 @@ const DefaultReserveTokens = 16000
 
 // CompactionCallback is called when compaction occurs.
 // It receives the compaction marker message and the system summary.
+// marker is non-empty for progress/status lines (displayed to user).
+// summary is non-empty once the final handoff document is ready (persisted to session).
 type CompactionCallback func(marker string, summary string)
 
 // WithCompactionCallback sets the callback for compaction events.
@@ -54,7 +57,7 @@ func (a *Agent) ShouldCompact() bool {
 
 // Compact performs conversation compaction. It:
 //  1. Identifies the first (pinned) user message
-//  2. Sends the conversation to Claude for summarization
+//  2. Runs a multi-phase summarization workflow
 //  3. Replaces history with: first user message + summary + recent messages
 //  4. Emits callbacks for session persistence
 //
@@ -94,10 +97,10 @@ func (a *Agent) Compact() error {
 			len(a.history), keepCount))
 	}
 
-	// Step 4: Generate summary via single LLM call (CMP-1 stub; CMP-2 replaces with multi-step)
-	summary, err := a.generateCompactionSummary(firstUserMsg, toSummarize, keptMessages)
+	// Step 4: Run multi-phase compaction workflow
+	summary, err := a.runCompactionWorkflow(firstUserMsg, toSummarize, keptMessages)
 	if err != nil {
-		return fmt.Errorf("compaction summary failed: %w", err)
+		return fmt.Errorf("compaction failed: %w", err)
 	}
 
 	// Step 5: Emit the summary via callback for session persistence
@@ -184,96 +187,345 @@ func (a *Agent) recentKeepCount() int {
 	return keep
 }
 
-// generateCompactionSummary creates a summary of the conversation so far
-// using a single LLM call. This is the CMP-1 stub; CMP-2 will replace it
-// with a multi-step agentic workflow.
-func (a *Agent) generateCompactionSummary(
+// --- Multi-phase compaction workflow (CMP-2) ---
+
+// runCompactionWorkflow executes the 5-phase compaction pipeline.
+// Each phase makes a focused LLM call and produces intermediate output
+// that feeds into the next phase.
+//
+// Phases:
+//  1. Goal/constraint extraction
+//  2. Decision capture
+//  3. File-state analysis (git-centric)
+//  4. Tool-result synthesis
+//  5. Handoff drafting
+func (a *Agent) runCompactionWorkflow(
 	firstUserMsg providers.Message,
 	toSummarize []providers.Message,
 	keptMessages []providers.Message,
 ) (string, error) {
-	// Build the summarization prompt
-	var sb strings.Builder
-	sb.WriteString("You are summarizing a conversation for context compaction. ")
-	sb.WriteString("Create a structured handoff document in Markdown that captures:\n\n")
-	sb.WriteString("1. **Goal**: The original task/mission\n")
-	sb.WriteString("2. **Progress**: What has been accomplished so far\n")
-	sb.WriteString("3. **Key Decisions**: Important choices made and their rationale\n")
-	sb.WriteString("4. **Current State**: Where things stand right now\n")
-	sb.WriteString("5. **Next Steps**: What needs to happen next\n")
-	sb.WriteString("6. **Critical Context**: Any important details that must not be lost\n\n")
-	sb.WriteString("Be concise but thorough. Preserve specific file paths, function names, error messages, and technical details.\n")
-	sb.WriteString("Do NOT include the original user message — it will be preserved separately.\n")
 
-	// Build the conversation content to summarize
-	var convContent strings.Builder
-	convContent.WriteString("## Original Mission\n\n")
-	if text, ok := firstUserMsg.Content.(string); ok {
-		convContent.WriteString(text)
+	// Serialize the conversation once for reuse across phases
+	convText := serializeMessages(toSummarize)
+	missionText := messageText(firstUserMsg)
+
+	// Build recent-context block if enabled (feeds into every phase)
+	recentCtx := ""
+	if a.compactIncludeRecentContext {
+		recentCtx = serializeMessages(keptMessages)
 	}
-	convContent.WriteString("\n\n## Conversation to Summarize\n\n")
 
-	for _, msg := range toSummarize {
+	// Phase 1: Goal/constraint extraction
+	a.emitCompactionProgress("🗜️ Compaction phase 1/5: extracting goals & constraints...")
+	goals, err := a.compactionPhaseCall(
+		"You are analyzing a conversation to extract the original goal and any constraints.\n"+
+			"Return a concise Markdown section with:\n"+
+			"- **Goal**: The core task/mission in 1-3 sentences\n"+
+			"- **Constraints**: Any requirements, limitations, or acceptance criteria mentioned\n"+
+			"Be precise. Quote exact requirements when possible.",
+		missionText, convText, recentCtx,
+	)
+	if err != nil {
+		return "", fmt.Errorf("phase 1 (goals) failed: %w", err)
+	}
+	a.emitCompactionDebug("Phase 1 output", goals)
+
+	// Phase 2: Decision capture
+	a.emitCompactionProgress("🗜️ Compaction phase 2/5: capturing decisions...")
+	decisions, err := a.compactionPhaseCall(
+		"You are analyzing a conversation to extract key technical decisions.\n"+
+			"Return a concise Markdown section with:\n"+
+			"- **Decisions Made**: Each significant choice, what was chosen, and why\n"+
+			"- **Alternatives Rejected**: Notable alternatives that were considered but not chosen\n"+
+			"Focus on decisions that a future reader would need to understand to continue the work.\n"+
+			"Preserve specific names, paths, and technical details.",
+		missionText, convText, recentCtx,
+	)
+	if err != nil {
+		return "", fmt.Errorf("phase 2 (decisions) failed: %w", err)
+	}
+	a.emitCompactionDebug("Phase 2 output", decisions)
+
+	// Phase 3: File-state analysis (git-centric)
+	a.emitCompactionProgress("🗜️ Compaction phase 3/5: analyzing file & git state...")
+	gitState := CaptureGitState()
+	fileState, err := a.compactionPhaseCall(
+		"You are analyzing a conversation to summarize the current state of the codebase.\n"+
+			"Return a concise Markdown section with:\n"+
+			"- **Files Modified/Created**: Key files that were changed or created, with brief descriptions\n"+
+			"- **Current State**: What state the code is in right now\n"+
+			"Do NOT include raw diffs. Reference file paths precisely.\n\n"+
+			"Git state information:\n"+gitState,
+		missionText, convText, recentCtx,
+	)
+	if err != nil {
+		return "", fmt.Errorf("phase 3 (file-state) failed: %w", err)
+	}
+	a.emitCompactionDebug("Phase 3 output", fileState)
+
+	// Phase 4: Tool-result synthesis
+	a.emitCompactionProgress("🗜️ Compaction phase 4/5: synthesizing tool outputs...")
+	toolSynthesis, err := a.compactionPhaseCall(
+		"You are analyzing a conversation to summarize significant tool outputs.\n"+
+			"Return a concise Markdown section with:\n"+
+			"- **Significant Outputs**: Key results from tool executions (test results, errors encountered, search findings)\n"+
+			"- **Errors Resolved**: Any errors that were encountered and how they were fixed\n"+
+			"Skip routine outputs (simple file reads, directory listings). Focus on outputs that informed decisions.",
+		missionText, convText, recentCtx,
+	)
+	if err != nil {
+		return "", fmt.Errorf("phase 4 (tool-results) failed: %w", err)
+	}
+	a.emitCompactionDebug("Phase 4 output", toolSynthesis)
+
+	// Phase 5: Handoff drafting — assemble everything into a structured document
+	a.emitCompactionProgress("🗜️ Compaction phase 5/5: drafting handoff document...")
+
+	assemblyInput := fmt.Sprintf(
+		"## Phase Outputs\n\n"+
+			"### Goals & Constraints\n%s\n\n"+
+			"### Decisions\n%s\n\n"+
+			"### File & Git State\n%s\n\n"+
+			"### Tool Output Synthesis\n%s\n\n"+
+			"### Git State\n%s",
+		goals, decisions, fileState, toolSynthesis, gitState,
+	)
+
+	// Add recent context for bridging if enabled
+	bridgeInstruction := ""
+	if a.compactIncludeRecentContext && recentCtx != "" {
+		assemblyInput += "\n\n### Recent Messages (still in context)\n" + recentCtx
+		bridgeInstruction = "\n\nIMPORTANT: The 'Recent Messages' section shows what will remain in context after compaction. " +
+			"Call out any open threads, pending actions, or decisions that bridge between your summary and those recent messages."
+	}
+
+	handoff, err := a.compactionPhaseCall(
+		"You are writing a developer handoff document from phase outputs.\n"+
+			"Combine the provided phase outputs into a single, well-structured Markdown document with these sections:\n\n"+
+			"## Goal\n(from phase 1)\n\n"+
+			"## Constraints\n(from phase 1)\n\n"+
+			"## Progress\n(synthesize from all phases — what has been accomplished)\n\n"+
+			"## Key Decisions\n(from phase 2)\n\n"+
+			"## Current State\n(from phase 3 — include git SHA/branch if available)\n\n"+
+			"## Next Steps\n(infer from the conversation what should happen next)\n\n"+
+			"## Critical Context\n(anything a future reader must know — errors, gotchas, important details)\n\n"+
+			"Be concise but thorough. This document replaces the conversation history, so nothing important should be lost.\n"+
+			"Do NOT include the original user message — it is preserved separately."+
+			bridgeInstruction,
+		missionText, assemblyInput, "",
+	)
+	if err != nil {
+		return "", fmt.Errorf("phase 5 (handoff) failed: %w", err)
+	}
+	a.emitCompactionDebug("Phase 5 output (final handoff)", handoff)
+
+	// Post-compaction: check for uncommitted changes
+	if gitState != "" && !strings.Contains(gitState, "not a git repo") {
+		status := captureGitStatus()
+		if status != "" {
+			handoff += "\n\n---\n⚠️ **Uncommitted changes detected at compaction time:**\n```\n" + status + "\n```\n"
+		}
+	}
+
+	return handoff, nil
+}
+
+// compactionPhaseCall makes a single LLM call for one compaction phase.
+// It builds a user message from the mission, conversation, and optional recent context,
+// then sends it with the given system prompt.
+func (a *Agent) compactionPhaseCall(
+	systemPrompt string,
+	missionText string,
+	conversationOrInput string,
+	recentContext string,
+) (string, error) {
+	var content strings.Builder
+	content.WriteString("## Original Mission\n\n")
+	content.WriteString(missionText)
+	content.WriteString("\n\n## Conversation\n\n")
+	content.WriteString(conversationOrInput)
+	if recentContext != "" {
+		content.WriteString("\n\n## Recent Context (messages being kept)\n\n")
+		content.WriteString(recentContext)
+	}
+
+	messages := []providers.Message{
+		{Role: "user", Content: content.String()},
+	}
+
+	resp, err := a.apiClient.Call(systemPrompt, messages, nil)
+	if err != nil {
+		return "", err
+	}
+
+	var parts []string
+	for _, block := range resp.Content {
+		if block.Type == "text" && block.Text != "" {
+			parts = append(parts, block.Text)
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("empty response from compaction phase")
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
+// emitCompactionProgress sends a compaction progress message via the callback.
+func (a *Agent) emitCompactionProgress(msg string) {
+	if a.compactionCallback != nil {
+		a.compactionCallback(msg, "")
+	}
+}
+
+// emitCompactionDebug sends intermediate compaction output via the diagnostic callback.
+func (a *Agent) emitCompactionDebug(label, content string) {
+	if a.diagnosticCallback != nil {
+		// Truncate for diagnostic display (full content is in the final handoff)
+		preview := content
+		if len(preview) > 500 {
+			preview = preview[:500] + "..."
+		}
+		a.diagnosticCallback(fmt.Sprintf("🗜️ %s:\n%s", label, preview))
+	}
+}
+
+// --- Git state capture ---
+
+// GitState holds captured git repository state.
+type GitState struct {
+	IsRepo        bool
+	Branch        string
+	CommitSHA     string
+	CommitMessage string
+	HasChanges    bool
+}
+
+// CaptureGitState captures the current git repository state as a formatted string.
+// Returns empty string if not in a git repo.
+// Exported for testing.
+func CaptureGitState() string {
+	state := captureGitStateStruct()
+	if !state.IsRepo {
+		return "(not a git repo)"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("- Branch: %s\n", state.Branch))
+	sb.WriteString(fmt.Sprintf("- Commit: %s\n", state.CommitSHA))
+	if state.CommitMessage != "" {
+		sb.WriteString(fmt.Sprintf("- Message: %s\n", state.CommitMessage))
+	}
+	if state.HasChanges {
+		sb.WriteString("- Working tree: has uncommitted changes\n")
+	} else {
+		sb.WriteString("- Working tree: clean\n")
+	}
+	return sb.String()
+}
+
+// captureGitStateStruct captures git state into a struct.
+func captureGitStateStruct() GitState {
+	state := GitState{}
+
+	// Check if we're in a git repo
+	if err := exec.Command("git", "rev-parse", "--is-inside-work-tree").Run(); err != nil {
+		return state
+	}
+	state.IsRepo = true
+
+	// Branch
+	if out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
+		state.Branch = strings.TrimSpace(string(out))
+	}
+
+	// Commit SHA (short)
+	if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
+		state.CommitSHA = strings.TrimSpace(string(out))
+	}
+
+	// Commit message (first line)
+	if out, err := exec.Command("git", "log", "-1", "--format=%s").Output(); err == nil {
+		state.CommitMessage = strings.TrimSpace(string(out))
+	}
+
+	// Uncommitted changes
+	if out, err := exec.Command("git", "status", "--porcelain").Output(); err == nil {
+		state.HasChanges = len(strings.TrimSpace(string(out))) > 0
+	}
+
+	return state
+}
+
+// captureGitStatus returns `git status --short` output, or empty string.
+func captureGitStatus() string {
+	out, err := exec.Command("git", "status", "--short").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// --- Message serialization helpers ---
+
+// SerializeMessages converts a slice of messages to a readable text format
+// for feeding into compaction phases. Exported for testing.
+func SerializeMessages(msgs []providers.Message) string {
+	return serializeMessages(msgs)
+}
+
+// serializeMessages converts a slice of messages to a readable text format
+// for feeding into compaction phases.
+func serializeMessages(msgs []providers.Message) string {
+	var sb strings.Builder
+	for _, msg := range msgs {
 		role := msg.Role
 		switch content := msg.Content.(type) {
 		case string:
-			convContent.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, content))
+			sb.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, content))
 		case []providers.ContentBlock:
 			for _, block := range content {
 				switch block.Type {
 				case "text":
-					convContent.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, block.Text))
+					sb.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, block.Text))
 				case "tool_use":
-					convContent.WriteString(fmt.Sprintf("**%s** [tool_use: %s]: %v\n\n", role, block.Name, block.Input))
+					sb.WriteString(fmt.Sprintf("**%s** [tool_use: %s]: %v\n\n", role, block.Name, block.Input))
 				case "tool_result":
 					resultText := ""
 					if s, ok := block.Content.(string); ok {
-						// Truncate large tool results for summarization
 						if len(s) > 2000 {
 							resultText = s[:2000] + "\n... (truncated)"
 						} else {
 							resultText = s
 						}
 					}
-					convContent.WriteString(fmt.Sprintf("**tool_result**: %s\n\n", resultText))
+					sb.WriteString(fmt.Sprintf("**tool_result**: %s\n\n", resultText))
 				case "thinking":
-					// Skip thinking blocks in summarization input
+					// Skip thinking blocks in serialization
 				}
 			}
 		}
 	}
+	return sb.String()
+}
 
-	if len(keptMessages) > 0 {
-		convContent.WriteString("\n## Messages Being Kept (for reference)\n\n")
-		for _, msg := range keptMessages {
-			role := msg.Role
-			if text, ok := msg.Content.(string); ok {
-				convContent.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, text))
+// MessageText extracts plain text from a message. Exported for testing.
+func MessageText(msg providers.Message) string {
+	return messageText(msg)
+}
+
+// messageText extracts plain text from a message.
+func messageText(msg providers.Message) string {
+	if text, ok := msg.Content.(string); ok {
+		return text
+	}
+	if blocks, ok := msg.Content.([]providers.ContentBlock); ok {
+		var parts []string
+		for _, b := range blocks {
+			if b.Type == "text" && b.Text != "" {
+				parts = append(parts, b.Text)
 			}
 		}
+		return strings.Join(parts, "\n")
 	}
-
-	// Make the summarization API call
-	summaryMessages := []providers.Message{
-		{Role: "user", Content: convContent.String()},
-	}
-
-	resp, err := a.apiClient.Call(sb.String(), summaryMessages, nil)
-	if err != nil {
-		return "", fmt.Errorf("summarization API call failed: %w", err)
-	}
-
-	// Extract text from response
-	var summaryParts []string
-	for _, block := range resp.Content {
-		if block.Type == "text" && block.Text != "" {
-			summaryParts = append(summaryParts, block.Text)
-		}
-	}
-
-	if len(summaryParts) == 0 {
-		return "", fmt.Errorf("summarization returned empty response")
-	}
-
-	return strings.Join(summaryParts, "\n"), nil
+	return ""
 }

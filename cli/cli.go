@@ -115,6 +115,13 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		reserveTokens = reserve
 	}
 
+	// Parse optional compact include recent context flag
+	var compactIncludeRecentContext *bool
+	if val := os.Getenv("COMPACT_INCLUDE_RECENT_CONTEXT"); val != "" {
+		b := val != "false" && val != "0"
+		compactIncludeRecentContext = &b
+	}
+
 	return agent.Config{
 		APIKey:            apiKey,
 		APIURL:            "https://api.anthropic.com/v1/messages",
@@ -127,6 +134,7 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		MCPPlaywright:     os.Getenv("MCP_PLAYWRIGHT") == "true",
 		MCPPlaywrightArgs: os.Getenv("MCP_PLAYWRIGHT_ARGS"),
 		ReserveTokens:     reserveTokens,
+		CompactIncludeRecentContext: compactIncludeRecentContext,
 	}, nil
 }
 

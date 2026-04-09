@@ -20,6 +20,7 @@ type Config struct {
 	MCPPlaywright        bool   // Enable Playwright MCP browser automation
 	MCPPlaywrightArgs    string // Extra args for npx @playwright/mcp (e.g. "--headless")
 	ReserveTokens        int    // Tokens to reserve for response; triggers compaction (0 = default 16000)
+	CompactIncludeRecentContext *bool // Feed recent messages into compaction (nil = default true)
 }
 
 // LoadFromFile loads configuration from a specific file path
@@ -70,6 +71,13 @@ func LoadFromFile(path string) (*Config, error) {
 		reserveTokens = reserve
 	}
 
+	// Parse optional compact include recent context flag
+	var compactIncludeRecentContext *bool
+	if val := os.Getenv("COMPACT_INCLUDE_RECENT_CONTEXT"); val != "" {
+		b := val != "false" && val != "0"
+		compactIncludeRecentContext = &b
+	}
+
 	return &Config{
 		APIKey:               apiKey,
 		BraveSearchAPIKey:    os.Getenv("BRAVE_SEARCH_API_KEY"),
@@ -81,5 +89,6 @@ func LoadFromFile(path string) (*Config, error) {
 		MCPPlaywright:        os.Getenv("MCP_PLAYWRIGHT") == "true",
 		MCPPlaywrightArgs:    os.Getenv("MCP_PLAYWRIGHT_ARGS"),
 		ReserveTokens:        reserveTokens,
+		CompactIncludeRecentContext: compactIncludeRecentContext,
 	}, nil
 }

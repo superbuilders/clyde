@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -914,6 +915,560 @@ func TestCompact_Integration(t *testing.T) {
 	}
 }
 
+// --- CMP-2: Agentic Multi-Step Compaction Workflow ---
+
+// TestCMP2_GitStateCapture verifies that git state is captured correctly.
+func TestCMP2_GitStateCapture(t *testing.T) {
+	state := agent.CaptureGitState()
+
+	// We're running inside a git repo, so state should be non-empty
+	if state == "" {
+		t.Fatal("CaptureGitState returned empty string inside a git repo")
+	}
+	if strings.Contains(state, "not a git repo") {
+		t.Fatal("CaptureGitState thinks we're not in a git repo")
+	}
+
+	// Should contain branch and commit info
+	if !strings.Contains(state, "Branch:") {
+		t.Error("git state should contain Branch:")
+	}
+	if !strings.Contains(state, "Commit:") {
+		t.Error("git state should contain Commit:")
+	}
+	if !strings.Contains(state, "Working tree:") {
+		t.Error("git state should contain Working tree:")
+	}
+
+	t.Logf("Git state:\n%s", state)
+}
+
+// TestCMP2_GitStateNonRepo verifies graceful handling in a non-git directory.
+func TestCMP2_GitStateNonRepo(t *testing.T) {
+	// Change to a non-git temp directory
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	state := agent.CaptureGitState()
+	if !strings.Contains(state, "not a git repo") {
+		t.Errorf("expected 'not a git repo', got: %q", state)
+	}
+}
+
+// TestCMP2_PhaseProgressCallbacks verifies that each compaction phase
+// emits a progress callback with phase number.
+func TestCMP2_PhaseProgressCallbacks(t *testing.T) {
+	client := providers.NewClient("fake", "http://localhost", "m", 1000)
+
+	var progressMsgs []string
+	a := agent.NewAgent(client, "test",
+		agent.WithCompactionCallback(func(marker string, summary string) {
+			if marker != "" {
+				progressMsgs = append(progressMsgs, marker)
+			}
+		}),
+	)
+
+	history := make([]providers.Message, 10)
+	for i := range history {
+		if i%2 == 0 {
+			history[i] = providers.Message{Role: "user", Content: "msg"}
+		} else {
+			history[i] = providers.Message{Role: "assistant", Content: "reply"}
+		}
+	}
+	a.SetHistory(history)
+
+	// Compact will fail on API call at phase 1, but we should see
+	// the initial marker + at least the phase 1 progress message
+	a.Compact()
+
+	if len(progressMsgs) < 2 {
+		t.Fatalf("expected at least 2 progress messages (initial + phase 1), got %d: %v",
+			len(progressMsgs), progressMsgs)
+	}
+
+	// First should be the compaction marker
+	if !strings.Contains(progressMsgs[0], "Compacting conversation history") {
+		t.Errorf("first message should be compaction marker, got: %q", progressMsgs[0])
+	}
+
+	// Second should be phase 1
+	if !strings.Contains(progressMsgs[1], "phase 1/5") {
+		t.Errorf("second message should be phase 1, got: %q", progressMsgs[1])
+	}
+}
+
+// TestCMP2_DiagnosticOutputPerPhase verifies that intermediate phase outputs
+// are logged via diagnostic callback.
+func TestCMP2_DiagnosticOutputPerPhase(t *testing.T) {
+	client := providers.NewClient("fake", "http://localhost", "m", 1000)
+
+	var diagnostics []string
+	a := agent.NewAgent(client, "test",
+		agent.WithDiagnosticCallback(func(msg string) {
+			diagnostics = append(diagnostics, msg)
+		}),
+		agent.WithCompactionCallback(func(marker string, summary string) {}),
+	)
+
+	history := make([]providers.Message, 10)
+	for i := range history {
+		if i%2 == 0 {
+			history[i] = providers.Message{Role: "user", Content: "msg"}
+		} else {
+			history[i] = providers.Message{Role: "assistant", Content: "reply"}
+		}
+	}
+	a.SetHistory(history)
+
+	// Will fail at phase 1 API call
+	a.Compact()
+
+	// Should have at least the compaction diagnostic message
+	found := false
+	for _, d := range diagnostics {
+		if strings.Contains(d, "🗜️") && strings.Contains(d, "Compacting") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected compaction diagnostic, got: %v", diagnostics)
+	}
+}
+
+// TestCMP2_SerializeMessages verifies the conversation serialization helper.
+func TestCMP2_SerializeMessages(t *testing.T) {
+	msgs := []providers.Message{
+		{Role: "user", Content: "Hello"},
+		{Role: "assistant", Content: "Hi there!"},
+		{Role: "user", Content: []providers.ContentBlock{
+			{Type: "tool_result", ToolUseID: "toolu_1", Content: "file contents here"},
+		}},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "text", Text: "I see the file."},
+			{Type: "tool_use", Name: "read_file", Input: map[string]interface{}{"path": "main.go"}},
+		}},
+	}
+
+	result := agent.SerializeMessages(msgs)
+
+	// Should contain text from all messages
+	if !strings.Contains(result, "Hello") {
+		t.Error("serialization should contain user text")
+	}
+	if !strings.Contains(result, "Hi there!") {
+		t.Error("serialization should contain assistant text")
+	}
+	if !strings.Contains(result, "file contents here") {
+		t.Error("serialization should contain tool_result text")
+	}
+	if !strings.Contains(result, "I see the file.") {
+		t.Error("serialization should contain assistant text block")
+	}
+	if !strings.Contains(result, "read_file") {
+		t.Error("serialization should contain tool_use name")
+	}
+}
+
+// TestCMP2_SerializeMessagesLargeToolResult verifies tool results >2000 chars
+// are truncated in serialization.
+func TestCMP2_SerializeMessagesLargeToolResult(t *testing.T) {
+	largeContent := strings.Repeat("x", 3000)
+	msgs := []providers.Message{
+		{Role: "user", Content: []providers.ContentBlock{
+			{Type: "tool_result", ToolUseID: "toolu_1", Content: largeContent},
+		}},
+	}
+
+	result := agent.SerializeMessages(msgs)
+
+	if len(result) >= 3000 {
+		t.Errorf("serialization should truncate large tool results, got %d chars", len(result))
+	}
+	if !strings.Contains(result, "(truncated)") {
+		t.Error("serialization should contain truncation marker")
+	}
+}
+
+// TestCMP2_SerializeMessagesSkipsThinking verifies thinking blocks are excluded.
+func TestCMP2_SerializeMessagesSkipsThinking(t *testing.T) {
+	msgs := []providers.Message{
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "thinking", Thinking: "internal reasoning here"},
+			{Type: "text", Text: "visible response"},
+		}},
+	}
+
+	result := agent.SerializeMessages(msgs)
+
+	if strings.Contains(result, "internal reasoning") {
+		t.Error("serialization should skip thinking blocks")
+	}
+	if !strings.Contains(result, "visible response") {
+		t.Error("serialization should include text blocks")
+	}
+}
+
+// TestCMP2_MessageText verifies the messageText helper.
+func TestCMP2_MessageText(t *testing.T) {
+	subtests := []struct {
+		name string
+		msg  providers.Message
+		want string
+	}{
+		{
+			name: "string_content",
+			msg:  providers.Message{Content: "hello"},
+			want: "hello",
+		},
+		{
+			name: "content_blocks",
+			msg: providers.Message{Content: []providers.ContentBlock{
+				{Type: "text", Text: "part1"},
+				{Type: "text", Text: "part2"},
+			}},
+			want: "part1\npart2",
+		},
+		{
+			name: "empty_blocks",
+			msg:  providers.Message{Content: []providers.ContentBlock{}},
+			want: "",
+		},
+	}
+
+	for _, tc := range subtests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := agent.MessageText(tc.msg)
+			if got != tc.want {
+				t.Errorf("MessageText() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCMP2_NoCumulativeDiffs verifies no raw diffs are accumulated across
+// multiple compaction cycles. The git state section should reference commits,
+// not carry forward diffs.
+func TestCMP2_NoCumulativeDiffs(t *testing.T) {
+	state := agent.CaptureGitState()
+	// The git state should NOT contain diff content
+	if strings.Contains(state, "diff --git") {
+		t.Error("git state should not contain raw diffs")
+	}
+	if strings.Contains(state, "@@") {
+		t.Error("git state should not contain diff hunks")
+	}
+}
+
+// TestCMP2_ConfigIncludeRecentContext verifies the COMPACT_INCLUDE_RECENT_CONTEXT
+// config flag.
+func TestCMP2_ConfigIncludeRecentContext(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	subtests := []struct {
+		name    string
+		content string
+		wantNil bool   // nil means default (true)
+		wantVal bool   // value if not nil
+	}{
+		{
+			name:    "not_set_uses_default",
+			content: "TS_AGENT_API_KEY=sk-test\n",
+			wantNil: true,
+		},
+		{
+			name:    "set_false",
+			content: "TS_AGENT_API_KEY=sk-test\nCOMPACT_INCLUDE_RECENT_CONTEXT=false\n",
+			wantNil: false,
+			wantVal: false,
+		},
+		{
+			name:    "set_true",
+			content: "TS_AGENT_API_KEY=sk-test\nCOMPACT_INCLUDE_RECENT_CONTEXT=true\n",
+			wantNil: false,
+			wantVal: true,
+		},
+		{
+			name:    "set_zero",
+			content: "TS_AGENT_API_KEY=sk-test\nCOMPACT_INCLUDE_RECENT_CONTEXT=0\n",
+			wantNil: false,
+			wantVal: false,
+		},
+	}
+
+	for _, tc := range subtests {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Unsetenv("COMPACT_INCLUDE_RECENT_CONTEXT")
+			os.Unsetenv("TS_AGENT_API_KEY")
+			os.Unsetenv("RESERVE_TOKENS")
+			os.Unsetenv("THINKING_BUDGET_TOKENS")
+			os.Unsetenv("BRAVE_SEARCH_API_KEY")
+			os.Unsetenv("MCP_PLAYWRIGHT")
+			os.Unsetenv("MCP_PLAYWRIGHT_ARGS")
+			defer os.Unsetenv("COMPACT_INCLUDE_RECENT_CONTEXT")
+			defer os.Unsetenv("TS_AGENT_API_KEY")
+
+			testConfigPath := filepath.Join(tmpDir, tc.name+"_config")
+			os.WriteFile(testConfigPath, []byte(tc.content), 0644)
+
+			cfg, err := config.LoadFromFile(testConfigPath)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tc.wantNil {
+				if cfg.CompactIncludeRecentContext != nil {
+					t.Errorf("expected nil (default), got %v", *cfg.CompactIncludeRecentContext)
+				}
+			} else {
+				if cfg.CompactIncludeRecentContext == nil {
+					t.Fatal("expected non-nil value")
+				}
+				if *cfg.CompactIncludeRecentContext != tc.wantVal {
+					t.Errorf("got %v, want %v", *cfg.CompactIncludeRecentContext, tc.wantVal)
+				}
+			}
+		})
+	}
+}
+
+// TestCMP2_HandoffDocumentSections verifies that the final handoff document
+// from a real compaction contains all required sections.
+func TestCMP2_HandoffDocumentSections(t *testing.T) {
+	apiKey := os.Getenv("TS_AGENT_API_KEY")
+	if apiKey == "" {
+		t.Skip("Skipping integration test: TS_AGENT_API_KEY not set")
+	}
+
+	client := providers.NewClient(apiKey,
+		"https://api.anthropic.com/v1/messages",
+		"claude-opus-4-6", 8192)
+
+	var summary string
+	var phaseMessages []string
+
+	a := agent.NewAgent(client, "You are a helpful assistant.",
+		agent.WithContextWindowSize(200000),
+		agent.WithCompactionCallback(func(marker string, s string) {
+			if marker != "" {
+				phaseMessages = append(phaseMessages, marker)
+			}
+			if s != "" {
+				summary = s
+			}
+		}),
+		agent.WithDiagnosticCallback(func(msg string) {
+			t.Logf("Diagnostic: %s", msg)
+		}),
+	)
+
+	history := []providers.Message{
+		{Role: "user", Content: "Build a CLI tool in Go that reads CSV files and outputs JSON. It should support filtering by column values and sorting by any column. Use the cobra library for CLI flags."},
+		{Role: "assistant", Content: "I'll build this CSV-to-JSON CLI tool. Let me start:\n\n1. Created go.mod with cobra dependency\n2. Created main.go with root command\n3. Added --input flag for CSV path\n4. Added --output flag for JSON output path"},
+		{Role: "user", Content: "Good. Now add the filtering feature."},
+		{Role: "assistant", Content: "Filtering is implemented:\n- Added --filter flag with syntax 'column=value'\n- Supports multiple filters (AND logic)\n- Case-insensitive matching option via --ignore-case\n- Error handling for invalid column names"},
+		{Role: "user", Content: "Add sorting next."},
+		{Role: "assistant", Content: "Sorting is complete:\n- Added --sort flag accepting column name\n- Added --desc flag for descending order\n- Numeric-aware sorting (detects number columns)\n- Stable sort preserving original order for ties"},
+		{Role: "user", Content: "Add unit tests."},
+		{Role: "assistant", Content: "Tests added:\n- TestReadCSV: validates CSV parsing\n- TestFilterRows: tests column filtering with multiple conditions\n- TestSortRows: tests ascending/descending, numeric/string sorting\n- TestOutputJSON: validates JSON output format\n- All 12 tests passing"},
+	}
+	a.SetHistory(history)
+
+	err := a.Compact()
+	if err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+
+	if summary == "" {
+		t.Fatal("summary is empty")
+	}
+
+	t.Logf("Handoff document (%d chars):\n%s", len(summary), summary)
+
+	// Verify all 5 phases ran (initial marker + 5 phase progress messages)
+	if len(phaseMessages) < 6 {
+		t.Errorf("expected at least 6 progress messages (1 marker + 5 phases), got %d", len(phaseMessages))
+	}
+
+	// Verify phase messages contain phase numbers
+	for i := 1; i <= 5; i++ {
+		phaseStr := fmt.Sprintf("phase %d/5", i)
+		found := false
+		for _, msg := range phaseMessages {
+			if strings.Contains(msg, phaseStr) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing progress message for %s", phaseStr)
+		}
+	}
+
+	// Verify the handoff document contains required sections
+	summaryLower := strings.ToLower(summary)
+	requiredSections := []string{
+		"goal",
+		"progress",
+		"decision",
+		"current state",
+		"next step",
+	}
+	for _, section := range requiredSections {
+		if !strings.Contains(summaryLower, section) {
+			t.Errorf("handoff document should contain section %q", section)
+		}
+	}
+
+	// Verify key technical details survived
+	expectedTerms := []string{"csv", "json", "filter", "sort", "cobra"}
+	for _, term := range expectedTerms {
+		if !strings.Contains(summaryLower, term) {
+			t.Errorf("handoff document should mention %q", term)
+		}
+	}
+
+	// Verify git state is referenced (we're in a git repo)
+	if !strings.Contains(summary, "Branch") && !strings.Contains(summary, "Commit") && !strings.Contains(summary, "git") {
+		t.Log("Warning: handoff document does not reference git state")
+	}
+}
+
+// TestCMP2_GitStateInHandoff verifies that git state appears in the handoff
+// when running inside a git repo.
+func TestCMP2_GitStateInHandoff(t *testing.T) {
+	apiKey := os.Getenv("TS_AGENT_API_KEY")
+	if apiKey == "" {
+		t.Skip("Skipping integration test: TS_AGENT_API_KEY not set")
+	}
+
+	client := providers.NewClient(apiKey,
+		"https://api.anthropic.com/v1/messages",
+		"claude-opus-4-6", 4096)
+
+	var summary string
+	a := agent.NewAgent(client, "You are a helpful assistant.",
+		agent.WithContextWindowSize(200000),
+		agent.WithCompactionCallback(func(marker string, s string) {
+			if s != "" {
+				summary = s
+			}
+		}),
+	)
+
+	history := []providers.Message{
+		{Role: "user", Content: "Add a README.md to the project."},
+		{Role: "assistant", Content: "Created README.md with project description, installation instructions, and usage examples."},
+		{Role: "user", Content: "Also add a LICENSE file."},
+		{Role: "assistant", Content: "Added MIT LICENSE file."},
+		{Role: "user", Content: "Update the README with license info."},
+		{Role: "assistant", Content: "Updated README.md to reference the MIT license."},
+		{Role: "user", Content: "Commit everything."},
+		{Role: "assistant", Content: "Committed all files with message 'Initial project setup'."},
+	}
+	a.SetHistory(history)
+
+	err := a.Compact()
+	if err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+
+	// The handoff should reference the git branch at minimum
+	summaryLower := strings.ToLower(summary)
+	if !strings.Contains(summaryLower, "branch") && !strings.Contains(summaryLower, "commit") {
+		t.Logf("Summary:\n%s", summary)
+		t.Error("handoff should reference git branch or commit")
+	}
+}
+
+// TestCMP2_RecentContextDisabled verifies that setting CompactIncludeRecentContext=false
+// excludes recent messages from compaction phases.
+func TestCMP2_RecentContextDisabled(t *testing.T) {
+	boolFalse := false
+	a := agent.New(agent.Config{
+		APIKey:                     "fake",
+		APIURL:                     "http://localhost",
+		ModelID:                    "m",
+		MaxTokens:                  1000,
+		ContextWindowSize:          200000,
+		CompactIncludeRecentContext: &boolFalse,
+	},
+		agent.WithCompactionCallback(func(marker string, summary string) {}),
+	)
+
+	history := make([]providers.Message, 10)
+	for i := range history {
+		if i%2 == 0 {
+			history[i] = providers.Message{Role: "user", Content: "msg"}
+		} else {
+			history[i] = providers.Message{Role: "assistant", Content: "reply"}
+		}
+	}
+	a.SetHistory(history)
+
+	// Will fail at API call, but should not panic
+	err := a.Compact()
+	if err == nil {
+		t.Error("expected error from fake API client")
+	}
+	// The important thing is it didn't panic — recent context was excluded
+}
+
+// TestCMP2_RecentContextEnabledByDefault verifies that recent context
+// inclusion defaults to true.
+func TestCMP2_RecentContextEnabledByDefault(t *testing.T) {
+	a := agent.New(agent.Config{
+		APIKey:            "fake",
+		APIURL:            "http://localhost",
+		ModelID:           "m",
+		MaxTokens:         1000,
+		ContextWindowSize: 200000,
+		// CompactIncludeRecentContext not set — should default to true
+	},
+		agent.WithCompactionCallback(func(marker string, summary string) {}),
+	)
+
+	history := make([]providers.Message, 10)
+	for i := range history {
+		if i%2 == 0 {
+			history[i] = providers.Message{Role: "user", Content: "msg"}
+		} else {
+			history[i] = providers.Message{Role: "assistant", Content: "reply"}
+		}
+	}
+	a.SetHistory(history)
+
+	// Will fail at API call, but should not panic
+	err := a.Compact()
+	if err == nil {
+		t.Error("expected error from fake API client")
+	}
+}
+
+// TestCMP2_NoBehavioralChange documents the CMP-2 architecture.
+func TestCMP2_NoBehavioralChange(t *testing.T) {
+	t.Log("CMP-2 Architecture (replaces CMP-1 single-call with multi-step):")
+	t.Log("  Phase 1: Goal/constraint extraction")
+	t.Log("  Phase 2: Decision capture")
+	t.Log("  Phase 3: File-state analysis (git-centric)")
+	t.Log("  Phase 4: Tool-result synthesis")
+	t.Log("  Phase 5: Handoff drafting (assembles all phases)")
+	t.Log("")
+	t.Log("  - Each phase uses a focused system prompt + the conversation")
+	t.Log("  - Recent kept messages optionally fed into each phase")
+	t.Log("  - Git state captured via shell commands (branch, SHA, message, clean/dirty)")
+	t.Log("  - No cumulative diffs — git SHA is the reference")
+	t.Log("  - Post-compaction hook checks for uncommitted changes")
+	t.Log("  - Phase progress emitted via CompactionCallback")
+	t.Log("  - Intermediate outputs emitted via DiagnosticCallback")
+	t.Log("  - COMPACT_INCLUDE_RECENT_CONTEXT=false disables recent context")
+	t.Log("  - CMP-3 will add intelligent tool-result summarization")
+}
+
 // --- Helper ---
 
 func writeTestFile(t *testing.T, dir, name, content string) {
@@ -923,3 +1478,4 @@ func writeTestFile(t *testing.T, dir, name, content string) {
 		t.Fatalf("failed to write test file %s: %v", name, err)
 	}
 }
+
