@@ -12,6 +12,7 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
+	"github.com/this-is-alpha-iota/clyde/agent/providers"
 	"github.com/this-is-alpha-iota/clyde/agent/session"
 	"github.com/this-is-alpha-iota/clyde/cli/input"
 	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
@@ -37,6 +39,18 @@ import (
 func Run() {
 	// Parse log level and extended flags, stripping them from args
 	flags := loglevel.ParseFlagsExt(os.Args[1:])
+
+	// Handle --sessions mode (list and exit)
+	if flags.Sessions {
+		runSessionsMode()
+		return
+	}
+
+	// Handle --resume mode
+	if flags.Resume {
+		runResumeMode(flags.ResumeTarget, flags.Level, flags.NoThink)
+		return
+	}
 
 	// Check if stdin has input (pipe/redirect)
 	stat, _ := os.Stdin.Stat()
@@ -156,14 +170,20 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 	// The agent emits everything unconditionally; we filter here.
 	agentInstance := agent.New(cfg,
 		agent.WithProgressCallback(func(msg string, toolUseID string) {
-			// Append tool use ID for session persistence
+			// Append tool use ID for display
 			msgWithID := session.FormatToolUseID(msg, toolUseID)
 			if level.ShouldShow(loglevel.Quiet) {
 				fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Quiet, msgWithID))
 			}
-			// Persist to session
+		}),
+		agent.WithToolUseCallback(func(displayMsg, toolName, toolUseID string, toolInput map[string]interface{}) {
+			// Persist enriched tool-use metadata for session reconstruction
 			if sess != nil {
-				sess.WriteMessage(session.TypeToolUse, session.StripANSI(msgWithID)+"\n")
+				msgWithID := session.FormatToolUseID(displayMsg, toolUseID)
+				inputJSON, _ := json.Marshal(toolInput)
+				content := fmt.Sprintf("%s\nname: %s\ninput: %s\n",
+					session.StripANSI(msgWithID), toolName, string(inputJSON))
+				sess.WriteMessage(session.TypeToolUse, content)
 			}
 		}),
 		agent.WithOutputCallback(func(output string, toolUseID string) {
@@ -173,9 +193,10 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 				fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Normal, displayed))
 				fmt.Fprintln(os.Stderr)
 			}
-			// Persist full (untruncated) tool output to session
+			// Persist full (untruncated) tool output with tool_use_id
 			if sess != nil {
-				sess.WriteMessage(session.TypeToolResult, "```\n"+output+"\n```\n")
+				content := fmt.Sprintf("[%s]\n```\n%s\n```\n", toolUseID, output)
+				sess.WriteMessage(session.TypeToolResult, content)
 			}
 		}),
 		agent.WithThinkingCallback(func(text string) {
@@ -304,12 +325,8 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 			fmt.Println(style.FormatThinking(displayed))
 		}),
 		agent.WithProgressCallback(func(msg string, toolUseID string) {
-			// Append tool use ID for session persistence
+			// Append tool use ID for display
 			msgWithID := session.FormatToolUseID(msg, toolUseID)
-			// Persist to session
-			if sess != nil {
-				sess.WriteMessage(session.TypeToolUse, session.StripANSI(msgWithID)+"\n")
-			}
 			if !level.ShouldShow(loglevel.Quiet) {
 				return
 			}
@@ -327,10 +344,21 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 				sp.Start(spinner.FormatSpinnerMessage(msgWithID))
 			}
 		}),
-		agent.WithOutputCallback(func(output string, toolUseID string) {
-			// Persist full (untruncated) tool output to session
+		agent.WithToolUseCallback(func(displayMsg, toolName, toolUseID string, toolInput map[string]interface{}) {
+			// Persist enriched tool-use metadata for session reconstruction
 			if sess != nil {
-				sess.WriteMessage(session.TypeToolResult, "```\n"+output+"\n```\n")
+				msgWithID := session.FormatToolUseID(displayMsg, toolUseID)
+				inputJSON, _ := json.Marshal(toolInput)
+				content := fmt.Sprintf("%s\nname: %s\ninput: %s\n",
+					session.StripANSI(msgWithID), toolName, string(inputJSON))
+				sess.WriteMessage(session.TypeToolUse, content)
+			}
+		}),
+		agent.WithOutputCallback(func(output string, toolUseID string) {
+			// Persist full (untruncated) tool output with tool_use_id
+			if sess != nil {
+				content := fmt.Sprintf("[%s]\n```\n%s\n```\n", toolUseID, output)
+				sess.WriteMessage(session.TypeToolResult, content)
 			}
 			if !level.ShouldShow(loglevel.Normal) {
 				return
@@ -529,6 +557,313 @@ func printGoodbye(sess *session.Session) {
 	fmt.Println("Goodbye!")
 	if sess != nil {
 		fmt.Printf("Session saved: %s\n", sess.RelativeDir())
+	}
+}
+
+// runSessionsMode lists all sessions and exits.
+func runSessionsMode() {
+	sessionsRoot, _ := session.FindSessionsRoot()
+	sessions, err := session.ListSessions(sessionsRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing sessions: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(sessions) == 0 {
+		fmt.Println("No sessions found.")
+		fmt.Printf("Sessions directory: %s\n", sessionsRoot)
+		return
+	}
+
+	fmt.Printf("Sessions in %s:\n\n", sessionsRoot)
+	for _, s := range sessions {
+		summary := s.Summary
+		if summary == "" {
+			summary = "(no user messages)"
+		}
+		fmt.Printf("  %-40s  %3d messages  %q\n", s.DirName, s.MessageCount, summary)
+	}
+	fmt.Println()
+	fmt.Println("Use --resume <session-id> to resume, or --resume for your most recent.")
+}
+
+// runResumeMode loads a previous session and starts the REPL.
+func runResumeMode(target string, level loglevel.Level, noThink bool) {
+	sessionsRoot, _ := session.FindSessionsRoot()
+	currentUser := session.GetUsername()
+
+	var sessionDir string
+	var err error
+
+	if target == "" {
+		// --resume with no argument: find most recent session for current user
+		sessionDir, err = session.FindMostRecentSession(sessionsRoot, currentUser)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, "Use --sessions to list available sessions.")
+			os.Exit(1)
+		}
+	} else {
+		// --resume <session-id>: find specific session
+		sessionDir, err = session.FindSessionByID(sessionsRoot, target)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, "Use --sessions to list available sessions.")
+			os.Exit(1)
+		}
+	}
+
+	// Check if cross-user resume is needed
+	sessionOwner := session.SessionOwner(filepath.Base(sessionDir))
+	if sessionOwner != currentUser {
+		// Cross-user resume: copy directory
+		fmt.Fprintf(os.Stderr, "Branching from %s's session...\n", sessionOwner)
+		sessionDir, err = session.CopyForResume(sessionDir, sessionsRoot, currentUser)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error branching session: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// Reconstruct history
+	history, warnings, err := session.ReconstructHistory(sessionDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reconstructing session: %v\n", err)
+		os.Exit(1)
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+	}
+
+	// Open session for continued writing
+	sess, err := session.Open(sessionDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening session: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "Resuming session: %s (%d messages loaded)\n", filepath.Base(sessionDir), len(history))
+
+	// Load config
+	configPath := getConfigPath()
+	cfg, err := loadAgentConfig(configPath, noThink)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	// Start REPL with restored history
+	runREPLModeWithSession(level, noThink, cfg, sess, history)
+}
+
+// runREPLModeWithSession runs the REPL with a pre-existing session and history.
+// Used by both resume mode and (potentially) regular REPL mode.
+func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config, sess *session.Session, history []providers.Message) {
+	// Create spinner for animated progress display (REPL mode only).
+	sp := spinner.New()
+
+	// lastProgressMsg tracks the most recent tool → progress message
+	var lastProgressMsg string
+
+	// Create agent
+	agentInstance := agent.New(cfg,
+		agent.WithSpinnerCallback(func(start bool, message string) {
+			if level == loglevel.Silent {
+				return
+			}
+			if start {
+				sp.Start(message)
+			} else {
+				if sp.IsActive() {
+					sp.Stop()
+				}
+			}
+		}),
+		agent.WithThinkingCallback(func(text string) {
+			if sess != nil {
+				sess.WriteMessage(session.TypeThinking, "💭 "+text+"\n")
+			}
+			if !level.ShouldShow(loglevel.Normal) {
+				return
+			}
+			if sp.IsActive() {
+				sp.Stop()
+			}
+			if lastProgressMsg != "" {
+				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+				lastProgressMsg = ""
+			}
+			displayed := truncateForLevel(text, truncate.ThinkingLineLimit, level)
+			fmt.Println(style.FormatThinking(displayed))
+		}),
+		agent.WithProgressCallback(func(msg string, toolUseID string) {
+			msgWithID := session.FormatToolUseID(msg, toolUseID)
+			if !level.ShouldShow(loglevel.Quiet) {
+				return
+			}
+			if lastProgressMsg != "" {
+				if sp.IsActive() {
+					sp.Stop()
+				}
+				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+			}
+			lastProgressMsg = msgWithID
+			if level != loglevel.Silent {
+				sp.Start(spinner.FormatSpinnerMessage(msgWithID))
+			}
+		}),
+		agent.WithToolUseCallback(func(displayMsg, toolName, toolUseID string, toolInput map[string]interface{}) {
+			if sess != nil {
+				msgWithID := session.FormatToolUseID(displayMsg, toolUseID)
+				inputJSON, _ := json.Marshal(toolInput)
+				content := fmt.Sprintf("%s\nname: %s\ninput: %s\n",
+					session.StripANSI(msgWithID), toolName, string(inputJSON))
+				sess.WriteMessage(session.TypeToolUse, content)
+			}
+		}),
+		agent.WithOutputCallback(func(output string, toolUseID string) {
+			if sess != nil {
+				content := fmt.Sprintf("[%s]\n```\n%s\n```\n", toolUseID, output)
+				sess.WriteMessage(session.TypeToolResult, content)
+			}
+			if !level.ShouldShow(loglevel.Normal) {
+				return
+			}
+			if sp.IsActive() {
+				sp.Stop()
+			}
+			if lastProgressMsg != "" {
+				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+				lastProgressMsg = ""
+			}
+			displayed := truncateForLevel(output, truncate.ToolOutputLineLimit, level)
+			fmt.Println()
+			fmt.Println(StyleMessage(loglevel.Normal, displayed))
+			fmt.Println()
+		}),
+		agent.WithDiagnosticCallback(func(msg string) {
+			if sess != nil {
+				sess.WriteMessage(session.TypeDiagnostic, msg+"\n")
+			}
+			if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
+				if !level.ShouldShow(loglevel.Verbose) {
+					return
+				}
+			} else if strings.HasPrefix(msg, "💾 Cache:") && strings.Contains(msg, "|") {
+				if !level.ShouldShow(loglevel.Debug) {
+					return
+				}
+			} else {
+				if !level.ShouldShow(loglevel.Debug) {
+					return
+				}
+			}
+			if sp.IsActive() {
+				sp.Stop()
+				if lastProgressMsg != "" {
+					fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+					lastProgressMsg = ""
+				}
+			}
+			fmt.Println(StyleMessage(loglevel.Debug, msg))
+		}),
+		agent.WithUserMessageCallback(func(text string) {
+			if sess != nil {
+				sess.WriteMessage(session.TypeUser, "**You:**\n\n"+text+"\n")
+			}
+		}),
+		agent.WithAssistantMessageCallback(func(text string) {
+			if sess != nil {
+				sess.WriteMessage(session.TypeAssistant, "**Claude:**\n\n"+text+"\n")
+			}
+		}),
+		agent.WithErrorCallback(func(err error) {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		}),
+	)
+	defer agentInstance.Close()
+
+	// Restore history
+	if len(history) > 0 {
+		agentInstance.SetHistory(history)
+	}
+
+	// Start REPL
+	sessionName := ""
+	if sess != nil {
+		sessionName = filepath.Base(sess.Dir)
+	}
+	if len(history) > 0 {
+		fmt.Printf("Clyde - AI Coding Agent - Resumed session: %s\n", sessionName)
+	} else {
+		fmt.Println("Clyde - AI Coding Agent - Type 'exit' or 'quit' to exit")
+	}
+	fmt.Println("  Multiline: Ctrl+J or Alt+Enter to insert a newline,")
+	fmt.Println("             or end a line with \\ to continue")
+	fmt.Println("==========================================================")
+
+	// Create rich text input reader
+	homeDir, _ := os.UserHomeDir()
+	historyFile := ""
+	if homeDir != "" {
+		historyFile = filepath.Join(homeDir, ".clyde", "history")
+	}
+
+	gitInfo := prompt.GetGitInfo()
+	initialPrompt := prompt.FormatPrompt(gitInfo, -1)
+
+	reader, err := input.New(input.Config{
+		Prompt:      initialPrompt,
+		HistoryFile: historyFile,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Rich input unavailable (%v), using basic input\n", err)
+		runREPLBasicMode(level, agentInstance, sp, cfg.ContextWindowSize, sess)
+		return
+	}
+	defer reader.Close()
+
+	contextPercent := -1
+
+	for {
+		gitInfo := prompt.GetGitInfo()
+		fmt.Println()
+		reader.SetPrompt(prompt.FormatPrompt(gitInfo, contextPercent))
+
+		userInput, err := reader.ReadLine()
+		if err != nil {
+			if err == io.EOF {
+				printGoodbye(sess)
+				break
+			}
+			continue
+		}
+
+		userInput = strings.TrimSpace(userInput)
+		if userInput == "" {
+			continue
+		}
+
+		if userInput == "exit" || userInput == "quit" {
+			printGoodbye(sess)
+			break
+		}
+
+		response, _ := agentInstance.HandleMessage(userInput)
+
+		if sp.IsActive() {
+			sp.Stop()
+		}
+		if lastProgressMsg != "" {
+			fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+			lastProgressMsg = ""
+		}
+
+		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
+
+		usage := agentInstance.LastUsage()
+		totalInput := usage.InputTokens + usage.CacheReadInputTokens
+		contextPercent = prompt.CalculateContextPercent(totalInput, cfg.ContextWindowSize)
 	}
 }
 

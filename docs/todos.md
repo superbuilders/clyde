@@ -1515,33 +1515,33 @@ Stories are dependency-ordered:
 **Acceptance Criteria**:
 
 *Resume from message files:*
-- [ ] `clyde --resume` / `clyde -r` loads the most recent session for the current user.
-- [ ] `clyde --resume <session-id>` loads a specific session by directory name.
-- [ ] Reconstruction reads message files in sorted order and groups them into API messages using deterministic rules: consecutive `thinking`/`tool-use` files → one assistant message; consecutive `tool-result` files → one user message; `user` and `assistant` files start/flush messages; `diagnostic` and `compaction` files are skipped. (Per `docs/sessions-history.md` §12.)
-- [ ] The `toolu_id` is extracted from `→ ... [toolu_id]` lines in `tool-use` files and used to populate `tool_use_id` on corresponding `tool_result` blocks.
-- [ ] If a compaction has occurred (a `*_system.md` file exists), resume loads from the latest `*_system.md` forward. Otherwise loads all files.
-- [ ] After resume, new messages are written to the same session directory as new timestamped files.
-- [ ] A malformed last file (from a crash) is skipped or truncated gracefully — the rest of the session loads.
+- [x] `clyde --resume` / `clyde -r` loads the most recent session for the current user.
+- [x] `clyde --resume <session-id>` loads a specific session by directory name.
+- [x] Reconstruction reads message files in sorted order and groups them into API messages using deterministic rules: consecutive `thinking`/`tool-use` files → one assistant message; consecutive `tool-result` files → one user message; `user` and `assistant` files start/flush messages; `diagnostic` and `compaction` files are skipped. (Per `docs/sessions-history.md` §12.)
+- [x] The `toolu_id` is extracted from `→ ... [toolu_id]` lines in `tool-use` files and used to populate `tool_use_id` on corresponding `tool_result` blocks.
+- [x] If a compaction has occurred (a `*_system.md` file exists), resume loads from the latest `*_system.md` forward. Otherwise loads all files.
+- [x] After resume, new messages are written to the same session directory as new timestamped files.
+- [x] A malformed last file (from a crash) is skipped or truncated gracefully — the rest of the session loads.
 
 *Cross-user resume (branching):*
-- [ ] When resuming another user's session, the session directory is copied to a new directory: `<timestamp>_<user>_from_<source-session-id>/`. The copied files are untouched; new messages are appended as new files.
-- [ ] When resuming your own most recent session, no copy is needed.
+- [x] When resuming another user's session, the session directory is copied to a new directory: `<timestamp>_<user>_from_<source-session-id>/`. The copied files are untouched; new messages are appended as new files.
+- [x] When resuming your own most recent session, no copy is needed.
 
 *Session listing:*
-- [ ] `clyde --sessions` lists sessions in reverse chronological order with message count and summary (first user message, truncated).
-- [ ] All info derived from files on disk — no database or metadata file.
+- [x] `clyde --sessions` lists sessions in reverse chronological order with message count and summary (first user message, truncated).
+- [x] All info derived from files on disk — no database or metadata file.
 
 *CLI → REPL transition:*
-- [ ] A CLI one-shot session (`clyde "do something"`) can be resumed in REPL mode via `clyde --resume`.
+- [x] A CLI one-shot session (`clyde "do something"`) can be resumed in REPL mode via `clyde --resume`.
 
 *Tests:*
-- [ ] Unit test: reconstruction from a set of message files produces the correct `a.history` structure (message roles, content block types, tool_use_ids all correct).
-- [ ] Unit test: resume after compaction loads only from the latest `*_system.md` forward.
-- [ ] Unit test: resume with a malformed last file loads all prior messages and skips the bad file.
-- [ ] Unit test: cross-user resume copies the directory and appends the `_from_` provenance.
-- [ ] Unit test: `--sessions` listing produces correct output from a directory of test sessions.
-- [ ] Integration test: create a session with tool use, exit, resume, verify history is intact and conversation continues seamlessly.
-- [ ] Integration test: create a CLI session, resume it in REPL mode, verify continuity.
+- [x] Unit test: reconstruction from a set of message files produces the correct `a.history` structure (message roles, content block types, tool_use_ids all correct).
+- [x] Unit test: resume after compaction loads only from the latest `*_system.md` forward.
+- [x] Unit test: resume with a malformed last file loads all prior messages and skips the bad file.
+- [x] Unit test: cross-user resume copies the directory and appends the `_from_` provenance.
+- [x] Unit test: `--sessions` listing produces correct output from a directory of test sessions.
+- [x] Integration test: create a session with tool use, exit, resume, verify history is intact and conversation continues seamlessly.
+- [x] Integration test: create a CLI session, resume it in REPL mode, verify continuity.
 
 ---
 

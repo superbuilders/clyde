@@ -55,9 +55,12 @@ func (l Level) ShouldShow(threshold Level) bool {
 
 // FlagResult contains the parsed result of CLI flag processing.
 type FlagResult struct {
-	Level   Level
-	NoThink bool     // true if --no-think was passed
-	Args    []string // remaining args after flag stripping
+	Level        Level
+	NoThink      bool     // true if --no-think was passed
+	Resume       bool     // true if --resume or -r was passed
+	ResumeTarget string   // session ID if --resume <id> was passed
+	Sessions     bool     // true if --sessions was passed
+	Args         []string // remaining args after flag stripping
 }
 
 // ParseFlags parses CLI flags and returns the appropriate log level.
@@ -84,7 +87,8 @@ func ParseFlagsExt(args []string) FlagResult {
 	result := FlagResult{Level: Normal}
 	result.Args = make([]string, 0, len(args))
 
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		switch arg {
 		case "--silent":
 			result.Level = Silent
@@ -96,6 +100,15 @@ func ParseFlagsExt(args []string) FlagResult {
 			result.Level = Debug
 		case "--no-think":
 			result.NoThink = true
+		case "--sessions":
+			result.Sessions = true
+		case "--resume", "-r":
+			result.Resume = true
+			// Peek at next arg for optional session ID
+			if i+1 < len(args) && args[i+1] != "" && args[i+1][0] != '-' {
+				result.ResumeTarget = args[i+1]
+				i++ // consume the next arg
+			}
 		default:
 			result.Args = append(result.Args, arg)
 		}

@@ -4841,6 +4841,80 @@ Created `docs/playwright-mcp.md` — a design document for adding Playwright bro
 - Command history with arrow key navigation
 - Syntax highlighting for code in responses
 
+## SESS-2: Session Resume & Listing (Implemented 2026-04-08)
+
+**Feature**: Resume previous sessions from disk, list past sessions, cross-user branching.
+
+**What it does**:
+- `clyde --resume` / `clyde -r` loads the most recent session for the current user
+- `clyde --resume <session-id>` loads a specific session (exact or prefix match)
+- `clyde --sessions` lists all sessions with message count and first-user-message summary
+- Cross-user resume copies the source session with `_from_` provenance in the directory name
+- Deterministic reconstruction: message files → API-compatible `providers.Message` history
+- Compaction-aware: if a `*_system.md` exists, resume starts from the latest one
+- Backward-compatible: handles both SESS-1 (legacy) and SESS-2 (enriched) file formats
+
+**Key implementation details**:
+
+1. **Package**: `agent/session/resume.go` — reconstruction, listing, resume utilities
+2. **Reconstruction algorithm** (per `docs/sessions-history.md` §12):
+   - Files consumed in timestamp (filename) order via state machine
+   - `user` → flush pending, new user message
+   - `thinking`/`tool-use` → accumulate on pending assistant message
+   - `tool-result` → accumulate on pending user (tool_result) message
+   - `assistant` → flush pending, new assistant text message
+   - `system` → compaction summary (injected as user+assistant pair)
+   - `diagnostic`/`compaction` → skipped
+3. **Enriched tool-use persistence** (SESS-2 format):
+   - Tool-use files now include tool name and input JSON on subsequent lines
+   - Format: `→ Reading file: main.go [toolu_abc123]\nname: read_file\ninput: {"path":"main.go"}`
+   - Backward-compatible: legacy files without metadata use `inferToolName()` fallback
+4. **Enriched tool-result persistence**: 
+   - Tool-result files now include explicit `[toolu_id]` on first line
+   - Legacy files without IDs use order-based matching (tool-results match tool-uses by sequence)
+5. **New agent callbacks**: `ToolUseCallback` provides full tool metadata (display message, tool name, ID, input)
+6. **`SetHistory()` method**: Allows the CLI to inject reconstructed history into the agent
+7. **`Open()` function**: Opens existing session directory with monotonicity guard from last file
+8. **Timezone fix**: `ParseTimestampFromFilename` uses `time.ParseInLocation(... time.Local)` to match `time.Now()` timezone
+9. **CLI flags**: `--resume`/`-r` with optional session ID argument, `--sessions` for listing
+
+**Files changed**:
+- `agent/session/resume.go` — New: reconstruction, listing, finding, copying (21 KB)
+- `agent/session/session.go` — Unchanged (Open, ParseTimestamp already handled in resume.go)
+- `agent/agent.go` — Added: `ToolUseCallback`, `WithToolUseCallback`, `SetHistory`
+- `cli/loglevel/loglevel.go` — Added: `Resume`, `ResumeTarget`, `Sessions` fields in `FlagResult`
+- `cli/cli.go` — Added: `runResumeMode`, `runSessionsMode`, `runREPLModeWithSession`; enhanced tool-use/result persistence
+- `tests/session_resume_test.go` — New: 24 tests
+
+**Test coverage** (24 new tests):
+- `TestReconstructHistory_BasicConversation` — simple user/assistant alternation
+- `TestReconstructHistory_WithToolUse` — thinking + tool_use + tool_result flow
+- `TestReconstructHistory_MultipleToolCalls` — 2 tool_use blocks in one assistant turn
+- `TestReconstructHistory_AfterCompaction` — loads from latest system.md forward
+- `TestReconstructHistory_MalformedLastFile` — crash recovery (partial file skipped)
+- `TestReconstructHistory_LegacyFormat` — SESS-1 backward compatibility
+- `TestReconstructHistory_EmptyDir` — empty session
+- `TestListSessions` — listing with counts, summaries, ordering
+- `TestCrossUserResume` — directory copy with `_from_` provenance
+- `TestFindMostRecentSession` — finds latest session for a user
+- `TestFindSessionByID` — exact and prefix match, ambiguous/missing handling
+- `TestOpenSession` — opens existing dir, monotonicity guard works
+- `TestOpenSession_NonExistent` — error on missing directory
+- `TestExtractToolUseMetadata` — new format, legacy format, no-id (4 subtests)
+- `TestExtractToolResultContent` — new format, legacy format, no-fences (3 subtests)
+- `TestFlagParsing_Resume` — --resume, -r, with/without target (6 subtests)
+- `TestFlagParsing_Sessions` — --sessions flag
+- `TestParseTimestampFromFilename` — timestamp parsing + error cases
+- `TestMessageTypeFromFilename` — all 8 message types
+- `TestSessionOwner` — owner extraction including branched sessions
+- `TestAgentSetHistory` — agent history replacement
+- `TestToolUseCallback` — callback signature and option
+- `TestInferToolName` — display message → tool name mapping (11 tools)
+- `TestResumeIntegration_CreateAndReconstruct` — full lifecycle: create session, write messages, reconstruct, verify, open, continue
+
+**Bug fixed during implementation**: Timezone mismatch in `ParseTimestampFromFilename`.
+`time.Parse` returns UTC but `time.Now()` returns local time. When the machine isn't in UTC, the monotonicity guard in `Open()` produced incorrect comparisons, causing new files to sort before existing ones. Fixed by using `time.ParseInLocation(..., time.Local)`.
+
 ## SESS-1: Session History Persistence (Implemented 2026-04-08)
 
 **Feature**: File-based session persistence — one file per message, crash-safe, Unix-filterable.
