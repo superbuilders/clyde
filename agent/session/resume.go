@@ -294,6 +294,42 @@ func ReconstructHistory(sessionDir string) ([]providers.Message, []string, error
 	// Flush any remaining pending message
 	flush()
 
+	// Crash recovery: if the last message is a user message, it represents
+	// an incomplete exchange (the user typed something but the process died
+	// or errored before getting a response). Drop it — the user can retype.
+	// This prevents two consecutive user messages when HandleMessage adds
+	// the next user input.
+	for len(messages) > 0 && messages[len(messages)-1].Role == "user" {
+		// Check if it's a plain text message (not tool_result which is part of a loop)
+		lastContent := messages[len(messages)-1].Content
+		if _, isString := lastContent.(string); isString {
+			warnings = append(warnings, fmt.Sprintf("dropping trailing user message (incomplete exchange)"))
+			messages = messages[:len(messages)-1]
+			break
+		}
+		// If it's a tool_result user message, also drop it — the agent was mid-loop
+		if blocks, ok := lastContent.([]providers.ContentBlock); ok {
+			hasToolResult := false
+			for _, b := range blocks {
+				if b.Type == "tool_result" {
+					hasToolResult = true
+					break
+				}
+			}
+			if hasToolResult {
+				// Also drop the preceding assistant message with tool_use that
+				// started this incomplete loop
+				warnings = append(warnings, "dropping trailing tool_result (incomplete tool loop)")
+				messages = messages[:len(messages)-1]
+				if len(messages) > 0 && messages[len(messages)-1].Role == "assistant" {
+					messages = messages[:len(messages)-1]
+				}
+				continue
+			}
+		}
+		break
+	}
+
 	return messages, warnings, nil
 }
 

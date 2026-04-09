@@ -350,6 +350,47 @@ func TestReconstructHistory_EmptyDir(t *testing.T) {
 	}
 }
 
+// TestReconstructHistory_DropsTrailingUserMessage verifies that a trailing
+// user message (from a crash or error mid-exchange) is dropped during
+// reconstruction to prevent two consecutive user messages on resume.
+func TestReconstructHistory_DropsTrailingUserMessage(t *testing.T) {
+	dir := t.TempDir()
+
+	// Complete exchange
+	writeFile(t, dir, "2026-07-14T09-32-00.000_user.md", "**You:**\n\nhello\n")
+	writeFile(t, dir, "2026-07-14T09-32-03.000_thinking.md", "💭 thinking\n")
+	writeFile(t, dir, "2026-07-14T09-32-03.100_assistant.md", "**Claude:**\n\nHi there!\n")
+	// Dangling user message — process died or errored before getting a response
+	writeFile(t, dir, "2026-07-14T09-32-10.000_user.md", "**You:**\n\nwhat files exist?\n")
+
+	messages, warnings, err := session.ReconstructHistory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have warning about dropped message
+	hasDropWarning := false
+	for _, w := range warnings {
+		if strings.Contains(w, "dropping trailing user message") {
+			hasDropWarning = true
+		}
+	}
+	if !hasDropWarning {
+		t.Error("Expected warning about dropped trailing user message")
+	}
+
+	// Should be 2 messages: user + assistant (trailing user dropped)
+	if len(messages) != 2 {
+		t.Fatalf("Expected 2 messages (trailing user dropped), got %d", len(messages))
+	}
+	if messages[0].Role != "user" {
+		t.Errorf("Message 0: expected role 'user', got %q", messages[0].Role)
+	}
+	if messages[1].Role != "assistant" {
+		t.Errorf("Message 1: expected role 'assistant', got %q", messages[1].Role)
+	}
+}
+
 // TestReconstructHistory_ThinkingPlusAssistant verifies that thinking and
 // assistant text are combined into a single assistant message (not two
 // consecutive assistant messages which would violate API alternation rules).
