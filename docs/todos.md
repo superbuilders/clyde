@@ -1139,10 +1139,6 @@ This story delivers the truncation engine *and* thinking traces together as one 
 
 ---
 
-## Compaction Stories
-
----
-
 ## Architecture Stories
 
 Stories are dependency-ordered: ARCH-1 (directory reorg) must land first, then ARCH-2 (agent I/O refactor) can clean up what ARCH-1 revealed.
@@ -1454,26 +1450,154 @@ The agent constructor internally:
 
 ---
 
+## Session & History Stories
+
+> **Design doc**: `docs/sessions-history.md` — file-based session persistence with one file per message, timestamp-only naming, and Unix-native filtering.
+>
+> **Design decision — no history search tool (formerly CMP-6)**: Since conversation history is persisted as local `.md` files in a known directory structure, the agent searches its own history using existing tools (`grep`, `read_file`, `glob`, `run_bash`) guided by system prompt instructions. No custom `search_history` tool is needed. This follows the "lean into standard tools" philosophy.
+>
+> **Design decision — no sequence numbers (ITD-1)**: Message files use timestamps as the sole ordering mechanism. Autoincrementing sequence numbers were eliminated — they require state tracking, impose arbitrary width limits, and are redundant with ISO-8601 timestamps that sort lexicographically. See `docs/sessions-history.md` ITD-1 for full rationale.
+
+Stories are dependency-ordered:
+
+---
+
+### SESS-1: Session History Persistence (One File Per Message)
+
+**As a** user of Clyde,
+**I want** every message in my conversation to be persisted to disk as it happens,
+**so that** I have a complete, searchable record of every session that survives crashes and process exits.
+
+**Depends on**: nothing
+
+**Acceptance Criteria**:
+
+*Session infrastructure:*
+- [ ] On session start (REPL or CLI mode), the session location is determined: `git rev-parse --show-toplevel` → `<repo>/.clyde/sessions/`, else `~/.clyde/sessions/`.
+- [ ] A session directory is created: `<session-location>/<timestamp>_<username>/` where username comes from `git config user.name` (lowercased, spaces to hyphens), fallback `$USER`.
+- [ ] If `.clyde/sessions/` is new and inside a git repo, `.clyde/sessions/` is added to `.gitignore` automatically.
+
+*Per-message file writing:*
+- [ ] After each message or content block, a file is written to the session directory: `<timestamp>_<type>.md` where timestamp is ISO-8601 with milliseconds and hyphens for colons (e.g., `2026-07-14T09-32-05.123`), and type is one of: `user`, `assistant`, `system`, `thinking`, `tool-use`, `tool-result`, `diagnostic`.
+- [ ] File contents match terminal output at debug level with ANSI codes stripped — role markers (`**You:**`, `**Claude:**`), `💭` for thinking, `→` lines for tool use, fenced output for tool results, `🔍`/`💾`/`🔒` for diagnostics.
+- [ ] Files are written synchronously after each message (crash safety: at most one incomplete file on crash).
+- [ ] `cat *.md` in the session directory (sorted by filename) produces a valid, readable conversation transcript.
+- [ ] A monotonicity guard ensures no timestamp collision: if `time.Now()` ≤ last written timestamp, bump by 1ms.
+
+*Tool use IDs for reconstruction:*
+- [ ] Every `→` progress line includes the tool_use_id in brackets: `→ Reading file: agent/agent.go [toolu_abc123]`. This appears at all log levels and in the persisted file.
+
+*System prompt additions:*
+- [ ] The system prompt includes the session path and file naming convention so the agent can search its own history using existing tools (`grep`, `read_file`, `glob`, `run_bash("cat *_user.md")`).
+
+*Session completion:*
+- [ ] On clean exit, the session path is printed: `Session saved: .clyde/sessions/2026-07-14T09-32-00_aj/`.
+
+*Tests:*
+- [ ] Unit test: a multi-turn conversation produces correctly named files in the session directory (one per message, timestamps monotonically increasing, types matching content).
+- [ ] Unit test: `cat *.md` output matches expected transcript (role markers, tool IDs, diagnostics all present and ordered).
+- [ ] Unit test: crash mid-session leaves all prior messages intact as individual files.
+- [ ] Unit test: `.gitignore` is updated on first session creation inside a git repo.
+- [ ] Unit test: session directory naming uses correct username and timestamp format.
+- [ ] Unit test: tool use IDs appear in `→` lines at all log levels.
+- [ ] Integration test: a real multi-turn conversation with tool use produces a valid session directory; `cat *.md` is a coherent transcript; `cat *_user.md` shows only user messages; `cat *_tool-result.md` shows only tool output.
+
+---
+
+### SESS-2: Session Resume & Listing
+
+**As a** user who wants to continue a previous conversation,
+**I want** to resume a session from where I left off (or from another user's session),
+**so that** I can pick up work without losing context — especially after crashes, restarts, or handoffs.
+
+**Depends on**: SESS-1
+
+**Acceptance Criteria**:
+
+*Resume from message files:*
+- [ ] `clyde --resume` / `clyde -r` loads the most recent session for the current user.
+- [ ] `clyde --resume <session-id>` loads a specific session by directory name.
+- [ ] Reconstruction reads message files in sorted order and groups them into API messages using deterministic rules: consecutive `thinking`/`tool-use` files → one assistant message; consecutive `tool-result` files → one user message; `user` and `assistant` files start/flush messages; `diagnostic` and `compaction` files are skipped. (Per `docs/sessions-history.md` §12.)
+- [ ] The `toolu_id` is extracted from `→ ... [toolu_id]` lines in `tool-use` files and used to populate `tool_use_id` on corresponding `tool_result` blocks.
+- [ ] If a compaction has occurred (a `*_system.md` file exists), resume loads from the latest `*_system.md` forward. Otherwise loads all files.
+- [ ] After resume, new messages are written to the same session directory as new timestamped files.
+- [ ] A malformed last file (from a crash) is skipped or truncated gracefully — the rest of the session loads.
+
+*Cross-user resume (branching):*
+- [ ] When resuming another user's session, the session directory is copied to a new directory: `<timestamp>_<user>_from_<source-session-id>/`. The copied files are untouched; new messages are appended as new files.
+- [ ] When resuming your own most recent session, no copy is needed.
+
+*Session listing:*
+- [ ] `clyde --sessions` lists sessions in reverse chronological order with message count and summary (first user message, truncated).
+- [ ] All info derived from files on disk — no database or metadata file.
+
+*CLI → REPL transition:*
+- [ ] A CLI one-shot session (`clyde "do something"`) can be resumed in REPL mode via `clyde --resume`.
+
+*Tests:*
+- [ ] Unit test: reconstruction from a set of message files produces the correct `a.history` structure (message roles, content block types, tool_use_ids all correct).
+- [ ] Unit test: resume after compaction loads only from the latest `*_system.md` forward.
+- [ ] Unit test: resume with a malformed last file loads all prior messages and skips the bad file.
+- [ ] Unit test: cross-user resume copies the directory and appends the `_from_` provenance.
+- [ ] Unit test: `--sessions` listing produces correct output from a directory of test sessions.
+- [ ] Integration test: create a session with tool use, exit, resume, verify history is intact and conversation continues seamlessly.
+- [ ] Integration test: create a CLI session, resume it in REPL mode, verify continuity.
+
+---
+
+## Compaction Stories
+
+> **Prerequisite**: Session & history persistence (SESS-1, SESS-2) must land before compaction work begins. Compaction writes `compaction` and `system` type files to the session directory per the file-per-message design.
+>
+> **Design decision — no history search tool (formerly CMP-6)**: Eliminated. The agent searches its own session history using existing tools (`grep`, `read_file`, `glob`) guided by system prompt instructions. This follows the "lean into standard tools" philosophy.
+>
+> **Folded stories**: CMP-4 (Git-Centric State Tracking), CMP-5 (Preserve Initial User Message), and CMP-7 (Feed Recent Context into Summarizer) were originally separate stories. They are now acceptance criteria on CMP-1 and CMP-2 respectively, since they describe *how* those stories behave rather than independent deliverables.
+
+Stories are dependency-ordered:
+
+---
+
 ### CMP-1: Conversation Token Counting & Automatic Compaction Trigger
 
 **As a** user running a long autonomous session,
 **I want** Clyde to automatically detect when the context window is nearly full and trigger compaction,
 **so that** my session continues seamlessly without hitting context limits or crashing.
 
+**Depends on**: SESS-1 (session file writing for compaction marker + system summary files)
+
 **Acceptance Criteria**:
-- [ ] A token counting mechanism is implemented that tracks total input tokens from the most recent API response's `usage.input_tokens` field.
+
+*Token counting & trigger:*
+- [ ] A token counting mechanism tracks total input tokens from the most recent API response's `usage.input_tokens` field.
 - [ ] A configurable `reserve_tokens` threshold is defined (default ~16,000 tokens), settable via `~/.clyde/config` (`RESERVE_TOKENS=16000`).
 - [ ] Before each API call, the agent checks if `total_input_tokens > (context_window_size - reserve_tokens)`.
 - [ ] When the threshold is exceeded, compaction is triggered automatically before sending the next message.
-- [ ] Compaction produces a summary (initially a stub/simple implementation — detailed summarization is CMP-2).
-- [ ] After compaction, the conversation history is replaced with: system prompt + original user message (verbatim) + compaction summary + recent kept messages.
-- [ ] The agent continues the conversation seamlessly after compaction.
-- [ ] A progress message is displayed: `🗜️ Compacting conversation history...`.
 - [ ] There is no manual `/compact` command — compaction is always automatic.
+- [ ] A `<timestamp>_compaction.md` file containing `🗜️ Compacting conversation history...` is written to the session directory.
+
+*Post-compaction history shape:*
+- [ ] After compaction, the conversation history is replaced with: system prompt + original user message (verbatim) + compaction summary + recent kept messages.
+- [ ] A `<timestamp>_system.md` file containing the compaction summary as a `**System:**` message is written to the session directory.
+- [ ] The agent continues the conversation seamlessly after compaction.
+
+*Preserving the initial user message (formerly CMP-5):*
+- [ ] The first user message in any conversation is tagged as `pinned` in the conversation history.
+- [ ] During compaction, the first user message is always placed immediately after the system prompt and before any compaction summary — in full, unmodified.
+- [ ] The first user message is included verbatim in every summarization pass so the handoff document always references the original ask.
+- [ ] The first user message is never truncated, rephrased, or dropped, even under extreme token pressure.
+- [ ] In any "full history" or debug view, the first message is visually marked (e.g., `📌 Original Mission`).
+
+*Compaction stub:*
+- [ ] Compaction produces a summary (initially a simple single-call implementation — detailed multi-step summarization is CMP-2).
+
+*Tests:*
 - [ ] Unit tests verify trigger fires at the correct threshold.
 - [ ] Unit tests verify the original user message is preserved verbatim after compaction.
+- [ ] Unit tests verify the first message survives 1, 2, and 5 compaction cycles unchanged.
+- [ ] Unit tests verify the first message appears before the compaction summary in the post-compaction history.
 - [ ] Unit tests verify conversation continues successfully after compaction.
-- [ ] Integration test with a real (or mocked) multi-turn conversation that hits the threshold and compacts.
+- [ ] Unit tests verify `compaction.md` and `system.md` files are written to the session directory.
+- [ ] Integration test with a real (or mocked) multi-turn conversation that hits the threshold, compacts, and resumes (SESS-2 resume loads from the new `system.md`).
 
 ---
 
@@ -1483,21 +1607,47 @@ The agent constructor internally:
 **I want** compaction to be performed as a multi-step agentic workflow (not a single LLM call),
 **so that** the resulting handoff document is high-fidelity, structured, and reads like a developer status update — not a lossy summary.
 
+**Depends on**: CMP-1 (trigger + stub compaction to replace)
+
 **Acceptance Criteria**:
+
+*Multi-phase workflow:*
 - [ ] Compaction is implemented as an internal multi-phase workflow with distinct steps:
   1. **Goal/constraint extraction**: Identify the original mission, constraints, and acceptance criteria.
   2. **Decision capture**: Extract key decisions made, alternatives considered, and rationale.
-  3. **File-state analysis**: Summarize current state of modified/created files (referencing git, per CMP-4).
-  4. **Tool-result synthesis**: Summarize significant tool outputs (per CMP-3).
+  3. **File-state analysis**: Summarize current state of modified/created files, referencing git state (see git-centric criteria below).
+  4. **Tool-result synthesis**: Summarize significant tool outputs (per CMP-3, or simple truncation if CMP-3 not yet landed).
   5. **Handoff drafting**: Produce a structured Markdown handoff document.
 - [ ] Each phase uses a focused prompt running on the strongest available model with generous token budget.
 - [ ] The final handoff document is structured Markdown with clear sections (Goal, Constraints, Progress, Decisions, Current State, Next Steps, Critical Context).
 - [ ] The handoff document replaces the summarized portion of conversation history.
 - [ ] All intermediate phase outputs are logged internally for debugging (viewable at Debug level).
 - [ ] A progress message is displayed for each phase (e.g., `🗜️ Compaction: extracting decisions...`).
+
+*Git-centric state tracking (formerly CMP-4):*
+- [ ] At each compaction point, the file-state analysis phase captures: current commit SHA, branch name, short commit message (if any), and a one-line "what changed since last compaction" note.
+- [ ] The handoff document's "Current State" section references the commit SHA and lets git handle detailed diffs.
+- [ ] No cumulative raw-diff or modified-files lists are carried forward across compactions.
+- [ ] A post-compaction hook optionally runs `git status` to verify repo cleanliness, appending warnings if uncommitted changes exist.
+- [ ] If the working directory is not a git repo, the file-state phase is skipped gracefully and the handoff notes "not a git repo."
+
+*Recent context fed to summarizer (formerly CMP-7):*
+- [ ] During the multi-step workflow, the last 1–2 full kept turns are included as extra context in every summarization phase.
+- [ ] The final handoff drafter is explicitly instructed to call out any open threads or decisions that bridge the summary and the kept messages.
+- [ ] The extra context is kept small (just enough for continuity) and does not significantly increase summarization token usage.
+- [ ] A configurable flag can disable this behavior for maximum token savings (`COMPACT_INCLUDE_RECENT_CONTEXT=false`).
+
+*Tests:*
 - [ ] Unit tests verify each phase produces expected output structure from mock inputs.
 - [ ] Unit tests verify the final handoff document contains all required sections.
+- [ ] Unit tests verify git state capture produces expected format (SHA, branch, message).
+- [ ] Unit tests verify graceful handling in a non-git directory.
+- [ ] Unit tests verify no raw diffs are accumulated across multiple compaction cycles.
+- [ ] Unit tests verify recent context is included in summarizer input.
+- [ ] Unit tests verify the `COMPACT_INCLUDE_RECENT_CONTEXT` flag disables inclusion when set to false.
 - [ ] Integration test with a real multi-turn conversation produces a coherent, readable handoff.
+- [ ] Integration test in a real git repo verifies correct SHA and branch after a compaction.
+- [ ] Integration test verifies the handoff document references or bridges content from the kept messages.
 - [ ] The handoff quality is manually reviewed and documented in the PR (compare to single-call summarization).
 
 ---
@@ -1507,6 +1657,8 @@ The agent constructor internally:
 **As a** long-running agent whose conversation contains large tool outputs,
 **I want** oversized tool results to be intelligently summarized (not hard-truncated) during compaction,
 **so that** critical details in the tail of tool outputs are preserved rather than chopped at an arbitrary character limit.
+
+**Depends on**: CMP-2 (used within the tool-result synthesis phase)
 
 **Acceptance Criteria**:
 - [ ] A configurable size threshold for tool output summarization is defined (default: 2000 characters).
@@ -1520,78 +1672,3 @@ The agent constructor internally:
 - [ ] Unit tests verify the metadata note is present in summarized outputs.
 - [ ] Unit tests verify fallback to truncation under token pressure.
 - [ ] Integration test with a real large tool output (e.g., a big `grep` result) produces a meaningful summary.
-
----
-
-### CMP-4: Git-Centric State Tracking
-
-**As a** coding agent operating in a git repository,
-**I want** compaction to reference git state (commit SHAs, branch, status) instead of accumulating raw diffs,
-**so that** the handoff document is always accurate and compact, with git as the single source of truth.
-
-**Acceptance Criteria**:
-- [ ] At each compaction point, the agent captures: current commit SHA, branch name, short commit message (if any), and a one-line "what changed since last compaction" note.
-- [ ] The handoff document's "Current State" section references the commit SHA and lets git handle detailed diffs.
-- [ ] No cumulative raw-diff or modified-files lists are carried forward across compactions (unlike Pi's approach).
-- [ ] A post-compaction hook optionally runs `git status` to verify repo cleanliness, appending warnings if uncommitted changes exist.
-- [ ] If the working directory is not a git repo, this step is skipped gracefully and the handoff notes "not a git repo."
-- [ ] Unit tests verify git state capture produces expected format (SHA, branch, message).
-- [ ] Unit tests verify graceful handling in a non-git directory.
-- [ ] Unit tests verify no raw diffs are accumulated across multiple compaction cycles.
-- [ ] Integration test in a real git repo verifies correct SHA and branch after a compaction.
-
----
-
-### CMP-5: Preserve Initial User Message Verbatim
-
-**As a** user who provides a detailed mission-statement prompt (like a Jira ticket),
-**I want** the original first message to be preserved verbatim through any number of compactions,
-**so that** the agent never loses sight of the full original spec, even in very long sessions.
-
-**Acceptance Criteria**:
-- [ ] The first user message in any conversation is tagged as `sacred` / `pinned` in the conversation history.
-- [ ] During compaction, the first user message is always placed immediately after the system prompt and before any compaction summary — in full, unmodified.
-- [ ] The first user message is included verbatim in every summarization pass so the handoff document always references the original ask.
-- [ ] The first user message is never truncated, rephrased, or dropped, even under extreme token pressure.
-- [ ] In any "full history" or debug view, the first message is visually marked (e.g., `📌 Original Mission`).
-- [ ] Unit tests verify the first message survives 1, 2, and 5 compaction cycles unchanged.
-- [ ] Unit tests verify the first message appears before the compaction summary in the post-compaction history.
-- [ ] Unit tests verify it is included in the summarizer's input for every compaction phase.
-
----
-
-### CMP-6: History Search Tool (Agent-Only)
-
-**As a** long-running autonomous agent,
-**I want** a tool to search the full raw conversation log (even content that has been compacted away),
-**so that** I can retrieve specific details from earlier in the session when the handoff summary isn't sufficient.
-
-**Acceptance Criteria**:
-- [ ] The entire conversation is persisted as a flat, plaintext, append-only log file (one entry per turn, with timestamps and role markers).
-- [ ] A new internal tool `search_history` is registered in the tool registry (available to the agent but NOT listed in the user-facing system prompt as a user-invocable tool).
-- [ ] The tool accepts a `query` parameter (string) and an optional `max_results` parameter (int, default 10).
-- [ ] The tool searches the log using `grep`-style pattern matching and returns results with timestamps, turn numbers, and short context snippets.
-- [ ] Results are concise enough that the agent can decide whether to pull full turns back into context.
-- [ ] The tool works correctly before any compaction has occurred (searches current conversation) and after compaction (searches the full historical log).
-- [ ] The log file is stored in a session-specific location (e.g., `~/.clyde/sessions/<session_id>.log`).
-- [ ] Unit tests verify log entries are appended correctly with proper formatting.
-- [ ] Unit tests verify search returns expected results for known patterns.
-- [ ] Unit tests verify search works both pre- and post-compaction.
-- [ ] Integration test with a real multi-turn conversation: compact, then search for a detail from an early turn and verify it is found.
-
----
-
-### CMP-7: Feed Recent Context into the Summarizer
-
-**As a** long-running agent undergoing compaction,
-**I want** the summarizer to see the messages that will remain in context after compaction,
-**so that** the handoff document is coherent with the kept messages and explicitly bridges any open threads.
-
-**Acceptance Criteria**:
-- [ ] During the multi-step compaction workflow (CMP-2), the last 1–2 full kept turns are included as extra context in every summarization phase.
-- [ ] The final handoff drafter is explicitly instructed to call out any open threads or decisions that bridge the summary and the kept messages.
-- [ ] The extra context is kept small (just enough for continuity) and does not significantly increase summarization token usage.
-- [ ] A configurable flag can disable this behavior for maximum token savings (`COMPACT_INCLUDE_RECENT_CONTEXT=false`).
-- [ ] Unit tests verify recent context is included in summarizer input.
-- [ ] Unit tests verify the flag disables inclusion when set to false.
-- [ ] Integration test verifies the handoff document references or bridges content from the kept messages.
