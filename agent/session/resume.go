@@ -198,14 +198,13 @@ func ReconstructHistory(sessionDir string) ([]providers.Message, []string, error
 			flush() // user messages are immediately flushed
 
 		case TypeThinking:
-			ensureAssistant()
-			thinkingText := extractThinkingText(text)
-			if thinkingText != "" {
-				pending.content = append(pending.content, providers.ContentBlock{
-					Type:     "thinking",
-					Thinking: thinkingText,
-				})
-			}
+			// Thinking blocks are preserved on disk for the human record,
+			// but EXCLUDED from API reconstruction. The Claude API requires
+			// a cryptographic `signature` field on thinking blocks in history,
+			// which we don't persist (it's ephemeral per-response). The API
+			// generates fresh thinking on each new turn — old thinking isn't
+			// needed for continuation.
+			continue
 
 		case TypeToolUse:
 			ensureAssistant()

@@ -107,7 +107,7 @@ func TestReconstructHistory_WithToolUse(t *testing.T) {
 		t.Errorf("Message 0: expected role 'user', got %q", messages[0].Role)
 	}
 
-	// Verify message 1: assistant with thinking + tool_use
+	// Verify message 1: assistant with tool_use (thinking is excluded from API history)
 	if messages[1].Role != "assistant" {
 		t.Errorf("Message 1: expected role 'assistant', got %q", messages[1].Role)
 	}
@@ -115,23 +115,20 @@ func TestReconstructHistory_WithToolUse(t *testing.T) {
 	if !ok {
 		t.Fatalf("Message 1: expected []ContentBlock, got %T", messages[1].Content)
 	}
-	if len(blocks1) != 2 {
-		t.Fatalf("Message 1: expected 2 blocks (thinking+tool_use), got %d", len(blocks1))
+	if len(blocks1) != 1 {
+		t.Fatalf("Message 1: expected 1 block (tool_use; thinking excluded), got %d", len(blocks1))
 	}
-	if blocks1[0].Type != "thinking" {
-		t.Errorf("Block 0: expected type 'thinking', got %q", blocks1[0].Type)
+	if blocks1[0].Type != "tool_use" {
+		t.Errorf("Block 0: expected type 'tool_use', got %q", blocks1[0].Type)
 	}
-	if blocks1[1].Type != "tool_use" {
-		t.Errorf("Block 1: expected type 'tool_use', got %q", blocks1[1].Type)
+	if blocks1[0].ID != "toolu_abc123" {
+		t.Errorf("Block 0: expected ID 'toolu_abc123', got %q", blocks1[0].ID)
 	}
-	if blocks1[1].ID != "toolu_abc123" {
-		t.Errorf("Block 1: expected ID 'toolu_abc123', got %q", blocks1[1].ID)
+	if blocks1[0].Name != "list_files" {
+		t.Errorf("Block 0: expected name 'list_files', got %q", blocks1[0].Name)
 	}
-	if blocks1[1].Name != "list_files" {
-		t.Errorf("Block 1: expected name 'list_files', got %q", blocks1[1].Name)
-	}
-	if blocks1[1].Input["path"] != "." {
-		t.Errorf("Block 1: expected input path '.', got %v", blocks1[1].Input)
+	if blocks1[0].Input["path"] != "." {
+		t.Errorf("Block 0: expected input path '.', got %v", blocks1[0].Input)
 	}
 
 	// Verify message 2: user with tool_result
@@ -391,9 +388,9 @@ func TestReconstructHistory_DropsTrailingUserMessage(t *testing.T) {
 	}
 }
 
-// TestReconstructHistory_ThinkingPlusAssistant verifies that thinking and
-// assistant text are combined into a single assistant message (not two
-// consecutive assistant messages which would violate API alternation rules).
+// TestReconstructHistory_ThinkingPlusAssistant verifies that thinking blocks
+// are excluded from API reconstruction (the API requires a cryptographic
+// signature we don't persist), and that the assistant text still loads correctly.
 func TestReconstructHistory_ThinkingPlusAssistant(t *testing.T) {
 	dir := t.TempDir()
 
@@ -410,7 +407,7 @@ func TestReconstructHistory_ThinkingPlusAssistant(t *testing.T) {
 		t.Logf("Warnings: %v", warnings)
 	}
 
-	// Should be exactly 2 messages: user + assistant(thinking+text)
+	// Should be exactly 2 messages: user + assistant(text only — thinking excluded)
 	if len(messages) != 2 {
 		t.Fatalf("Expected 2 messages, got %d", len(messages))
 	}
@@ -423,22 +420,19 @@ func TestReconstructHistory_ThinkingPlusAssistant(t *testing.T) {
 		t.Errorf("Message 1: expected role 'assistant', got %q", messages[1].Role)
 	}
 
-	// Verify assistant message has BOTH thinking and text blocks
+	// Verify assistant message has text block only (thinking excluded from API)
 	blocks, ok := messages[1].Content.([]providers.ContentBlock)
 	if !ok {
 		t.Fatalf("Message 1: expected []ContentBlock, got %T", messages[1].Content)
 	}
-	if len(blocks) != 2 {
-		t.Fatalf("Expected 2 blocks (thinking+text), got %d", len(blocks))
+	if len(blocks) != 1 {
+		t.Fatalf("Expected 1 block (text only; thinking excluded from API), got %d", len(blocks))
 	}
-	if blocks[0].Type != "thinking" {
-		t.Errorf("Block 0: expected type 'thinking', got %q", blocks[0].Type)
+	if blocks[0].Type != "text" {
+		t.Errorf("Block 0: expected type 'text', got %q", blocks[0].Type)
 	}
-	if blocks[1].Type != "text" {
-		t.Errorf("Block 1: expected type 'text', got %q", blocks[1].Type)
-	}
-	if !strings.Contains(blocks[1].Text, "Hello! How can I help?") {
-		t.Errorf("Block 1: unexpected text %q", blocks[1].Text)
+	if !strings.Contains(blocks[0].Text, "Hello! How can I help?") {
+		t.Errorf("Block 0: unexpected text %q", blocks[0].Text)
 	}
 }
 
