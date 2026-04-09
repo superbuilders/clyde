@@ -185,8 +185,15 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 					session.StripANSI(msgWithID), toolName, string(inputJSON))
 				sess.WriteMessage(session.TypeToolUse, content)
 			}
+			// At debug level, emit metadata to match session file contents
+			inputJSON, _ := json.Marshal(toolInput)
+			emitDebugMetadata(os.Stderr, level,
+				"name: "+toolName,
+				"input: "+string(inputJSON))
 		}),
 		agent.WithOutputCallback(func(output string, toolUseID string) {
+			// At debug level, emit tool_use_id to match session file contents
+			emitDebugMetadata(os.Stderr, level, "["+toolUseID+"]")
 			if level.ShouldShow(loglevel.Normal) {
 				displayed := truncateForLevel(output, truncate.ToolOutputLineLimit, level)
 				fmt.Fprintln(os.Stderr)
@@ -204,6 +211,8 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 				displayed := truncateForLevel(text, truncate.ThinkingLineLimit, level)
 				fmt.Fprintln(os.Stderr, style.FormatThinking(displayed))
 			}
+			// At debug level, emit signature to match session file contents
+			emitDebugMetadata(os.Stderr, level, "signature: "+signature)
 			// Persist full thinking + signature to session
 			if sess != nil {
 				sess.WriteMessage(session.TypeThinking, formatThinkingForSession(text, signature))
@@ -323,6 +332,8 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 			}
 			displayed := truncateForLevel(text, truncate.ThinkingLineLimit, level)
 			fmt.Println(style.FormatThinking(displayed))
+			// At debug level, emit signature to match session file contents
+			emitDebugMetadata(os.Stdout, level, "signature: "+signature)
 		}),
 		agent.WithProgressCallback(func(msg string, toolUseID string) {
 			// Append tool use ID for display
@@ -353,6 +364,11 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 					session.StripANSI(msgWithID), toolName, string(inputJSON))
 				sess.WriteMessage(session.TypeToolUse, content)
 			}
+			// At debug level, emit metadata to match session file contents
+			inputJSON, _ := json.Marshal(toolInput)
+			emitDebugMetadata(os.Stdout, level,
+				"name: "+toolName,
+				"input: "+string(inputJSON))
 		}),
 		agent.WithOutputCallback(func(output string, toolUseID string) {
 			// Persist full (untruncated) tool output with tool_use_id
@@ -373,6 +389,8 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
 				lastProgressMsg = ""
 			}
+			// At debug level, emit tool_use_id to match session file contents
+			emitDebugMetadata(os.Stdout, level, "["+toolUseID+"]")
 			displayed := truncateForLevel(output, truncate.ToolOutputLineLimit, level)
 			fmt.Println()
 			fmt.Println(StyleMessage(loglevel.Normal, displayed))
@@ -707,6 +725,7 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 			}
 			displayed := truncateForLevel(text, truncate.ThinkingLineLimit, level)
 			fmt.Println(style.FormatThinking(displayed))
+			emitDebugMetadata(os.Stdout, level, "signature: "+signature)
 		}),
 		agent.WithProgressCallback(func(msg string, toolUseID string) {
 			msgWithID := session.FormatToolUseID(msg, toolUseID)
@@ -732,6 +751,10 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 					session.StripANSI(msgWithID), toolName, string(inputJSON))
 				sess.WriteMessage(session.TypeToolUse, content)
 			}
+			inputJSON, _ := json.Marshal(toolInput)
+			emitDebugMetadata(os.Stdout, level,
+				"name: "+toolName,
+				"input: "+string(inputJSON))
 		}),
 		agent.WithOutputCallback(func(output string, toolUseID string) {
 			if sess != nil {
@@ -748,6 +771,7 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
 				lastProgressMsg = ""
 			}
+			emitDebugMetadata(os.Stdout, level, "["+toolUseID+"]")
 			displayed := truncateForLevel(output, truncate.ToolOutputLineLimit, level)
 			fmt.Println()
 			fmt.Println(StyleMessage(loglevel.Normal, displayed))
@@ -900,6 +924,20 @@ func formatThinkingForSession(text, signature string) string {
 		content += "signature: " + signature + "\n"
 	}
 	return content
+}
+
+// emitDebugMetadata prints debug-level metadata lines to the given writer.
+// This ensures that at --debug level, the terminal output matches the
+// session files exactly (invariant: file = terminal at debug level).
+func emitDebugMetadata(w *os.File, level loglevel.Level, lines ...string) {
+	if !level.ShouldShow(loglevel.Debug) {
+		return
+	}
+	for _, line := range lines {
+		if line != "" {
+			fmt.Fprintln(w, StyleMessage(loglevel.Debug, line))
+		}
+	}
 }
 
 // truncateForLevel applies truncation based on the log level.

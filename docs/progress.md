@@ -4882,7 +4882,7 @@ Created `docs/playwright-mcp.md` — a design document for adding Playwright bro
    - Legacy thinking files without signatures are excluded from API history but preserved on disk
    - `ThinkingCallback` signature changed: `func(text, signature string)`
 6. **Error persistence**: API errors are persisted as diagnostic files (`❌ Error: ...`) so the session log is a complete record of what happened, including failures
-7. **Session files as source of truth**: Session files on disk are never deleted or modified. The API history is a clean projection of the files, shaped for the API's alternation requirements. `cat *.md` always shows everything that happened.
+7. **Debug terminal = session files (invariant preserved)**: At `--debug` level, the terminal output is identical to `cat *.md` on the session directory. Metadata lines (signatures, tool names, input JSON, tool_use_ids) are emitted at debug level via `emitDebugMetadata()`. Lower verbosity levels hide this metadata but the files always capture everything.
 8. **New agent callbacks**: `ToolUseCallback` provides full tool metadata (display message, tool name, ID, input)
 9. **`SetHistory()` method**: Allows the CLI to inject reconstructed history into the agent
 10. **`Open()` function**: Opens existing session directory with monotonicity guard from last file

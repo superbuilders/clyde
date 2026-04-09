@@ -37,7 +37,7 @@ Hard constraints. Everything else is negotiable.
 
 1. **History is stored as plaintext `.md` files.**
 
-2. **File contents = terminal output at debug level + API reconstruction metadata.** The file captures everything visible in the terminal at debug verbosity, plus additional metadata needed for API reconstruction (tool names, input JSON, thinking signatures). The metadata lines are structured (`name: ...`, `input: ...`, `signature: ...`) and appear after the human-readable content. This is a pragmatic relaxation of the original "nothing not in the terminal" rule — session files are a *superset* of terminal output, ensuring both human readability and machine reconstructability.
+2. **File contents = terminal output at debug level.** Running `clyde --debug 2>&1 | tee session.md`, stripping ANSI codes, splitting on message boundaries, and naming each piece by type would produce a valid session directory. At `--debug`, every line written to a session file is also emitted to the terminal. Lower verbosity levels hide content (signatures, tool metadata, diagnostics) but never add content — the file and the debug terminal are identical.
 
 3. **Any text file parsable as a message log is resumable**, regardless of origin — compaction output, terminal pipe, hand-written, artificially constructed.
 
