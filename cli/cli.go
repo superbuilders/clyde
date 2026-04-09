@@ -102,6 +102,19 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		thinkingBudget = budget
 	}
 
+	// Parse optional reserve tokens for compaction trigger
+	reserveTokens := 0
+	if reserveStr := os.Getenv("RESERVE_TOKENS"); reserveStr != "" {
+		reserve, err := strconv.Atoi(reserveStr)
+		if err != nil {
+			return agent.Config{}, fmt.Errorf("RESERVE_TOKENS must be a number, got %q: %w", reserveStr, err)
+		}
+		if reserve < 1000 {
+			return agent.Config{}, fmt.Errorf("RESERVE_TOKENS must be >= 1000, got %d", reserve)
+		}
+		reserveTokens = reserve
+	}
+
 	return agent.Config{
 		APIKey:            apiKey,
 		APIURL:            "https://api.anthropic.com/v1/messages",
@@ -113,6 +126,7 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		BraveSearchAPIKey: os.Getenv("BRAVE_SEARCH_API_KEY"),
 		MCPPlaywright:     os.Getenv("MCP_PLAYWRIGHT") == "true",
 		MCPPlaywrightArgs: os.Getenv("MCP_PLAYWRIGHT_ARGS"),
+		ReserveTokens:     reserveTokens,
 	}, nil
 }
 
@@ -248,6 +262,19 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 		agent.WithAssistantMessageCallback(func(text string) {
 			if sess != nil {
 				sess.WriteMessage(session.TypeAssistant, "**Claude:**\n\n"+text+"\n")
+			}
+		}),
+		agent.WithCompactionCallback(func(marker string, summary string) {
+			if marker != "" {
+				if level.ShouldShow(loglevel.Quiet) {
+					fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Quiet, marker))
+				}
+				if sess != nil {
+					sess.WriteMessage(session.TypeCompaction, marker+"\n")
+				}
+			}
+			if summary != "" && sess != nil {
+				sess.WriteMessage(session.TypeSystem, "**System:**\n\n"+summary+"\n")
 			}
 		}),
 		agent.WithErrorCallback(func(err error) {
@@ -435,6 +462,26 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 		agent.WithAssistantMessageCallback(func(text string) {
 			if sess != nil {
 				sess.WriteMessage(session.TypeAssistant, "**Claude:**\n\n"+text+"\n")
+			}
+		}),
+		agent.WithCompactionCallback(func(marker string, summary string) {
+			if marker != "" {
+				if sp.IsActive() {
+					sp.Stop()
+				}
+				if lastProgressMsg != "" {
+					fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+					lastProgressMsg = ""
+				}
+				if level.ShouldShow(loglevel.Quiet) {
+					fmt.Println(StyleMessage(loglevel.Quiet, marker))
+				}
+				if sess != nil {
+					sess.WriteMessage(session.TypeCompaction, marker+"\n")
+				}
+			}
+			if summary != "" && sess != nil {
+				sess.WriteMessage(session.TypeSystem, "**System:**\n\n"+summary+"\n")
 			}
 		}),
 		agent.WithErrorCallback(func(err error) {
@@ -811,6 +858,26 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 		agent.WithAssistantMessageCallback(func(text string) {
 			if sess != nil {
 				sess.WriteMessage(session.TypeAssistant, "**Claude:**\n\n"+text+"\n")
+			}
+		}),
+		agent.WithCompactionCallback(func(marker string, summary string) {
+			if marker != "" {
+				if sp.IsActive() {
+					sp.Stop()
+				}
+				if lastProgressMsg != "" {
+					fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+					lastProgressMsg = ""
+				}
+				if level.ShouldShow(loglevel.Quiet) {
+					fmt.Println(StyleMessage(loglevel.Quiet, marker))
+				}
+				if sess != nil {
+					sess.WriteMessage(session.TypeCompaction, marker+"\n")
+				}
+			}
+			if summary != "" && sess != nil {
+				sess.WriteMessage(session.TypeSystem, "**System:**\n\n"+summary+"\n")
 			}
 		}),
 		agent.WithErrorCallback(func(err error) {

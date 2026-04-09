@@ -19,6 +19,7 @@ type Config struct {
 	ThinkingBudgetTokens int    // Budget for extended thinking (0 = use default 8192)
 	MCPPlaywright        bool   // Enable Playwright MCP browser automation
 	MCPPlaywrightArgs    string // Extra args for npx @playwright/mcp (e.g. "--headless")
+	ReserveTokens        int    // Tokens to reserve for response; triggers compaction (0 = default 16000)
 }
 
 // LoadFromFile loads configuration from a specific file path
@@ -56,6 +57,19 @@ func LoadFromFile(path string) (*Config, error) {
 		thinkingBudget = budget
 	}
 
+	// Parse optional reserve tokens for compaction trigger
+	reserveTokens := 0
+	if reserveStr := os.Getenv("RESERVE_TOKENS"); reserveStr != "" {
+		reserve, err := strconv.Atoi(reserveStr)
+		if err != nil {
+			return nil, fmt.Errorf("RESERVE_TOKENS must be a number, got %q: %w", reserveStr, err)
+		}
+		if reserve < 1000 {
+			return nil, fmt.Errorf("RESERVE_TOKENS must be >= 1000, got %d", reserve)
+		}
+		reserveTokens = reserve
+	}
+
 	return &Config{
 		APIKey:               apiKey,
 		BraveSearchAPIKey:    os.Getenv("BRAVE_SEARCH_API_KEY"),
@@ -66,5 +80,6 @@ func LoadFromFile(path string) (*Config, error) {
 		ThinkingBudgetTokens: thinkingBudget,
 		MCPPlaywright:        os.Getenv("MCP_PLAYWRIGHT") == "true",
 		MCPPlaywrightArgs:    os.Getenv("MCP_PLAYWRIGHT_ARGS"),
+		ReserveTokens:        reserveTokens,
 	}, nil
 }

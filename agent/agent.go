@@ -38,6 +38,10 @@ type Config struct {
 	MCPPlaywright bool
 	// MCPPlaywrightArgs are extra args for npx @playwright/mcp (e.g. "--headless").
 	MCPPlaywrightArgs string
+	// ReserveTokens is the number of tokens to reserve for the response.
+	// Compaction triggers when input exceeds (ContextWindowSize - ReserveTokens).
+	// 0 uses DefaultReserveTokens (16000).
+	ReserveTokens int
 }
 
 // ProgressCallback receives tool progress lines (the → lines).
@@ -97,8 +101,10 @@ type Agent struct {
 	userMsgCallback    UserMessageCallback
 	assistantMsgCallback AssistantMessageCallback
 	toolUseCallback      ToolUseCallback
+	compactionCallback CompactionCallback
 	lastUsage          providers.Usage // Token usage from the most recent API response
 	contextWindowSize  int             // Model context window size in tokens (for diagnostic display)
+	reserveTokens      int             // Tokens to reserve for response; triggers compaction when exceeded
 	mcpServer          *mcp.PlaywrightServer // MCP server (nil if not enabled)
 }
 
@@ -176,10 +182,20 @@ func WithToolUseCallback(cb ToolUseCallback) AgentOption {
 }
 
 // WithContextWindowSize sets the model's context window size in tokens.
-// This is used for diagnostic display to show context usage percentage.
+// This is used for diagnostic display to show context usage percentage,
+// and for compaction threshold calculation.
 func WithContextWindowSize(size int) AgentOption {
 	return func(a *Agent) {
 		a.contextWindowSize = size
+	}
+}
+
+// WithReserveTokens sets the number of tokens to reserve for the agent's
+// response. Compaction is triggered when input tokens exceed
+// (contextWindowSize - reserveTokens). Default is DefaultReserveTokens (16000).
+func WithReserveTokens(tokens int) AgentOption {
+	return func(a *Agent) {
+		a.reserveTokens = tokens
 	}
 }
 
@@ -217,6 +233,7 @@ func New(cfg Config, opts ...AgentOption) *Agent {
 		systemPrompt:      prompts.SystemPrompt,
 		history:           []providers.Message{},
 		contextWindowSize: cfg.ContextWindowSize,
+		reserveTokens:     cfg.ReserveTokens,
 	}
 
 	// Apply functional options
@@ -296,6 +313,19 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 
 	// Conversation loop - continue until we get a text response
 	for {
+		// Check compaction threshold before API call.
+		// If input tokens have exceeded (contextWindowSize - reserveTokens),
+		// compact the history to free up context space.
+		if a.ShouldCompact() {
+			if err := a.Compact(); err != nil {
+				if a.errorCallback != nil {
+					a.errorCallback(fmt.Errorf("compaction failed: %w", err))
+				}
+				// Continue without compaction — better to try with full context
+				// than to fail entirely
+			}
+		}
+
 		// Start spinner while waiting for API response
 		if a.spinnerCallback != nil {
 			a.spinnerCallback(true, "Thinking...")

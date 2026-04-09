@@ -986,9 +986,134 @@ Created demo showing all error message improvements:
 **Philosophy**:
 Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
 
-## Current Status (2026-07-14)
+## Current Status (2026-04-09)
 
-**Latest Update**: Move `truncate/` from `agent/` to `cli/` ✅
+**Latest Update**: CMP-1: Conversation Token Counting & Automatic Compaction Trigger ✅
+
+### CMP-1: Automatic Compaction Trigger (Completed 2026-04-09)
+
+**Story**: Automatically detect when the context window is nearly full and compact conversation history so long sessions continue seamlessly without hitting context limits.
+
+**What Was Built**:
+
+#### 1. Compaction Trigger (`agent/compaction.go`)
+- `ShouldCompact()` checks if `totalInputTokens > (contextWindowSize - reserveTokens)`
+- Total includes both `InputTokens` and `CacheReadInputTokens` from the last API response
+- Returns false when no API call has been made yet, or when contextWindowSize is unconfigured
+- `DefaultReserveTokens = 16000` (configurable via `RESERVE_TOKENS` in `~/.clyde/config`)
+- Integrated into `HandleMessage()` loop: checked before every API call
+
+#### 2. Compaction Engine (`agent/compaction.go`)
+- `Compact()` method performs single-call summarization (CMP-1 stub; CMP-2 will replace with multi-step)
+- Sends conversation history to Claude with a structured summarization prompt
+- Requests Goal, Progress, Key Decisions, Current State, Next Steps, Critical Context sections
+- Tool results >2000 chars are truncated in the summarization input
+- Thinking blocks are excluded from summarization input
+
+#### 3. First User Message Preservation ("Sacred/Pinned")
+- `findFirstUserMessage()` locates the original mission message
+- Skips `[System: Compaction Summary]` injections and `tool_result` content blocks
+- First user message is always placed immediately after the system prompt, before any summary
+- Survives multiple compaction cycles unchanged and unmodified
+
+#### 4. Post-Compaction History Structure
+After compaction, history is replaced with:
+```
+[0] user:      Original mission (verbatim, pinned)
+[1] assistant: "I understand the task. Let me work on this."
+[2] user:      "[System: Compaction Summary]\n\n<summary>"
+[3] assistant: "I've reviewed the compaction summary..."
+[4+] ...       Recent kept messages (last 2-4 messages)
+```
+
+#### 5. Configuration
+- `agent.Config.ReserveTokens` — new field, passed through to agent
+- `agent.WithReserveTokens(n)` — functional option for `NewAgent()`
+- `RESERVE_TOKENS` env var parsed in `agent/config/config.go` and `cli/cli.go`
+- Minimum 1000 tokens; default 16000 when unset
+
+#### 6. Session Persistence
+- `CompactionCallback func(marker, summary string)` — new callback type
+- CLI wires callback to write `<timestamp>_compaction.md` and `<timestamp>_system.md` files
+- Compaction marker displayed at Quiet level and above (`🗜️ Compacting...`)
+- In REPL mode, spinner is stopped and progress flushed before compaction display
+- Session reconstruction (SESS-2) already handles `*_system.md` files — resumes from latest one
+
+**Files Changed**:
+- `agent/compaction.go` (new) — ShouldCompact, Compact, FindFirstUserMessage, RecentKeepCount, generateCompactionSummary (~230 lines)
+- `agent/agent.go` — Added: `compactionCallback`, `reserveTokens` fields; `WithCompactionCallback`, `WithReserveTokens` options; compaction trigger in HandleMessage loop; `ReserveTokens` in Config
+- `agent/config/config.go` — Added: `ReserveTokens` field, `RESERVE_TOKENS` env var parsing
+- `cli/cli.go` — Added: `RESERVE_TOKENS` parsing in `loadAgentConfig`; `WithCompactionCallback` in all 3 agent creation sites; `ReserveTokens` in config mapping
+- `tests/compaction_test.go` (new) — 20 tests
+
+**Test Coverage** (20 tests, 1 integration):
+
+Unit tests (no API key):
+- `TestShouldCompact_ThresholdLogic` (9 subtests) — below/at/above threshold, cache tokens, zero usage, no context window, default reserve, custom reserve
+- `TestShouldCompact_FreshAgent` — zero usage never triggers
+- `TestShouldCompact_NoContextWindow` — disabled when unconfigured
+- `TestCompact_PreservesFirstUserMessage` — first message found at correct index
+- `TestCompact_FirstMessageSurvivesMultipleCompactions` — survives post-compaction history shape
+- `TestCompact_FirstMessageBeforeSummary` — ordering invariant verified
+- `TestCompact_SystemInjection` — `[System:` prefix skipped by findFirstUserMessage
+- `TestCompact_TooFewMessages` — no-op on short history
+- `TestCompact_CallbacksEmitted` — marker and diagnostic callbacks fire
+- `TestCompact_SessionPersistence` — compaction.md and system.md files created
+- `TestCompact_ResumeAfterCompaction` — session reconstruction loads from latest system.md
+- `TestCompact_DefaultReserveTokens` — constant is 16000
+- `TestCompact_RecentKeepCount` (4 subtests) — correct keep count for various history lengths
+- `TestCompact_CompactionCallbackOption` — WithCompactionCallback wiring
+- `TestCompact_WithReserveTokensOption` (3 subtests) — default, 20000, 50000
+- `TestCompact_SessionFilesOrder` — compaction.md sorts before system.md
+- `TestCompact_ConfigReserveTokens` (4 subtests) — valid, default, invalid, too low
+- `TestCompact_ToolResultContent` — tool_result blocks skipped by findFirstUserMessage
+- `TestCompact_NoBehavioralChange` — documents architecture
+
+Integration test (requires API key):
+- `TestCompact_Integration` — real API call: builds 8-message history, compacts, verifies summary contains key terms (REST, API, JWT, PostgreSQL, rate limit), verifies post-compaction history structure
+
+**Test Results**:
+```
+=== 19 unit tests, 1 integration test ===
+TestShouldCompact_ThresholdLogic          PASS (0.00s) — 9 subtests
+TestShouldCompact_FreshAgent              PASS (0.00s)
+TestShouldCompact_NoContextWindow         PASS (0.00s)
+TestCompact_PreservesFirstUserMessage     PASS (0.00s)
+TestCompact_FirstMessageSurvivesMultiple  PASS (0.00s)
+TestCompact_FirstMessageBeforeSummary     PASS (0.00s)
+TestCompact_SystemInjection               PASS (0.00s)
+TestCompact_TooFewMessages                PASS (0.00s)
+TestCompact_CallbacksEmitted              PASS (0.00s)
+TestCompact_SessionPersistence            PASS (0.00s)
+TestCompact_ResumeAfterCompaction         PASS (0.00s)
+TestCompact_DefaultReserveTokens          PASS (0.00s)
+TestCompact_RecentKeepCount               PASS (0.00s) — 4 subtests
+TestCompact_CompactionCallbackOption      PASS (0.00s)
+TestCompact_WithReserveTokensOption       PASS (0.00s) — 3 subtests
+TestCompact_SessionFilesOrder             PASS (0.00s)
+TestCompact_ConfigReserveTokens           PASS (0.00s) — 4 subtests
+TestCompact_ToolResultContent             PASS (0.00s)
+TestCompact_NoBehavioralChange            PASS (0.00s)
+TestCompact_Integration                   SKIP (API key required)
+```
+
+All existing tests pass — zero regressions.
+
+**Verification**:
+- `go build .` succeeds
+- `go vet ./...` clean
+- All unit tests pass
+- No behavioral change for sessions below compaction threshold
+
+**Design Decisions**:
+- **Single-call summarization as CMP-1 stub**: Good enough to ship; CMP-2 replaces with multi-step agentic workflow
+- **Compaction triggers before API call, not after**: Prevents the "context too large" error that would occur on the next call
+- **Non-fatal compaction failure**: If summarization fails, agent continues with full history rather than crashing
+- **First user message is sacred**: Never summarized, never truncated, always first in post-compaction history
+- **Recent messages kept**: Last 2-4 messages preserved for continuity (not summarized)
+- **No manual `/compact` command**: Always automatic, per design philosophy
+
+
 
 ### Move truncate to cli/truncate (Completed 2026-07-14)
 
