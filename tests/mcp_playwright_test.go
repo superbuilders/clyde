@@ -231,11 +231,11 @@ func TestMCPPlaywrightIntegration(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithProgressCallback(func(msg string, toolUseID string) {
 			progressMessages = append(progressMessages, msg)
 			t.Logf("[progress] %s", truncateStr(msg, 120))
 		}),
-		agent.WithOutputCallback(func(output string) {
+		agent.WithOutputCallback(func(output string, toolUseID string) {
 			t.Logf("[output] %s", truncateStr(output, 120))
 		}),
 	)
@@ -319,7 +319,7 @@ func TestMCPPlaywrightBrowserStatePersists(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithProgressCallback(func(msg string, toolUseID string) {
 			t.Logf("[progress] %s", truncateStr(msg, 120))
 		}),
 	)

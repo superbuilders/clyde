@@ -1462,7 +1462,7 @@ Stories are dependency-ordered:
 
 ---
 
-### SESS-1: Session History Persistence (One File Per Message)
+### SESS-1: Session History Persistence (One File Per Message) ✅ DONE
 
 **As a** user of Clyde,
 **I want** every message in my conversation to be persisted to disk as it happens,
@@ -1473,34 +1473,34 @@ Stories are dependency-ordered:
 **Acceptance Criteria**:
 
 *Session infrastructure:*
-- [ ] On session start (REPL or CLI mode), the session location is determined: `git rev-parse --show-toplevel` → `<repo>/.clyde/sessions/`, else `~/.clyde/sessions/`.
-- [ ] A session directory is created: `<session-location>/<timestamp>_<username>/` where username comes from `git config user.name` (lowercased, spaces to hyphens), fallback `$USER`.
-- [ ] If `.clyde/sessions/` is new and inside a git repo, `.clyde/sessions/` is added to `.gitignore` automatically.
+- [x] On session start (REPL or CLI mode), the session location is determined: `git rev-parse --show-toplevel` → `<repo>/.clyde/sessions/`, else `~/.clyde/sessions/`.
+- [x] A session directory is created: `<session-location>/<timestamp>_<username>/` where username comes from `git config user.name` (lowercased, spaces to hyphens), fallback `$USER`.
+- [x] If `.clyde/sessions/` is new and inside a git repo, `.clyde/sessions/` is added to `.gitignore` automatically.
 
 *Per-message file writing:*
-- [ ] After each message or content block, a file is written to the session directory: `<timestamp>_<type>.md` where timestamp is ISO-8601 with milliseconds and hyphens for colons (e.g., `2026-07-14T09-32-05.123`), and type is one of: `user`, `assistant`, `system`, `thinking`, `tool-use`, `tool-result`, `diagnostic`.
-- [ ] File contents match terminal output at debug level with ANSI codes stripped — role markers (`**You:**`, `**Claude:**`), `💭` for thinking, `→` lines for tool use, fenced output for tool results, `🔍`/`💾`/`🔒` for diagnostics.
-- [ ] Files are written synchronously after each message (crash safety: at most one incomplete file on crash).
-- [ ] `cat *.md` in the session directory (sorted by filename) produces a valid, readable conversation transcript.
-- [ ] A monotonicity guard ensures no timestamp collision: if `time.Now()` ≤ last written timestamp, bump by 1ms.
+- [x] After each message or content block, a file is written to the session directory: `<timestamp>_<type>.md` where timestamp is ISO-8601 with milliseconds and hyphens for colons (e.g., `2026-07-14T09-32-05.123`), and type is one of: `user`, `assistant`, `system`, `thinking`, `tool-use`, `tool-result`, `diagnostic`.
+- [x] File contents match terminal output at debug level with ANSI codes stripped — role markers (`**You:**`, `**Claude:**`), `💭` for thinking, `→` lines for tool use, fenced output for tool results, `🔍`/`💾`/`🔒` for diagnostics.
+- [x] Files are written synchronously after each message (crash safety: at most one incomplete file on crash).
+- [x] `cat *.md` in the session directory (sorted by filename) produces a valid, readable conversation transcript.
+- [x] A monotonicity guard ensures no timestamp collision: if `time.Now()` ≤ last written timestamp, bump by 1ms.
 
 *Tool use IDs for reconstruction:*
-- [ ] Every `→` progress line includes the tool_use_id in brackets: `→ Reading file: agent/agent.go [toolu_abc123]`. This appears at all log levels and in the persisted file.
+- [x] Every `→` progress line includes the tool_use_id in brackets: `→ Reading file: agent/agent.go [toolu_abc123]`. This appears at all log levels and in the persisted file.
 
 *System prompt additions:*
-- [ ] The system prompt includes the session path and file naming convention so the agent can search its own history using existing tools (`grep`, `read_file`, `glob`, `run_bash("cat *_user.md")`).
+- [x] The system prompt includes the session path and file naming convention so the agent can search its own history using existing tools (`grep`, `read_file`, `glob`, `run_bash("cat *_user.md")`).
 
 *Session completion:*
-- [ ] On clean exit, the session path is printed: `Session saved: .clyde/sessions/2026-07-14T09-32-00_aj/`.
+- [x] On clean exit, the session path is printed: `Session saved: .clyde/sessions/2026-07-14T09-32-00_aj/`.
 
 *Tests:*
-- [ ] Unit test: a multi-turn conversation produces correctly named files in the session directory (one per message, timestamps monotonically increasing, types matching content).
-- [ ] Unit test: `cat *.md` output matches expected transcript (role markers, tool IDs, diagnostics all present and ordered).
-- [ ] Unit test: crash mid-session leaves all prior messages intact as individual files.
-- [ ] Unit test: `.gitignore` is updated on first session creation inside a git repo.
-- [ ] Unit test: session directory naming uses correct username and timestamp format.
-- [ ] Unit test: tool use IDs appear in `→` lines at all log levels.
-- [ ] Integration test: a real multi-turn conversation with tool use produces a valid session directory; `cat *.md` is a coherent transcript; `cat *_user.md` shows only user messages; `cat *_tool-result.md` shows only tool output.
+- [x] Unit test: a multi-turn conversation produces correctly named files in the session directory (one per message, timestamps monotonically increasing, types matching content).
+- [x] Unit test: `cat *.md` output matches expected transcript (role markers, tool IDs, diagnostics all present and ordered).
+- [x] Unit test: crash mid-session leaves all prior messages intact as individual files.
+- [x] Unit test: `.gitignore` is updated on first session creation inside a git repo.
+- [x] Unit test: session directory naming uses correct username and timestamp format.
+- [x] Unit test: tool use IDs appear in `→` lines at all log levels.
+- [x] Integration test: a real multi-turn conversation with tool use produces a valid session directory; `cat *.md` is a coherent transcript; `cat *_user.md` shows only user messages; `cat *_tool-result.md` shows only tool output.
 
 ---
 

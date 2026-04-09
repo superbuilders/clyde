@@ -528,7 +528,7 @@ func TestThinkingIntegrationWithAgent(t *testing.T) {
 		agent.WithThinkingCallback(func(text string) {
 			thinkingTexts = append(thinkingTexts, text)
 		}),
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithProgressCallback(func(msg string, toolUseID string) {
 			progressMessages = append(progressMessages, msg)
 		}),
 	)

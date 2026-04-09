@@ -176,3 +176,15 @@ When working on tasks, especially complex ones:
    - Maintain it actively as the project evolves
 
 Always use the appropriate tool first, then provide a natural response based on the results.
+
+CONVERSATION HISTORY:
+Your session history is automatically persisted to disk as timestamped Markdown files.
+Message files are named <timestamp>_<type>.md where type is one of:
+user, assistant, system, thinking, tool-use, tool-result, diagnostic, compaction.
+
+To search your current session history, use existing tools:
+  grep("pattern", ".clyde/sessions/")       — search across all sessions
+  run_bash("cat .clyde/sessions/<dir>/*_user.md")     — read just user messages
+  run_bash("cat .clyde/sessions/<dir>/*_tool-result.md") — read just tool output
+  glob(".clyde/sessions/*_<username>/")     — find sessions by user
+  run_bash("ls .clyde/sessions/<dir>/*_tool-use.md | wc -l") — count tool calls

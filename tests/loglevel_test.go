@@ -28,7 +28,7 @@ func TestLogLevelCallbackWiring(t *testing.T) {
 	var captured []string
 
 	a := agent.NewAgent(apiClient, prompts.SystemPrompt,
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithProgressCallback(func(msg string, toolUseID string) {
 			captured = append(captured, msg)
 		}),
 	)

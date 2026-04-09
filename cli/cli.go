@@ -22,6 +22,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
+	"github.com/this-is-alpha-iota/clyde/agent/session"
 	"github.com/this-is-alpha-iota/clyde/cli/input"
 	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
 	"github.com/this-is-alpha-iota/clyde/cli/prompt"
@@ -144,26 +145,47 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 		os.Exit(1)
 	}
 
+	// Create session for persistence
+	sess, err := session.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: session creation failed: %v\n", err)
+		// Continue without session — non-fatal
+	}
+
 	// Create agent — the CLI layer owns all display filtering.
 	// The agent emits everything unconditionally; we filter here.
 	agentInstance := agent.New(cfg,
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithProgressCallback(func(msg string, toolUseID string) {
+			// Append tool use ID for session persistence
+			msgWithID := session.FormatToolUseID(msg, toolUseID)
 			if level.ShouldShow(loglevel.Quiet) {
-				fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Quiet, msg))
+				fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Quiet, msgWithID))
+			}
+			// Persist to session
+			if sess != nil {
+				sess.WriteMessage(session.TypeToolUse, session.StripANSI(msgWithID)+"\n")
 			}
 		}),
-		agent.WithOutputCallback(func(output string) {
+		agent.WithOutputCallback(func(output string, toolUseID string) {
 			if level.ShouldShow(loglevel.Normal) {
 				displayed := truncateForLevel(output, truncate.ToolOutputLineLimit, level)
 				fmt.Fprintln(os.Stderr)
 				fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Normal, displayed))
 				fmt.Fprintln(os.Stderr)
 			}
+			// Persist full (untruncated) tool output to session
+			if sess != nil {
+				sess.WriteMessage(session.TypeToolResult, "```\n"+output+"\n```\n")
+			}
 		}),
 		agent.WithThinkingCallback(func(text string) {
 			if level.ShouldShow(loglevel.Normal) {
 				displayed := truncateForLevel(text, truncate.ThinkingLineLimit, level)
 				fmt.Fprintln(os.Stderr, style.FormatThinking(displayed))
+			}
+			// Persist full thinking to session
+			if sess != nil {
+				sess.WriteMessage(session.TypeThinking, "💭 "+text+"\n")
 			}
 		}),
 		agent.WithDiagnosticCallback(func(msg string) {
@@ -183,6 +205,20 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 					fmt.Fprintln(os.Stderr, StyleMessage(loglevel.Debug, msg))
 				}
 			}
+			// Persist all diagnostics to session (always at debug level)
+			if sess != nil {
+				sess.WriteMessage(session.TypeDiagnostic, msg+"\n")
+			}
+		}),
+		agent.WithUserMessageCallback(func(text string) {
+			if sess != nil {
+				sess.WriteMessage(session.TypeUser, "**You:**\n\n"+text+"\n")
+			}
+		}),
+		agent.WithAssistantMessageCallback(func(text string) {
+			if sess != nil {
+				sess.WriteMessage(session.TypeAssistant, "**Claude:**\n\n"+text+"\n")
+			}
 		}),
 		agent.WithErrorCallback(func(err error) {
 			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
@@ -199,6 +235,12 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 
 	// Print response to stdout (for piping/redirection)
 	fmt.Println(response)
+
+	// Print session path on exit
+	if sess != nil {
+		fmt.Fprintf(os.Stderr, "Session saved: %s\n", sess.RelativeDir())
+	}
+
 	os.Exit(0)
 }
 
@@ -210,6 +252,13 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
+	}
+
+	// Create session for persistence
+	sess, err := session.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: session creation failed: %v\n", err)
+		// Continue without session — non-fatal
 	}
 
 	// Create spinner for animated progress display (REPL mode only).
@@ -235,6 +284,10 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 			}
 		}),
 		agent.WithThinkingCallback(func(text string) {
+			// Persist full thinking to session (always, regardless of display level)
+			if sess != nil {
+				sess.WriteMessage(session.TypeThinking, "💭 "+text+"\n")
+			}
 			if !level.ShouldShow(loglevel.Normal) {
 				return
 			}
@@ -250,11 +303,17 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 			displayed := truncateForLevel(text, truncate.ThinkingLineLimit, level)
 			fmt.Println(style.FormatThinking(displayed))
 		}),
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithProgressCallback(func(msg string, toolUseID string) {
+			// Append tool use ID for session persistence
+			msgWithID := session.FormatToolUseID(msg, toolUseID)
+			// Persist to session
+			if sess != nil {
+				sess.WriteMessage(session.TypeToolUse, session.StripANSI(msgWithID)+"\n")
+			}
 			if !level.ShouldShow(loglevel.Quiet) {
 				return
 			}
-			// Tool progress line (→ Reading file: main.go).
+			// Tool progress line (→ Reading file: main.go [toolu_abc123]).
 			// If there's a pending progress message from a previous tool,
 			// flush it now before updating.
 			if lastProgressMsg != "" {
@@ -263,12 +322,16 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 				}
 				fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
 			}
-			lastProgressMsg = msg
+			lastProgressMsg = msgWithID
 			if level != loglevel.Silent {
-				sp.Start(spinner.FormatSpinnerMessage(msg))
+				sp.Start(spinner.FormatSpinnerMessage(msgWithID))
 			}
 		}),
-		agent.WithOutputCallback(func(output string) {
+		agent.WithOutputCallback(func(output string, toolUseID string) {
+			// Persist full (untruncated) tool output to session
+			if sess != nil {
+				sess.WriteMessage(session.TypeToolResult, "```\n"+output+"\n```\n")
+			}
 			if !level.ShouldShow(loglevel.Normal) {
 				return
 			}
@@ -288,6 +351,10 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 			fmt.Println()
 		}),
 		agent.WithDiagnosticCallback(func(msg string) {
+			// Persist all diagnostics to session (always at debug level)
+			if sess != nil {
+				sess.WriteMessage(session.TypeDiagnostic, msg+"\n")
+			}
 			if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
 				// Verbose cache format
 				if !level.ShouldShow(loglevel.Verbose) {
@@ -313,6 +380,16 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 				}
 			}
 			fmt.Println(StyleMessage(loglevel.Debug, msg))
+		}),
+		agent.WithUserMessageCallback(func(text string) {
+			if sess != nil {
+				sess.WriteMessage(session.TypeUser, "**You:**\n\n"+text+"\n")
+			}
+		}),
+		agent.WithAssistantMessageCallback(func(text string) {
+			if sess != nil {
+				sess.WriteMessage(session.TypeAssistant, "**Claude:**\n\n"+text+"\n")
+			}
 		}),
 		agent.WithErrorCallback(func(err error) {
 			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
@@ -343,7 +420,7 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 	if err != nil {
 		// Fall back to basic bufio reader if readline fails
 		fmt.Fprintf(os.Stderr, "Warning: Rich input unavailable (%v), using basic input\n", err)
-		runREPLBasicMode(level, agentInstance, sp, cfg.ContextWindowSize)
+		runREPLBasicMode(level, agentInstance, sp, cfg.ContextWindowSize, sess)
 		return
 	}
 	defer reader.Close()
@@ -359,7 +436,7 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 		userInput, err := reader.ReadLine()
 		if err != nil {
 			if err == io.EOF {
-				fmt.Println("\nGoodbye!")
+				printGoodbye(sess)
 				break
 			}
 			// ErrInterrupt (Ctrl+C) — just show a new prompt
@@ -372,7 +449,7 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 		}
 
 		if userInput == "exit" || userInput == "quit" {
-			fmt.Println("Goodbye!")
+			printGoodbye(sess)
 			break
 		}
 
@@ -397,7 +474,7 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 }
 
 // runREPLBasicMode is the fallback REPL when readline is unavailable.
-func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spinner.Spinner, contextWindowSize int) {
+func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spinner.Spinner, contextWindowSize int, sess *session.Session) {
 	var lastProgressMsg string
 
 	// The agent is already created by the caller. We just need to set up
@@ -413,7 +490,7 @@ func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spin
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
-				fmt.Println("\nGoodbye!")
+				printGoodbye(sess)
 				break
 			}
 			fmt.Printf("Error reading input: %v\n", err)
@@ -425,7 +502,7 @@ func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spin
 			continue
 		}
 		if line == "exit" || line == "quit" {
-			fmt.Println("Goodbye!")
+			printGoodbye(sess)
 			break
 		}
 
@@ -444,6 +521,14 @@ func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spin
 		usage := agentInstance.LastUsage()
 		totalInput := usage.InputTokens + usage.CacheReadInputTokens
 		contextPercent = prompt.CalculateContextPercent(totalInput, contextWindowSize)
+	}
+}
+
+// printGoodbye prints the goodbye message and session path.
+func printGoodbye(sess *session.Session) {
+	fmt.Println("Goodbye!")
+	if sess != nil {
+		fmt.Printf("Session saved: %s\n", sess.RelativeDir())
 	}
 }
 

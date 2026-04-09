@@ -155,7 +155,7 @@ func TestAgentEmitsOutputUnconditionally(t *testing.T) {
 	a := agent.NewAgent(
 		providers.NewClient("dummy", "http://localhost", "test", 100),
 		"test prompt",
-		agent.WithOutputCallback(func(output string) {
+		agent.WithOutputCallback(func(output string, toolUseID string) {
 			outputMessages = append(outputMessages, output)
 		}),
 	)
@@ -258,10 +258,10 @@ func TestToolOutputIntegrationNormal(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithProgressCallback(func(msg string, toolUseID string) {
 			progressMessages = append(progressMessages, msg)
 		}),
-		agent.WithOutputCallback(func(output string) {
+		agent.WithOutputCallback(func(output string, toolUseID string) {
 			outputMessages = append(outputMessages, output)
 		}),
 	)
@@ -314,10 +314,10 @@ func TestToolOutputIntegrationQuietSuppressed(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithProgressCallback(func(msg string) {
+		agent.WithProgressCallback(func(msg string, toolUseID string) {
 			progressMessages = append(progressMessages, msg)
 		}),
-		agent.WithOutputCallback(func(output string) {
+		agent.WithOutputCallback(func(output string, toolUseID string) {
 			outputMessages = append(outputMessages, output)
 		}),
 	)
@@ -358,7 +358,7 @@ func TestToolOutputIntegrationVerboseNoTruncation(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		apiClient,
 		prompts.SystemPrompt,
-		agent.WithOutputCallback(func(output string) {
+		agent.WithOutputCallback(func(output string, toolUseID string) {
 			outputMessages = append(outputMessages, output)
 		}),
 	)

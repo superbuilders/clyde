@@ -4840,3 +4840,60 @@ Created `docs/playwright-mcp.md` — a design document for adding Playwright bro
 - Configuration file for model selection and parameters
 - Command history with arrow key navigation
 - Syntax highlighting for code in responses
+
+## SESS-1: Session History Persistence (Implemented 2026-04-08)
+
+**Feature**: File-based session persistence — one file per message, crash-safe, Unix-filterable.
+
+**What it does**:
+- On session start (REPL or CLI), creates a session directory: `<sessions-root>/<timestamp>_<username>/`
+- Session location: `<git-repo>/.clyde/sessions/` inside a git repo, `~/.clyde/sessions/` otherwise
+- Every message/content block is persisted as a separate timestamped Markdown file
+- File naming: `<timestamp>_<type>.md` (e.g., `2026-04-08T20-06-15.845_user.md`)
+- Message types: `user`, `assistant`, `system`, `thinking`, `tool-use`, `tool-result`, `diagnostic`, `compaction`
+- Content is ANSI-stripped, debug-level Markdown (full output, no truncation)
+- `cat *.md` in a session directory produces a valid, readable conversation transcript
+- On clean exit, prints session path: `Session saved: .clyde/sessions/...`
+
+**Key implementation details**:
+
+1. **Package**: `agent/session/` — standalone package for session management
+2. **Monotonicity guard**: Timestamps are truncated to millisecond precision with a guard that bumps by 1ms on collision. Essential because filenames only have ms resolution.
+3. **Tool use IDs**: Progress callback signature changed from `func(msg string)` to `func(msg string, toolUseID string)`, enabling `→ Reading file: main.go [toolu_abc123]` format in both terminal and persisted files.
+4. **Output callback**: Similarly changed from `func(output string)` to `func(output string, toolUseID string)` for consistency.
+5. **New agent callbacks**: `UserMessageCallback` and `AssistantMessageCallback` added for session persistence without coupling the agent to the session package.
+6. **CLI integration**: Both REPL and CLI modes create sessions and persist messages via callbacks. Session creation is non-fatal — if it fails, the agent continues without persistence.
+7. **`.gitignore` auto-update**: When `.clyde/sessions/` is first created inside a git repo, it's automatically added to `.gitignore`.
+8. **System prompt update**: Added `CONVERSATION HISTORY` section telling the agent how to search its own session history using existing tools.
+
+**Files changed**:
+- `agent/session/session.go` — New: session infrastructure (creation, writing, timestamps, username, gitignore)
+- `agent/agent.go` — Updated: new callback types and signatures, user/assistant message callbacks
+- `cli/cli.go` — Updated: session creation, message persistence in all callbacks, goodbye message
+- `agent/prompts/system.txt` — Updated: added CONVERSATION HISTORY section
+- `tests/session_test.go` — New: 14 unit tests for session functionality
+- `tests/tool_output_test.go`, `tests/thinking_test.go`, `tests/loglevel_test.go`, `tests/mcp_playwright_test.go` — Updated: callback signature changes
+
+**Test coverage** (14 new tests):
+- `TestSessionCreation` — directory structure and naming conventions
+- `TestSessionWriteMessage` — file writing with correct names and content
+- `TestSessionCatProducesTranscript` — concatenation produces valid transcript
+- `TestSessionMonotonicity` — timestamps strictly increase under rapid writes
+- `TestSessionToolUseIDsInProgressLines` — tool IDs in progress messages
+- `TestSessionUsernameNormalization` — lowercase, hyphens, special chars
+- `TestSessionTimestampFormats` — dir and file timestamp formats
+- `TestSessionStripANSI` — ANSI code removal
+- `TestSessionGitignoreUpdate` — gitignore entry format
+- `TestSessionDirectoryNaming` — directory name pattern validation
+- `TestSessionCrashSafety` — prior messages survive crashes
+- `TestSessionFiltering` — files filterable by type suffix
+- `TestSessionFindSessionsRoot` — git-aware root detection
+- `TestSessionGetUsername` — username detection and normalization
+- `TestSessionAllMessageTypes` — all 8 message types produce files
+
+**Design decisions**:
+- Session is non-fatal: if creation fails, the agent works normally without persistence
+- Files are always written at debug level (full content) regardless of terminal verbosity
+- The agent emits callbacks unconditionally; the CLI decides what to display AND what to persist
+- Tool use IDs appear at all log levels (needed for session reconstruction in SESS-2)
+

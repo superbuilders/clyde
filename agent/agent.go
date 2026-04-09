@@ -42,11 +42,13 @@ type Config struct {
 
 // ProgressCallback receives tool progress lines (the → lines).
 // Called unconditionally for every tool execution.
-type ProgressCallback func(message string)
+// The toolUseID parameter carries the API's tool_use_id for session persistence.
+type ProgressCallback func(message string, toolUseID string)
 
 // OutputCallback receives tool output bodies (full, untruncated text).
 // Called unconditionally; the caller is responsible for truncation.
-type OutputCallback func(output string)
+// The toolUseID parameter carries the API's tool_use_id for session persistence.
+type OutputCallback func(output string, toolUseID string)
 
 // ThinkingCallback receives thinking trace text from Claude's extended thinking.
 // The text is the raw, full thinking content; the caller is responsible for
@@ -66,6 +68,14 @@ type SpinnerCallback func(start bool, message string)
 // ErrorCallback receives errors during processing (optional, for logging)
 type ErrorCallback func(err error)
 
+// UserMessageCallback is called when a user message is added to the conversation.
+// Used by the session layer to persist user messages to disk.
+type UserMessageCallback func(text string)
+
+// AssistantMessageCallback is called when an assistant text response is received.
+// Used by the session layer to persist assistant messages to disk.
+type AssistantMessageCallback func(text string)
+
 // Agent handles conversation and tool execution
 type Agent struct {
 	apiClient          *providers.Client
@@ -77,6 +87,8 @@ type Agent struct {
 	diagnosticCallback DiagnosticCallback
 	spinnerCallback    SpinnerCallback
 	errorCallback      ErrorCallback
+	userMsgCallback    UserMessageCallback
+	assistantMsgCallback AssistantMessageCallback
 	lastUsage          providers.Usage // Token usage from the most recent API response
 	contextWindowSize  int             // Model context window size in tokens (for diagnostic display)
 	mcpServer          *mcp.PlaywrightServer // MCP server (nil if not enabled)
@@ -127,6 +139,22 @@ func WithSpinnerCallback(cb SpinnerCallback) AgentOption {
 func WithErrorCallback(cb ErrorCallback) AgentOption {
 	return func(a *Agent) {
 		a.errorCallback = cb
+	}
+}
+
+// WithUserMessageCallback sets the callback for user messages.
+// Called once per HandleMessage invocation with the user's input text.
+func WithUserMessageCallback(cb UserMessageCallback) AgentOption {
+	return func(a *Agent) {
+		a.userMsgCallback = cb
+	}
+}
+
+// WithAssistantMessageCallback sets the callback for assistant text responses.
+// Called once per HandleMessage invocation with the final text response.
+func WithAssistantMessageCallback(cb AssistantMessageCallback) AgentOption {
+	return func(a *Agent) {
+		a.assistantMsgCallback = cb
 	}
 }
 
@@ -241,6 +269,11 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 		Content: userInput,
 	})
 
+	// Emit user message callback for session persistence
+	if a.userMsgCallback != nil {
+		a.userMsgCallback(userInput)
+	}
+
 	// Get all registered tools
 	allTools := tools.GetAllTools()
 
@@ -336,7 +369,12 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 
 		// If no tool use, return text responses
 		if len(toolUseBlocks) == 0 {
-			return strings.Join(textResponses, "\n"), nil
+			response := strings.Join(textResponses, "\n")
+			// Emit assistant message callback for session persistence
+			if a.assistantMsgCallback != nil && response != "" {
+				a.assistantMsgCallback(response)
+			}
+			return response, nil
 		}
 
 		// Execute tools
@@ -360,7 +398,7 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			if reg.Display != nil && a.progressCallback != nil {
 				displayMsg := reg.Display(toolBlock.Input)
 				if displayMsg != "" {
-					a.progressCallback(displayMsg)
+					a.progressCallback(displayMsg, toolBlock.ID)
 				}
 			}
 
@@ -405,7 +443,7 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			// The CLI layer handles truncation and display filtering.
 			if resultContent != "" && !strings.HasPrefix(resultContent, "Image loaded") {
 				if a.outputCallback != nil {
-					a.outputCallback(resultContent)
+					a.outputCallback(resultContent, toolBlock.ID)
 				}
 			}
 
