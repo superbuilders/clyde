@@ -37,7 +37,7 @@ Hard constraints. Everything else is negotiable.
 
 1. **History is stored as plaintext `.md` files.**
 
-2. **File contents = terminal output at debug level + optional extra blank lines.** Nothing can appear in the history file that doesn't appear in the terminal log. No hidden metadata, no structural delimiters, no encoded headers.
+2. **File contents = terminal output at debug level + API reconstruction metadata.** The file captures everything visible in the terminal at debug verbosity, plus additional metadata needed for API reconstruction (tool names, input JSON, thinking signatures). The metadata lines are structured (`name: ...`, `input: ...`, `signature: ...`) and appear after the human-readable content. This is a pragmatic relaxation of the original "nothing not in the terminal" rule — session files are a *superset* of terminal output, ensuring both human readability and machine reconstructability.
 
 3. **Any text file parsable as a message log is resumable**, regardless of origin — compaction output, terminal pipe, hand-written, artificially constructed.
 
@@ -136,6 +136,43 @@ Already present at debug level, captured in the log:
 - `🔍 Tokens: input=4523 output=892 cache_read=3715 cache_create=0`
 - `💾 Cache: 3715/4102 tokens | Creation: 387 tokens | Context: 2% (4102/200000)`
 - `🔒 Redacted thinking block (encrypted by safety system)`
+- `❌ Error: API error (status 400) ...` (errors persisted for the historical record)
+
+### Thinking signatures
+
+Thinking files include the API's cryptographic signature on a metadata line:
+
+```
+💭 Let me read the code...
+signature: erEN8bJMAsENjQGFDb/TIX5H5KR2sT...
+```
+
+The signature is stable per thinking block — it doesn't change when subsequent messages are appended. It's a tamper-detection token the API uses to verify thinking content hasn't been modified. Including it in the file enables full-fidelity reconstruction: thinking blocks can be round-tripped through the API on resume. Without the signature, the API rejects the thinking block.
+
+### Tool-use metadata
+
+Tool-use files include the tool name and input JSON on metadata lines:
+
+```
+→ Reading file: agent/agent.go [toolu_abc123]
+name: read_file
+input: {"path":"agent/agent.go"}
+```
+
+This enriched format (SESS-2+) enables exact API reconstruction of tool_use blocks. Legacy SESS-1 files without metadata lines are handled via `inferToolName()` which maps display message prefixes to tool names.
+
+### Tool-result IDs
+
+Tool-result files include the tool_use_id they correspond to:
+
+```
+[toolu_abc123]
+```
+output content
+```
+```
+
+This enables explicit matching between tool_use and tool_result blocks. Legacy files without the ID line fall back to order-based matching.
 
 ---
 
@@ -185,15 +222,19 @@ Implement the compaction trigger per CMP-1. The acceptance criteria are:
 ```markdown
 💭 Let me start by reading the current agent code to understand the token
 tracking that already exists...
+signature: erEN8bJMAsENjQGFDb/TIX5H5KR2sT...
 ```
 
 **`2026-07-14T09-32-03.789_tool-use.md`**:
 ```markdown
 → Reading file: agent/agent.go [toolu_abc123]
+name: read_file
+input: {"path":"agent/agent.go"}
 ```
 
 **`2026-07-14T09-32-04.102_tool-result.md`**:
 ````markdown
+[toolu_abc123]
 ```
 package agent
 
@@ -320,10 +361,10 @@ No sequence numbers. The timestamp is the sole ordering mechanism. See [ITD-1](#
 | `user` | `_user.md` | `**You:**` + text | User message, text content block |
 | `assistant` | `_assistant.md` | `**Claude:**` + text | Assistant message, text content block |
 | `system` | `_system.md` | `**System:**` + text | System message (compaction summaries) |
-| `thinking` | `_thinking.md` | `💭` + thinking text | Assistant message, thinking content block |
-| `tool-use` | `_tool-use.md` | `→ <tool>: <args> [<toolu_id>]` | Assistant message, tool_use content block |
-| `tool-result` | `_tool-result.md` | Fenced output body | User message, tool_result content block |
-| `diagnostic` | `_diagnostic.md` | `🔍`/`💾`/`🔒` lines | Not a message — metadata, skipped during reconstruction |
+| `thinking` | `_thinking.md` | `💭` + thinking text + `signature: <sig>` | Assistant message, thinking content block (requires signature for API round-trip) |
+| `tool-use` | `_tool-use.md` | `→ <tool>: <args> [<toolu_id>]` + `name: <name>` + `input: <json>` | Assistant message, tool_use content block |
+| `tool-result` | `_tool-result.md` | `[<toolu_id>]` + fenced output body | User message, tool_result content block |
+| `diagnostic` | `_diagnostic.md` | `🔍`/`💾`/`🔒`/`❌` lines | Not a message — metadata, skipped during reconstruction |
 | `compaction` | `_compaction.md` | `🗜️ Compacting...` | Not a message — boundary marker, skipped during reconstruction |
 
 ### Compaction boundaries
@@ -556,32 +597,36 @@ Reconstruction reads message files in sorted order and groups them into API mess
 
 Files are consumed in timestamp (filename) order. A "pending message" accumulates content blocks until a type transition flushes it:
 
-- **`user`** → Flush pending. New user message with text content block.
-- **`thinking`** → If pending is an assistant message, add thinking block. Otherwise flush pending, start new assistant message with thinking block.
-- **`tool-use`** → If pending is an assistant message, add tool_use block. Otherwise flush pending, start new assistant message with tool_use block. The `toolu_id` is extracted from the `→ ... [toolu_id]` line in the file.
-- **`tool-result`** → If pending is a user/tool-result message, add tool_result block. Otherwise flush pending, start new user message with tool_result block. The `tool_use_id` comes from the corresponding `tool-use` file (matched by order — each tool-result follows its tool-use).
-- **`assistant`** → If pending is an assistant message, add text block and flush. Otherwise flush pending, new assistant message with text block, flush.
-- **`system`** → Flush pending. Add system message.
-- **`diagnostic`** → Skip. Not conversation content.
+- **`user`** → Flush pending. New user message with text content block. Flush immediately.
+- **`thinking`** → If file contains a `signature:` line, add thinking block (with signature) to pending assistant message. If no signature (legacy SESS-1 files), skip — the API requires signatures for round-tripping thinking blocks. The text is preserved on disk for human reading.
+- **`tool-use`** → If pending is an assistant message, add tool_use block. Otherwise flush pending, start new assistant message with tool_use block. Tool name and input are extracted from `name:` and `input:` metadata lines; for legacy files, the tool name is inferred from the display message prefix. The `toolu_id` is extracted from the `→ ... [toolu_id]` line.
+- **`tool-result`** → If pending is a user/tool-result message, add tool_result block. Otherwise flush pending, start new user message with tool_result block. The `tool_use_id` is extracted from the explicit `[toolu_id]` line (SESS-2 format) or matched by order from preceding tool-use files (legacy format).
+- **`assistant`** → If pending is an assistant message (from preceding thinking/tool_use files), append text block and flush. Otherwise flush pending, new assistant message with text block, flush. This merging prevents consecutive assistant messages that violate the API's alternation requirement.
+- **`system`** → Flush pending. Inject as user message (compaction summary) + assistant acknowledgment pair.
+- **`diagnostic`** → Skip. Not conversation content. (Includes `❌ Error:` entries.)
 - **`compaction`** → Skip. Boundary marker only.
+
+### Trailing message trimming
+
+After all files are processed, if the last message is a user message (plain text or tool_result), it represents an incomplete exchange — the user typed something but the process crashed or errored before getting a response. The message is trimmed from the API history to maintain user/assistant alternation. The file stays on disk as a permanent record. A warning is logged so the user knows to retype.
 
 ### Example reconstruction
 
 Given these files:
 ```
-T1_user.md          → USER msg: [text]
-T2_thinking.md      → (start ASSISTANT msg) [thinking]
+T1_user.md          → USER msg: [text]                                   → flush
+T2_thinking.md      → (start ASSISTANT msg) [thinking + signature]
 T3_tool-use.md      → (accumulate) [tool_use toolu_1]
 T4_tool-use.md      → (accumulate) [tool_use toolu_2]
 T5_tool-result.md   → (flush ASSISTANT, start USER msg) [tool_result for toolu_1]
 T6_tool-result.md   → (accumulate) [tool_result for toolu_2]
-T7_assistant.md     → (flush USER, new ASSISTANT msg) [text] (flush)
+T7_assistant.md     → (flush USER, new ASSISTANT msg) [text]             → flush
 ```
 
 Produces:
 ```
 Message 1: {role: "user",      content: [{type: "text", ...}]}
-Message 2: {role: "assistant", content: [{type: "thinking", ...}, {type: "tool_use", id: "toolu_1"}, {type: "tool_use", id: "toolu_2"}]}
+Message 2: {role: "assistant", content: [{type: "thinking", ..., signature: "..."}, {type: "tool_use", id: "toolu_1"}, {type: "tool_use", id: "toolu_2"}]}
 Message 3: {role: "user",      content: [{type: "tool_result", tool_use_id: "toolu_1"}, {type: "tool_result", tool_use_id: "toolu_2"}]}
 Message 4: {role: "assistant", content: [{type: "text", ...}]}
 ```

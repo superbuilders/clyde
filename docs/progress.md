@@ -4857,14 +4857,16 @@ Created `docs/playwright-mcp.md` — a design document for adding Playwright bro
 **Key implementation details**:
 
 1. **Package**: `agent/session/resume.go` — reconstruction, listing, resume utilities
-2. **Reconstruction algorithm** (per `docs/sessions-history.md` §12):
+2. **Reconstruction algorithm** (per `docs/sessions-history.md` §12, with refinements):
    - Files consumed in timestamp (filename) order via state machine
    - `user` → flush pending, new user message
-   - `thinking`/`tool-use` → accumulate on pending assistant message
+   - `thinking` → if signature present, accumulate on assistant; if legacy (no signature), skip from API history (file preserved on disk)
+   - `tool-use` → accumulate on pending assistant message
    - `tool-result` → accumulate on pending user (tool_result) message
-   - `assistant` → flush pending, new assistant text message
+   - `assistant` → if pending is assistant (from thinking/tool_use), append text block and flush; otherwise flush pending, new assistant text message
    - `system` → compaction summary (injected as user+assistant pair)
    - `diagnostic`/`compaction` → skipped
+   - **Trailing user message trimming**: if the last message is a user message (incomplete exchange from crash/error), it's trimmed from the API history but preserved on disk
 3. **Enriched tool-use persistence** (SESS-2 format):
    - Tool-use files now include tool name and input JSON on subsequent lines
    - Format: `→ Reading file: main.go [toolu_abc123]\nname: read_file\ninput: {"path":"main.go"}`
@@ -4872,28 +4874,39 @@ Created `docs/playwright-mcp.md` — a design document for adding Playwright bro
 4. **Enriched tool-result persistence**: 
    - Tool-result files now include explicit `[toolu_id]` on first line
    - Legacy files without IDs use order-based matching (tool-results match tool-uses by sequence)
-5. **New agent callbacks**: `ToolUseCallback` provides full tool metadata (display message, tool name, ID, input)
-6. **`SetHistory()` method**: Allows the CLI to inject reconstructed history into the agent
-7. **`Open()` function**: Opens existing session directory with monotonicity guard from last file
-8. **Timezone fix**: `ParseTimestampFromFilename` uses `time.ParseInLocation(... time.Local)` to match `time.Now()` timezone
-9. **CLI flags**: `--resume`/`-r` with optional session ID argument, `--sessions` for listing
+5. **Thinking signature persistence**:
+   - Thinking files now include the API's cryptographic signature on a second line
+   - Format: `💭 thinking text\nsignature: <base64>`
+   - The signature is stable per thinking block (doesn't change with subsequent messages)
+   - Required by the API for round-tripping thinking blocks in conversation history
+   - Legacy thinking files without signatures are excluded from API history but preserved on disk
+   - `ThinkingCallback` signature changed: `func(text, signature string)`
+6. **Error persistence**: API errors are persisted as diagnostic files (`❌ Error: ...`) so the session log is a complete record of what happened, including failures
+7. **Session files as source of truth**: Session files on disk are never deleted or modified. The API history is a clean projection of the files, shaped for the API's alternation requirements. `cat *.md` always shows everything that happened.
+8. **New agent callbacks**: `ToolUseCallback` provides full tool metadata (display message, tool name, ID, input)
+9. **`SetHistory()` method**: Allows the CLI to inject reconstructed history into the agent
+10. **`Open()` function**: Opens existing session directory with monotonicity guard from last file
+11. **Timezone fix**: `ParseTimestampFromFilename` uses `time.ParseInLocation(... time.Local)` to match `time.Now()` timezone
+12. **CLI flags**: `--resume`/`-r` with optional session ID argument, `--sessions` for listing
 
 **Files changed**:
-- `agent/session/resume.go` — New: reconstruction, listing, finding, copying (21 KB)
-- `agent/session/session.go` — Unchanged (Open, ParseTimestamp already handled in resume.go)
-- `agent/agent.go` — Added: `ToolUseCallback`, `WithToolUseCallback`, `SetHistory`
+- `agent/session/resume.go` — New: reconstruction, listing, finding, copying
+- `agent/agent.go` — Added: `ToolUseCallback`, `WithToolUseCallback`, `SetHistory`; `ThinkingCallback` now passes signature
 - `cli/loglevel/loglevel.go` — Added: `Resume`, `ResumeTarget`, `Sessions` fields in `FlagResult`
-- `cli/cli.go` — Added: `runResumeMode`, `runSessionsMode`, `runREPLModeWithSession`; enhanced tool-use/result persistence
-- `tests/session_resume_test.go` — New: 24 tests
+- `cli/cli.go` — Added: `runResumeMode`, `runSessionsMode`, `runREPLModeWithSession`, `formatThinkingForSession`; enhanced tool-use/result persistence; error persistence in all REPL modes
+- `tests/session_resume_test.go` — New: 26 tests
+- `tests/thinking_test.go` — Updated callbacks for new signature parameter
 
-**Test coverage** (24 new tests):
+**Test coverage** (26 tests):
 - `TestReconstructHistory_BasicConversation` — simple user/assistant alternation
-- `TestReconstructHistory_WithToolUse` — thinking + tool_use + tool_result flow
+- `TestReconstructHistory_WithToolUse` — tool_use + tool_result flow
 - `TestReconstructHistory_MultipleToolCalls` — 2 tool_use blocks in one assistant turn
 - `TestReconstructHistory_AfterCompaction` — loads from latest system.md forward
 - `TestReconstructHistory_MalformedLastFile` — crash recovery (partial file skipped)
 - `TestReconstructHistory_LegacyFormat` — SESS-1 backward compatibility
 - `TestReconstructHistory_EmptyDir` — empty session
+- `TestReconstructHistory_DropsTrailingUserMessage` — incomplete exchange trimming
+- `TestReconstructHistory_ThinkingPlusAssistant` — with_signature (thinking round-tripped) and legacy_no_signature (thinking excluded) subtests
 - `TestListSessions` — listing with counts, summaries, ordering
 - `TestCrossUserResume` — directory copy with `_from_` provenance
 - `TestFindMostRecentSession` — finds latest session for a user
@@ -4912,8 +4925,11 @@ Created `docs/playwright-mcp.md` — a design document for adding Playwright bro
 - `TestInferToolName` — display message → tool name mapping (11 tools)
 - `TestResumeIntegration_CreateAndReconstruct` — full lifecycle: create session, write messages, reconstruct, verify, open, continue
 
-**Bug fixed during implementation**: Timezone mismatch in `ParseTimestampFromFilename`.
-`time.Parse` returns UTC but `time.Now()` returns local time. When the machine isn't in UTC, the monotonicity guard in `Open()` produced incorrect comparisons, causing new files to sort before existing ones. Fixed by using `time.ParseInLocation(..., time.Local)`.
+**Bugs fixed during implementation**:
+1. **Timezone mismatch**: `ParseTimestampFromFilename` used `time.Parse` (returns UTC) but `time.Now()` returns local time. On non-UTC machines, the monotonicity guard in `Open()` failed. Fixed with `time.ParseInLocation(..., time.Local)`.
+2. **Consecutive assistant messages**: thinking + assistant text were flushed as two separate assistant messages, violating API alternation. Fixed by appending text to pending assistant when one already exists.
+3. **Trailing user message**: a dangling user message from a crashed/errored exchange caused two consecutive user messages on resume. Fixed by trimming trailing user messages from API history (files preserved on disk).
+4. **Missing thinking signature**: the API requires a cryptographic `signature` on thinking blocks in history. Fixed by persisting the signature in thinking files and including it in reconstruction.
 
 ## SESS-1: Session History Persistence (Implemented 2026-04-08)
 
