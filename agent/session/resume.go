@@ -244,16 +244,27 @@ func ReconstructHistory(sessionDir string) ([]providers.Message, []string, error
 			}
 
 		case TypeAssistant:
-			// Always flush any pending message before creating assistant text
-			flush()
 			assistantText := extractAssistantText(text)
-			pending = &pendingMessage{
-				role: "assistant",
-				content: []providers.ContentBlock{
-					{Type: "text", Text: assistantText},
-				},
+			if pending != nil && pending.role == "assistant" {
+				// Append text to existing assistant message (e.g., after thinking blocks)
+				if assistantText != "" {
+					pending.content = append(pending.content, providers.ContentBlock{
+						Type: "text",
+						Text: assistantText,
+					})
+				}
+				flush()
+			} else {
+				// No pending assistant — flush whatever is pending, create new assistant
+				flush()
+				pending = &pendingMessage{
+					role: "assistant",
+					content: []providers.ContentBlock{
+						{Type: "text", Text: assistantText},
+					},
+				}
+				flush() // assistant text messages are immediately flushed
 			}
-			flush() // assistant text messages are immediately flushed
 
 		case TypeSystem:
 			flush()

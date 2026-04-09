@@ -350,6 +350,57 @@ func TestReconstructHistory_EmptyDir(t *testing.T) {
 	}
 }
 
+// TestReconstructHistory_ThinkingPlusAssistant verifies that thinking and
+// assistant text are combined into a single assistant message (not two
+// consecutive assistant messages which would violate API alternation rules).
+func TestReconstructHistory_ThinkingPlusAssistant(t *testing.T) {
+	dir := t.TempDir()
+
+	writeFile(t, dir, "2026-07-14T09-32-00.000_user.md", "**You:**\n\nhello\n")
+	writeFile(t, dir, "2026-07-14T09-32-03.000_diagnostic.md", "🔍 Tokens: input=3 output=80\n")
+	writeFile(t, dir, "2026-07-14T09-32-03.100_thinking.md", "💭 The user is just saying hello. No tools needed.\n")
+	writeFile(t, dir, "2026-07-14T09-32-03.200_assistant.md", "**Claude:**\n\nHello! How can I help?\n")
+
+	messages, warnings, err := session.ReconstructHistory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) > 0 {
+		t.Logf("Warnings: %v", warnings)
+	}
+
+	// Should be exactly 2 messages: user + assistant(thinking+text)
+	if len(messages) != 2 {
+		t.Fatalf("Expected 2 messages, got %d", len(messages))
+	}
+
+	// Verify alternation
+	if messages[0].Role != "user" {
+		t.Errorf("Message 0: expected role 'user', got %q", messages[0].Role)
+	}
+	if messages[1].Role != "assistant" {
+		t.Errorf("Message 1: expected role 'assistant', got %q", messages[1].Role)
+	}
+
+	// Verify assistant message has BOTH thinking and text blocks
+	blocks, ok := messages[1].Content.([]providers.ContentBlock)
+	if !ok {
+		t.Fatalf("Message 1: expected []ContentBlock, got %T", messages[1].Content)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("Expected 2 blocks (thinking+text), got %d", len(blocks))
+	}
+	if blocks[0].Type != "thinking" {
+		t.Errorf("Block 0: expected type 'thinking', got %q", blocks[0].Type)
+	}
+	if blocks[1].Type != "text" {
+		t.Errorf("Block 1: expected type 'text', got %q", blocks[1].Type)
+	}
+	if !strings.Contains(blocks[1].Text, "Hello! How can I help?") {
+		t.Errorf("Block 1: unexpected text %q", blocks[1].Text)
+	}
+}
+
 // --- Unit Tests: Session Listing ---
 
 // TestListSessions verifies session listing produces correct output.
