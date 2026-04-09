@@ -52,8 +52,9 @@ type OutputCallback func(output string, toolUseID string)
 
 // ThinkingCallback receives thinking trace text from Claude's extended thinking.
 // The text is the raw, full thinking content; the caller is responsible for
-// truncation and styling.
-type ThinkingCallback func(text string)
+// truncation and styling. The signature is the API's cryptographic token needed
+// for round-tripping thinking blocks in conversation history.
+type ThinkingCallback func(text string, signature string)
 
 // DiagnosticCallback receives diagnostic information (cache stats, token counts, etc.).
 // Called unconditionally; the caller decides whether to display.
@@ -366,7 +367,7 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			case "thinking":
 				// Emit full thinking trace unconditionally
 				if block.Thinking != "" && a.thinkingCallback != nil {
-					a.thinkingCallback(block.Thinking)
+					a.thinkingCallback(block.Thinking, block.Signature)
 				}
 			case "redacted_thinking":
 				// Redacted thinking — note it via diagnostics

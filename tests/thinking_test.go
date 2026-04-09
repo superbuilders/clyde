@@ -289,7 +289,7 @@ func TestThinkingCallbackAlwaysFires(t *testing.T) {
 	_ = agent.NewAgent(
 		apiClient,
 		"test prompt",
-		agent.WithThinkingCallback(func(text string) {
+		agent.WithThinkingCallback(func(text string, signature string) {
 			thinkingTexts = append(thinkingTexts, text)
 		}),
 	)
@@ -525,7 +525,7 @@ func TestThinkingIntegrationWithAgent(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		client,
 		prompts.SystemPrompt,
-		agent.WithThinkingCallback(func(text string) {
+		agent.WithThinkingCallback(func(text string, signature string) {
 			thinkingTexts = append(thinkingTexts, text)
 		}),
 		agent.WithProgressCallback(func(msg string, toolUseID string) {
@@ -571,7 +571,7 @@ func TestThinkingIntegrationVerbose(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		client,
 		prompts.SystemPrompt,
-		agent.WithThinkingCallback(func(text string) {
+		agent.WithThinkingCallback(func(text string, signature string) {
 			thinkingTexts = append(thinkingTexts, text)
 		}),
 	)
@@ -611,7 +611,7 @@ func TestThinkingSuppressedAtQuiet(t *testing.T) {
 	agentInstance := agent.NewAgent(
 		client,
 		prompts.SystemPrompt,
-		agent.WithThinkingCallback(func(text string) {
+		agent.WithThinkingCallback(func(text string, signature string) {
 			thinkingTexts = append(thinkingTexts, text)
 		}),
 	)

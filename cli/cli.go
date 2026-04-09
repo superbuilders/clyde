@@ -199,14 +199,14 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 				sess.WriteMessage(session.TypeToolResult, content)
 			}
 		}),
-		agent.WithThinkingCallback(func(text string) {
+		agent.WithThinkingCallback(func(text string, signature string) {
 			if level.ShouldShow(loglevel.Normal) {
 				displayed := truncateForLevel(text, truncate.ThinkingLineLimit, level)
 				fmt.Fprintln(os.Stderr, style.FormatThinking(displayed))
 			}
-			// Persist full thinking to session
+			// Persist full thinking + signature to session
 			if sess != nil {
-				sess.WriteMessage(session.TypeThinking, "💭 "+text+"\n")
+				sess.WriteMessage(session.TypeThinking, formatThinkingForSession(text, signature))
 			}
 		}),
 		agent.WithDiagnosticCallback(func(msg string) {
@@ -304,10 +304,10 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 				}
 			}
 		}),
-		agent.WithThinkingCallback(func(text string) {
-			// Persist full thinking to session (always, regardless of display level)
+		agent.WithThinkingCallback(func(text string, signature string) {
+			// Persist full thinking + signature to session (always, regardless of display level)
 			if sess != nil {
-				sess.WriteMessage(session.TypeThinking, "💭 "+text+"\n")
+				sess.WriteMessage(session.TypeThinking, formatThinkingForSession(text, signature))
 			}
 			if !level.ShouldShow(loglevel.Normal) {
 				return
@@ -691,9 +691,9 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 				}
 			}
 		}),
-		agent.WithThinkingCallback(func(text string) {
+		agent.WithThinkingCallback(func(text string, signature string) {
 			if sess != nil {
-				sess.WriteMessage(session.TypeThinking, "💭 "+text+"\n")
+				sess.WriteMessage(session.TypeThinking, formatThinkingForSession(text, signature))
 			}
 			if !level.ShouldShow(loglevel.Normal) {
 				return
@@ -883,6 +883,23 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 		totalInput := usage.InputTokens + usage.CacheReadInputTokens
 		contextPercent = prompt.CalculateContextPercent(totalInput, cfg.ContextWindowSize)
 	}
+}
+
+// formatThinkingForSession formats a thinking block for session persistence.
+// Includes the signature on a separate line so it can be parsed back for
+// API reconstruction. The signature is the API's cryptographic token needed
+// to round-trip thinking blocks in conversation history.
+//
+// Format:
+//
+//	💭 thinking text here...
+//	signature: <base64 signature>
+func formatThinkingForSession(text, signature string) string {
+	content := "💭 " + text + "\n"
+	if signature != "" {
+		content += "signature: " + signature + "\n"
+	}
+	return content
 }
 
 // truncateForLevel applies truncation based on the log level.

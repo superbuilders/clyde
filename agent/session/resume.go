@@ -198,13 +198,22 @@ func ReconstructHistory(sessionDir string) ([]providers.Message, []string, error
 			flush() // user messages are immediately flushed
 
 		case TypeThinking:
-			// Thinking blocks are preserved on disk for the human record,
-			// but EXCLUDED from API reconstruction. The Claude API requires
-			// a cryptographic `signature` field on thinking blocks in history,
-			// which we don't persist (it's ephemeral per-response). The API
-			// generates fresh thinking on each new turn — old thinking isn't
-			// needed for continuation.
-			continue
+			// Reconstruct thinking blocks with their cryptographic signatures.
+			// The signature is required by the API for round-tripping thinking
+			// in conversation history. If no signature is found (legacy files),
+			// the thinking block is skipped since the API would reject it.
+			thinkingText, thinkingSig := extractThinkingWithSignature(text)
+			if thinkingSig == "" {
+				// Legacy file without signature — skip from API history.
+				// The thinking text is still on disk for human reading.
+				continue
+			}
+			ensureAssistant()
+			pending.content = append(pending.content, providers.ContentBlock{
+				Type:      "thinking",
+				Thinking:  thinkingText,
+				Signature: thinkingSig,
+			})
 
 		case TypeToolUse:
 			ensureAssistant()
@@ -522,12 +531,49 @@ func extractAssistantText(content string) string {
 }
 
 // extractThinkingText extracts thinking text from a thinking file.
-// Strips the "💭 " prefix.
+// Strips the "💭 " prefix. Used only for legacy files without signatures.
 func extractThinkingText(content string) string {
 	content = strings.TrimSpace(content)
 	content = strings.TrimPrefix(content, "💭 ")
 	content = strings.TrimPrefix(content, "💭")
 	return strings.TrimSpace(content)
+}
+
+// extractThinkingWithSignature extracts thinking text and signature from a thinking file.
+//
+// New format (with signature):
+//
+//	💭 thinking text here
+//	signature: <base64 signature>
+//
+// Legacy format (no signature):
+//
+//	💭 thinking text here
+//
+// Returns (text, signature). If no signature line is found, signature is "".
+func extractThinkingWithSignature(content string) (string, string) {
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	if len(lines) == 0 {
+		return "", ""
+	}
+
+	var signature string
+	var textLines []string
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "signature: ") {
+			signature = strings.TrimPrefix(line, "signature: ")
+		} else {
+			textLines = append(textLines, line)
+		}
+	}
+
+	text := strings.Join(textLines, "\n")
+	text = strings.TrimPrefix(text, "💭 ")
+	text = strings.TrimPrefix(text, "💭")
+	text = strings.TrimSpace(text)
+
+	return text, signature
 }
 
 // extractSystemText extracts system text from a system message file.

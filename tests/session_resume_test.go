@@ -389,51 +389,74 @@ func TestReconstructHistory_DropsTrailingUserMessage(t *testing.T) {
 }
 
 // TestReconstructHistory_ThinkingPlusAssistant verifies that thinking blocks
-// are excluded from API reconstruction (the API requires a cryptographic
-// signature we don't persist), and that the assistant text still loads correctly.
+// with signatures are included in API reconstruction, and that legacy thinking
+// files without signatures are gracefully excluded.
 func TestReconstructHistory_ThinkingPlusAssistant(t *testing.T) {
-	dir := t.TempDir()
+	t.Run("with_signature", func(t *testing.T) {
+		dir := t.TempDir()
 
-	writeFile(t, dir, "2026-07-14T09-32-00.000_user.md", "**You:**\n\nhello\n")
-	writeFile(t, dir, "2026-07-14T09-32-03.000_diagnostic.md", "🔍 Tokens: input=3 output=80\n")
-	writeFile(t, dir, "2026-07-14T09-32-03.100_thinking.md", "💭 The user is just saying hello. No tools needed.\n")
-	writeFile(t, dir, "2026-07-14T09-32-03.200_assistant.md", "**Claude:**\n\nHello! How can I help?\n")
+		writeFile(t, dir, "2026-07-14T09-32-00.000_user.md", "**You:**\n\nhello\n")
+		writeFile(t, dir, "2026-07-14T09-32-03.000_diagnostic.md", "🔍 Tokens: input=3 output=80\n")
+		writeFile(t, dir, "2026-07-14T09-32-03.100_thinking.md", "💭 The user is just saying hello.\nsignature: abc123sig\n")
+		writeFile(t, dir, "2026-07-14T09-32-03.200_assistant.md", "**Claude:**\n\nHello! How can I help?\n")
 
-	messages, warnings, err := session.ReconstructHistory(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(warnings) > 0 {
-		t.Logf("Warnings: %v", warnings)
-	}
+		messages, _, err := session.ReconstructHistory(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	// Should be exactly 2 messages: user + assistant(text only — thinking excluded)
-	if len(messages) != 2 {
-		t.Fatalf("Expected 2 messages, got %d", len(messages))
-	}
+		if len(messages) != 2 {
+			t.Fatalf("Expected 2 messages, got %d", len(messages))
+		}
 
-	// Verify alternation
-	if messages[0].Role != "user" {
-		t.Errorf("Message 0: expected role 'user', got %q", messages[0].Role)
-	}
-	if messages[1].Role != "assistant" {
-		t.Errorf("Message 1: expected role 'assistant', got %q", messages[1].Role)
-	}
+		// Assistant message should have BOTH thinking (with signature) and text
+		blocks, ok := messages[1].Content.([]providers.ContentBlock)
+		if !ok {
+			t.Fatalf("Message 1: expected []ContentBlock, got %T", messages[1].Content)
+		}
+		if len(blocks) != 2 {
+			t.Fatalf("Expected 2 blocks (thinking+text), got %d", len(blocks))
+		}
+		if blocks[0].Type != "thinking" {
+			t.Errorf("Block 0: expected 'thinking', got %q", blocks[0].Type)
+		}
+		if blocks[0].Signature != "abc123sig" {
+			t.Errorf("Block 0: expected signature 'abc123sig', got %q", blocks[0].Signature)
+		}
+		if blocks[1].Type != "text" {
+			t.Errorf("Block 1: expected 'text', got %q", blocks[1].Type)
+		}
+	})
 
-	// Verify assistant message has text block only (thinking excluded from API)
-	blocks, ok := messages[1].Content.([]providers.ContentBlock)
-	if !ok {
-		t.Fatalf("Message 1: expected []ContentBlock, got %T", messages[1].Content)
-	}
-	if len(blocks) != 1 {
-		t.Fatalf("Expected 1 block (text only; thinking excluded from API), got %d", len(blocks))
-	}
-	if blocks[0].Type != "text" {
-		t.Errorf("Block 0: expected type 'text', got %q", blocks[0].Type)
-	}
-	if !strings.Contains(blocks[0].Text, "Hello! How can I help?") {
-		t.Errorf("Block 0: unexpected text %q", blocks[0].Text)
-	}
+	t.Run("legacy_no_signature", func(t *testing.T) {
+		dir := t.TempDir()
+
+		writeFile(t, dir, "2026-07-14T09-32-00.000_user.md", "**You:**\n\nhello\n")
+		// Legacy format: no signature line
+		writeFile(t, dir, "2026-07-14T09-32-03.100_thinking.md", "💭 The user is just saying hello.\n")
+		writeFile(t, dir, "2026-07-14T09-32-03.200_assistant.md", "**Claude:**\n\nHello! How can I help?\n")
+
+		messages, _, err := session.ReconstructHistory(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(messages) != 2 {
+			t.Fatalf("Expected 2 messages, got %d", len(messages))
+		}
+
+		// Assistant message should have text only (thinking excluded — no signature)
+		blocks, ok := messages[1].Content.([]providers.ContentBlock)
+		if !ok {
+			t.Fatalf("Message 1: expected []ContentBlock, got %T", messages[1].Content)
+		}
+		if len(blocks) != 1 {
+			t.Fatalf("Expected 1 block (text only; legacy thinking excluded), got %d", len(blocks))
+		}
+		if blocks[0].Type != "text" {
+			t.Errorf("Block 0: expected 'text', got %q", blocks[0].Type)
+		}
+	})
 }
 
 // --- Unit Tests: Session Listing ---
