@@ -988,7 +988,73 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-04-09)
 
-**Latest Update**: CMP-2: Agentic Multi-Step Compaction Workflow ✅
+**Latest Update**: CMP-3: Intelligent Tool-Result Summarization ✅
+
+### CMP-3: Intelligent Tool-Result Summarization (Completed 2026-04-09)
+
+**Story**: Replace hard truncation of oversized tool results during compaction with LLM-based intelligent summarization that preserves critical details in the tail of large outputs.
+
+**Depends on**: CMP-2 (integrated into the serialization step of the 5-phase workflow)
+
+**What Changed**:
+
+| Before (CMP-1/CMP-2) | After (CMP-3) |
+|----------------------|---------------|
+| `serializeMessages()` hard-truncates at 2000 chars | `serializeMessagesWithSummarization()` uses LLM for oversized results |
+| Tail of tool output silently lost | Summarizer decides what to keep verbatim, condense, or drop |
+| No metadata about what was lost | `[Summarized: original N chars → M chars]` appended |
+| No fallback behavior | Falls back to hard truncation if LLM call fails |
+
+**Implementation**:
+
+- **`summarizeToolResult()`** — Dedicated LLM call per oversized tool output:
+  - Receives: the tool output + original mission + last 2 kept messages as anchoring context
+  - Instructed to preserve exact file paths, function names, error messages, test results
+  - No fixed output length — LLM decides based on content importance
+  - Appends `[Summarized: original N chars → M chars]` metadata note
+  - Emits `🗜️ Summarized tool result: N chars → M chars` via DiagnosticCallback
+
+- **`serializeMessagesWithSummarization()`** — Replaces `serializeMessages()` in the compaction workflow:
+  - For tool_result blocks ≤ threshold: kept as-is
+  - For tool_result blocks > threshold: calls `summarizeToolResult()`
+  - On LLM failure: falls back to `hardTruncate()` with diagnostic message
+
+- **`hardTruncate()`** — Extracted helper for the deterministic fallback
+
+- **`DefaultToolResultThreshold = 2000`** — Configurable via `TOOL_RESULT_THRESHOLD` in `~/.clyde/config` (minimum 500)
+
+- **`agent.Config.ToolResultThreshold`** — Wired through agent struct, config package, and CLI config mapping
+
+**Files Changed**:
+- `agent/compaction.go` — Added `summarizeToolResult()`, `serializeMessagesWithSummarization()`, `serializeMessagesHard()`, `hardTruncate()`, `DefaultToolResultThreshold`; refactored serialization path (~530 lines total)
+- `agent/agent.go` — Added `toolResultThreshold` field and `ToolResultThreshold` to Config
+- `agent/config/config.go` — Added `ToolResultThreshold` field, `TOOL_RESULT_THRESHOLD` env var parsing
+- `cli/cli.go` — Added `TOOL_RESULT_THRESHOLD` parsing and config mapping
+- `tests/compaction_test.go` — Added 9 CMP-3 tests
+
+**Test Coverage** (9 new CMP-3 tests):
+
+Unit tests (no API key):
+- `TestCMP3_DefaultThreshold` — constant is 2000
+- `TestCMP3_BelowThresholdKeptAsIs` — short tool output preserved verbatim
+- `TestCMP3_AboveThresholdTruncatedInSerializeMessages` — exported path uses hard truncation
+- `TestCMP3_HardTruncateBehavior` (4 subtests) — below/at/above/way above threshold
+- `TestCMP3_FallbackOnAPIFailure` — falls back to hard truncation on fake client
+- `TestCMP3_ConfigToolResultThreshold` (4 subtests) — valid, default, invalid, too low
+- `TestCMP3_CustomThreshold` — custom 500-char threshold respected
+- `TestCMP3_NoBehavioralChange` — documents architecture
+
+Integration test (requires API key):
+- `TestCMP3_MetadataNote` — real compaction with 100-line grep result: verifies handoff contains key terms from the summarized output
+
+**Test Results** (all 43 compaction tests):
+```
+CMP-1: 19 unit tests PASS
+CMP-2: 13 unit tests PASS, 2 integration SKIP
+CMP-3:  8 unit tests PASS, 1 integration PASS (32.9s)
+```
+
+All existing tests pass — zero regressions.
 
 ### CMP-2: Multi-Step Compaction Workflow (Completed 2026-04-09)
 

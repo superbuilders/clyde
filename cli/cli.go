@@ -122,6 +122,19 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		compactIncludeRecentContext = &b
 	}
 
+	// Parse optional tool result summarization threshold
+	toolResultThreshold := 0
+	if trtStr := os.Getenv("TOOL_RESULT_THRESHOLD"); trtStr != "" {
+		trt, err := strconv.Atoi(trtStr)
+		if err != nil {
+			return agent.Config{}, fmt.Errorf("TOOL_RESULT_THRESHOLD must be a number, got %q: %w", trtStr, err)
+		}
+		if trt < 500 {
+			return agent.Config{}, fmt.Errorf("TOOL_RESULT_THRESHOLD must be >= 500, got %d", trt)
+		}
+		toolResultThreshold = trt
+	}
+
 	return agent.Config{
 		APIKey:            apiKey,
 		APIURL:            "https://api.anthropic.com/v1/messages",
@@ -135,6 +148,7 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		MCPPlaywrightArgs: os.Getenv("MCP_PLAYWRIGHT_ARGS"),
 		ReserveTokens:     reserveTokens,
 		CompactIncludeRecentContext: compactIncludeRecentContext,
+		ToolResultThreshold:        toolResultThreshold,
 	}, nil
 }
 

@@ -205,14 +205,18 @@ func (a *Agent) runCompactionWorkflow(
 	keptMessages []providers.Message,
 ) (string, error) {
 
-	// Serialize the conversation once for reuse across phases
-	convText := serializeMessages(toSummarize)
 	missionText := messageText(firstUserMsg)
 
-	// Build recent-context block if enabled (feeds into every phase)
+	// Serialize the conversation using intelligent tool-result summarization (CMP-3).
+	// Oversized tool outputs are summarized via LLM rather than hard-truncated.
+	convText := a.serializeMessagesWithSummarization(toSummarize, missionText, keptMessages)
+
+	// Build recent-context block if enabled (feeds into every phase).
+	// Recent context uses hard truncation (no LLM) since these messages
+	// are already kept in full in the post-compaction history.
 	recentCtx := ""
 	if a.compactIncludeRecentContext {
-		recentCtx = serializeMessages(keptMessages)
+		recentCtx = serializeMessagesHard(keptMessages, DefaultToolResultThreshold)
 	}
 
 	// Phase 1: Goal/constraint extraction
@@ -465,17 +469,33 @@ func captureGitStatus() string {
 	return strings.TrimSpace(string(out))
 }
 
+// DefaultToolResultThreshold is the character count above which tool results
+// are intelligently summarized (rather than hard-truncated) during compaction.
+// Configurable via TOOL_RESULT_THRESHOLD in ~/.clyde/config.
+const DefaultToolResultThreshold = 2000
+
 // --- Message serialization helpers ---
 
 // SerializeMessages converts a slice of messages to a readable text format
-// for feeding into compaction phases. Exported for testing.
+// for feeding into compaction phases. Uses hard truncation (no LLM).
+// Exported for testing.
 func SerializeMessages(msgs []providers.Message) string {
-	return serializeMessages(msgs)
+	return serializeMessagesHard(msgs, DefaultToolResultThreshold)
 }
 
-// serializeMessages converts a slice of messages to a readable text format
-// for feeding into compaction phases.
-func serializeMessages(msgs []providers.Message) string {
+// serializeMessagesWithSummarization converts messages to text, using the LLM
+// to intelligently summarize oversized tool results instead of hard-truncating.
+// Falls back to hard truncation if the LLM call fails.
+func (a *Agent) serializeMessagesWithSummarization(
+	msgs []providers.Message,
+	missionText string,
+	keptMessages []providers.Message,
+) string {
+	threshold := a.toolResultThreshold
+	if threshold == 0 {
+		threshold = DefaultToolResultThreshold
+	}
+
 	var sb strings.Builder
 	for _, msg := range msgs {
 		role := msg.Role
@@ -492,20 +512,147 @@ func serializeMessages(msgs []providers.Message) string {
 				case "tool_result":
 					resultText := ""
 					if s, ok := block.Content.(string); ok {
-						if len(s) > 2000 {
-							resultText = s[:2000] + "\n... (truncated)"
+						if len(s) > threshold {
+							// Attempt intelligent summarization
+							summarized, err := a.summarizeToolResult(s, missionText, keptMessages)
+							if err != nil {
+								// Fallback to hard truncation
+								if a.diagnosticCallback != nil {
+									a.diagnosticCallback(fmt.Sprintf("🗜️ Tool result summarization failed, falling back to truncation: %v", err))
+								}
+								resultText = hardTruncate(s, threshold)
+							} else {
+								resultText = summarized
+							}
 						} else {
 							resultText = s
 						}
 					}
 					sb.WriteString(fmt.Sprintf("**tool_result**: %s\n\n", resultText))
 				case "thinking":
-					// Skip thinking blocks in serialization
+					// Skip thinking blocks
 				}
 			}
 		}
 	}
 	return sb.String()
+}
+
+// serializeMessagesHard converts messages to text with hard truncation only.
+// Used by the exported SerializeMessages and as a non-LLM fallback.
+func serializeMessagesHard(msgs []providers.Message, threshold int) string {
+	var sb strings.Builder
+	for _, msg := range msgs {
+		role := msg.Role
+		switch content := msg.Content.(type) {
+		case string:
+			sb.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, content))
+		case []providers.ContentBlock:
+			for _, block := range content {
+				switch block.Type {
+				case "text":
+					sb.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, block.Text))
+				case "tool_use":
+					sb.WriteString(fmt.Sprintf("**%s** [tool_use: %s]: %v\n\n", role, block.Name, block.Input))
+				case "tool_result":
+					resultText := ""
+					if s, ok := block.Content.(string); ok {
+						resultText = hardTruncate(s, threshold)
+					}
+					sb.WriteString(fmt.Sprintf("**tool_result**: %s\n\n", resultText))
+				case "thinking":
+					// Skip thinking blocks
+				}
+			}
+		}
+	}
+	return sb.String()
+}
+
+// hardTruncate truncates text to the given threshold with a marker.
+func hardTruncate(s string, threshold int) string {
+	if len(s) <= threshold {
+		return s
+	}
+	return s[:threshold] + "\n... (truncated)"
+}
+
+// summarizeToolResult uses an LLM call to intelligently summarize a large
+// tool output. The summarizer receives the original mission and recent kept
+// messages as anchoring context, then decides what to keep verbatim, condense,
+// or drop entirely.
+//
+// Returns the summarized text with a metadata note:
+//
+//	[Summarized: original N chars → M chars]
+func (a *Agent) summarizeToolResult(
+	toolOutput string,
+	missionText string,
+	keptMessages []providers.Message,
+) (string, error) {
+	// Build anchoring context from kept messages (last 2 turns max)
+	var anchorCtx strings.Builder
+	anchorMsgs := keptMessages
+	if len(anchorMsgs) > 4 {
+		anchorMsgs = anchorMsgs[len(anchorMsgs)-4:]
+	}
+	for _, msg := range anchorMsgs {
+		if text, ok := msg.Content.(string); ok {
+			anchorCtx.WriteString(fmt.Sprintf("**%s**: %s\n\n", msg.Role, text))
+		}
+	}
+
+	systemPrompt := "You are summarizing a large tool output for context compaction.\n\n" +
+		"Rules:\n" +
+		"- Decide what to keep verbatim (exact error messages, key values, paths)\n" +
+		"- Decide what to condense (repetitive output, verbose listings)\n" +
+		"- Decide what to drop (routine information, filler)\n" +
+		"- Do NOT enforce a fixed output length — use as much space as needed for important content\n" +
+		"- Preserve exact file paths, function names, error messages, and numeric values\n" +
+		"- For test output: preserve pass/fail counts, failing test names, and error details\n" +
+		"- For search results: preserve matched file paths and key matching lines\n" +
+		"- For file listings: summarize counts and highlight notable files\n" +
+		"- Output ONLY the summary, no preamble or explanation"
+
+	var userContent strings.Builder
+	userContent.WriteString("## Original Mission\n\n")
+	userContent.WriteString(missionText)
+	if anchorCtx.Len() > 0 {
+		userContent.WriteString("\n\n## Recent Context\n\n")
+		userContent.WriteString(anchorCtx.String())
+	}
+	userContent.WriteString("\n\n## Tool Output to Summarize\n\n")
+	userContent.WriteString(toolOutput)
+
+	messages := []providers.Message{
+		{Role: "user", Content: userContent.String()},
+	}
+
+	resp, err := a.apiClient.Call(systemPrompt, messages, nil)
+	if err != nil {
+		return "", fmt.Errorf("tool result summarization API call failed: %w", err)
+	}
+
+	var parts []string
+	for _, block := range resp.Content {
+		if block.Type == "text" && block.Text != "" {
+			parts = append(parts, block.Text)
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("tool result summarization returned empty response")
+	}
+
+	summarized := strings.Join(parts, "\n")
+
+	// Append metadata note
+	summarized += fmt.Sprintf("\n\n[Summarized: original %d chars → %d chars]", len(toolOutput), len(summarized))
+
+	if a.diagnosticCallback != nil {
+		a.diagnosticCallback(fmt.Sprintf("🗜️ Summarized tool result: %d chars → %d chars", len(toolOutput), len(summarized)))
+	}
+
+	return summarized, nil
 }
 
 // MessageText extracts plain text from a message. Exported for testing.

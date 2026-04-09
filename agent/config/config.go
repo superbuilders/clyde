@@ -21,6 +21,7 @@ type Config struct {
 	MCPPlaywrightArgs    string // Extra args for npx @playwright/mcp (e.g. "--headless")
 	ReserveTokens        int    // Tokens to reserve for response; triggers compaction (0 = default 16000)
 	CompactIncludeRecentContext *bool // Feed recent messages into compaction (nil = default true)
+	ToolResultThreshold        int   // Chars above which tool results are LLM-summarized (0 = default 2000)
 }
 
 // LoadFromFile loads configuration from a specific file path
@@ -78,6 +79,19 @@ func LoadFromFile(path string) (*Config, error) {
 		compactIncludeRecentContext = &b
 	}
 
+	// Parse optional tool result summarization threshold
+	toolResultThreshold := 0
+	if trtStr := os.Getenv("TOOL_RESULT_THRESHOLD"); trtStr != "" {
+		trt, err := strconv.Atoi(trtStr)
+		if err != nil {
+			return nil, fmt.Errorf("TOOL_RESULT_THRESHOLD must be a number, got %q: %w", trtStr, err)
+		}
+		if trt < 500 {
+			return nil, fmt.Errorf("TOOL_RESULT_THRESHOLD must be >= 500, got %d", trt)
+		}
+		toolResultThreshold = trt
+	}
+
 	return &Config{
 		APIKey:               apiKey,
 		BraveSearchAPIKey:    os.Getenv("BRAVE_SEARCH_API_KEY"),
@@ -90,5 +104,6 @@ func LoadFromFile(path string) (*Config, error) {
 		MCPPlaywrightArgs:    os.Getenv("MCP_PLAYWRIGHT_ARGS"),
 		ReserveTokens:        reserveTokens,
 		CompactIncludeRecentContext: compactIncludeRecentContext,
+		ToolResultThreshold:        toolResultThreshold,
 	}, nil
 }
