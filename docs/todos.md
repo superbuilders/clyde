@@ -818,6 +818,39 @@ BAD:  "command failed: exit status 127"
 **Philosophy**:
 Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
 
+### Bug #3: Multi-Line Display Messages Break Session Resume (Fixed 2026-04-16)
+
+**Issue**: Resuming a session that contains a `run_bash` tool call with a multi-line command causes a 400 error from the Claude API:
+```
+messages.20.content.0: unexpected tool_use_id found in tool_result blocks: toolu_0119dBVnRa6rCiYpbz5Xaa2X.
+Each tool_result block must have a corresponding tool_use block in the previous message.
+```
+
+**Root Cause — Three contributing factors**:
+
+1. **Writer (`displayRunBash`)**: Returns `"→ Running bash: " + command` with NO truncation. If the command has newlines (common for complex scripts), the display message is multi-line.
+
+2. **Writer (`FormatToolUseID`)**: Appends `[toolu_xxx]` to the END of the display message string. For multi-line messages, this puts the ID on the LAST line instead of line 1.
+
+3. **Reader (`extractToolUseMetadata`)**: Only searches `lines[0]` for the `[toolu_xxx]` regex. For multi-line display messages, the ID is on a later line and is never found.
+
+**Cascade**:
+- Tool-use block is SKIPPED (no ID found → reconstruction logs warning, doesn't add to history)
+- Corresponding tool-result block still has the explicit ID and IS added
+- API receives a `tool_result` referencing a `tool_use_id` that doesn't exist in any preceding assistant message → 400 error
+
+**Evidence**: In the failing session, single-line tools (glob, read_file) had `[toolu_]` on line 1 (3-line files). Multi-line `run_bash` commands had `[toolu_]` on lines 42, 66, and 97 (44–99 line files).
+
+**Fix — Two parts**:
+
+1. **Fix the Reader** (backward-compatible, fixes existing sessions): In `extractToolUseMetadata()`, scan ALL lines for the `[toolu_xxx]` regex instead of only `lines[0]`.
+
+2. **Fix the Writer** (prevents future occurrences): In `FormatToolUseID()`, only use the first line of the progress message when appending the tool use ID, so the ID is always on line 1 regardless of display message content.
+
+**Test gap**: `TestReconstructHistory_MultipleToolCalls` wrote tool-use files with the ID on line 1 and in non-interleaved order. Neither pattern matched real multi-line `run_bash` sessions. New test added for multi-line display messages.
+
+**Reproduction**: Start a session, ask Claude to run a multi-line bash command (containing `\n`), exit, resume with `--resume`, type any message → 400 error.
+
 ## Current Status (2026-02-23)
 
 **Latest Update**: System Prompt Enhancement - TMUX for Background Processes & Subagents ✅
