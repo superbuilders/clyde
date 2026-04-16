@@ -298,6 +298,16 @@ func TestSessionToolUseIDsInProgressLines(t *testing.T) {
 			id:       "",
 			expected: "→ Listing files: .",
 		},
+		{
+			msg:      "→ Running bash: cd /tmp\nls -la\ngrep foo bar",
+			id:       "toolu_multi1",
+			expected: "→ Running bash: cd /tmp [toolu_multi1]\nls -la\ngrep foo bar",
+		},
+		{
+			msg:      "→ Running bash: echo hello\necho world",
+			id:       "toolu_multi2",
+			expected: "→ Running bash: echo hello [toolu_multi2]\necho world",
+		},
 	}
 
 	for _, tt := range tests {

@@ -847,7 +847,13 @@ Each tool_result block must have a corresponding tool_use block in the previous 
 
 2. **Fix the Writer** (prevents future occurrences): In `FormatToolUseID()`, only use the first line of the progress message when appending the tool use ID, so the ID is always on line 1 regardless of display message content.
 
-**Test gap**: `TestReconstructHistory_MultipleToolCalls` wrote tool-use files with the ID on line 1 and in non-interleaved order. Neither pattern matched real multi-line `run_bash` sessions. New test added for multi-line display messages.
+**Test gap**: `TestReconstructHistory_MultipleToolCalls` wrote tool-use files with the ID on line 1 and in non-interleaved order. Neither pattern matched real multi-line `run_bash` sessions.
+
+**Tests added**:
+- `TestReconstructHistory_MultiLineBashCommand` — end-to-end reconstruction of a multi-line bash tool-use where `[toolu_xxx]` is on the last display line (legacy format). Verifies both the tool_use and tool_result blocks are reconstructed with matching IDs and no warnings.
+- `TestExtractToolUseMetadata/multiline_bash_id_on_first_line` — new writer format (ID on line 1)
+- `TestExtractToolUseMetadata/multiline_bash_legacy_id_on_last_display_line` — old writer format (ID on last display line)
+- `TestSessionToolUseIDsInProgressLines` — two new multi-line cases verifying `FormatToolUseID` places ID on line 1
 
 **Reproduction**: Start a session, ask Claude to run a multi-line bash command (containing `\n`), exit, resume with `--resume`, type any message → 400 error.
 

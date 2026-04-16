@@ -214,6 +214,72 @@ func TestReconstructHistory_MultipleToolCalls(t *testing.T) {
 	}
 }
 
+// TestReconstructHistory_MultiLineBashCommand verifies that multi-line
+// run_bash commands (where [toolu_xxx] is NOT on line 1) are correctly
+// reconstructed. This is a regression test for Bug #3 where
+// extractToolUseMetadata only searched lines[0] and missed the ID entirely,
+// causing a 400 error from the API on session resume.
+func TestReconstructHistory_MultiLineBashCommand(t *testing.T) {
+	dir := t.TempDir()
+
+	// Simulate a multi-line bash command where the ID is on the LAST display
+	// line (legacy writer behavior — FormatToolUseID appended to end of string)
+	multiLineBashToolUse := "→ Running bash: cd /tmp\n" +
+		"echo \"hello world\"\n" +
+		"ls -la\n" +
+		"grep foo bar [toolu_bash_multi]\n" +
+		"name: run_bash\n" +
+		`input: {"command":"cd /tmp\necho \"hello world\"\nls -la\ngrep foo bar"}` + "\n"
+
+	writeFile(t, dir, "2026-07-14T09-32-00.000_user.md", "**You:**\n\nRun a multi-line script\n")
+	writeFile(t, dir, "2026-07-14T09-32-03.000_tool-use.md", multiLineBashToolUse)
+	writeFile(t, dir, "2026-07-14T09-32-04.000_tool-result.md",
+		"[toolu_bash_multi]\n```\nhello world\ntotal 0\n```\n")
+	writeFile(t, dir, "2026-07-14T09-32-07.000_assistant.md",
+		"**Claude:**\n\nThe script ran successfully.\n")
+
+	messages, warnings, err := session.ReconstructHistory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have NO warnings about skipping tool-use files
+	for _, w := range warnings {
+		if strings.Contains(w, "skipping tool-use") {
+			t.Errorf("Unexpected warning: %s", w)
+		}
+	}
+
+	// Expected: user, assistant(tool_use), user(tool_result), assistant(text)
+	if len(messages) != 4 {
+		t.Fatalf("Expected 4 messages, got %d", len(messages))
+	}
+
+	// Verify tool_use block has the correct ID
+	blocks, ok := messages[1].Content.([]providers.ContentBlock)
+	if !ok {
+		t.Fatalf("Message 1: expected []ContentBlock, got %T", messages[1].Content)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("Expected 1 tool_use block, got %d", len(blocks))
+	}
+	if blocks[0].ID != "toolu_bash_multi" {
+		t.Errorf("Tool use ID: expected %q, got %q", "toolu_bash_multi", blocks[0].ID)
+	}
+	if blocks[0].Name != "run_bash" {
+		t.Errorf("Tool name: expected %q, got %q", "run_bash", blocks[0].Name)
+	}
+
+	// Verify tool_result references the same ID
+	resultBlocks, ok := messages[2].Content.([]providers.ContentBlock)
+	if !ok {
+		t.Fatalf("Message 2: expected []ContentBlock, got %T", messages[2].Content)
+	}
+	if resultBlocks[0].ToolUseID != "toolu_bash_multi" {
+		t.Errorf("Tool result ID: expected %q, got %q", "toolu_bash_multi", resultBlocks[0].ToolUseID)
+	}
+}
+
 // TestReconstructHistory_AfterCompaction verifies that reconstruction starts
 // from the latest *_system.md file when a compaction has occurred.
 func TestReconstructHistory_AfterCompaction(t *testing.T) {
@@ -733,6 +799,20 @@ func TestExtractToolUseMetadata(t *testing.T) {
 			expectName:  "read_file",
 			expectInput: nil,
 		},
+		{
+			name: "multiline_bash_id_on_first_line",
+			content: "→ Running bash: cd /tmp [toolu_multi1]\nls -la\ngrep foo bar\nname: run_bash\ninput: {\"command\":\"cd /tmp\\nls -la\\ngrep foo bar\"}\n",
+			expectID:    "toolu_multi1",
+			expectName:  "run_bash",
+			expectInput: map[string]interface{}{"command": "cd /tmp\nls -la\ngrep foo bar"},
+		},
+		{
+			name: "multiline_bash_legacy_id_on_last_display_line",
+			content: "→ Running bash: cd /tmp\nls -la\ngrep foo bar [toolu_multi2]\nname: run_bash\ninput: {\"command\":\"cd /tmp\\nls -la\\ngrep foo bar\"}\n",
+			expectID:    "toolu_multi2",
+			expectName:  "run_bash",
+			expectInput: map[string]interface{}{"command": "cd /tmp\nls -la\ngrep foo bar"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1177,11 +1257,14 @@ func extractToolUseMetadataTest(content string) (string, string, map[string]inte
 	var toolUseID, toolName string
 	var input map[string]interface{}
 
-	// Extract tool_use_id
+	// Extract tool_use_id by scanning ALL lines (matches real implementation)
 	re := session.ToolUseIDRegexExported()
-	matches := re.FindStringSubmatch(lines[0])
-	if len(matches) >= 2 {
-		toolUseID = matches[1]
+	for _, line := range lines {
+		matches := re.FindStringSubmatch(line)
+		if len(matches) >= 2 {
+			toolUseID = matches[1]
+			break
+		}
 	}
 
 	// Extract metadata from subsequent lines

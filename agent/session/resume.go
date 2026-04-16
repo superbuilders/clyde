@@ -595,6 +595,22 @@ var toolUseIDRegex = regexp.MustCompile(`\[(toolu_[a-zA-Z0-9_-]+)\]`)
 //	name: read_file
 //	input: {"path":"main.go"}
 //
+// Multi-line display (e.g. run_bash with newlines in command):
+//
+//	→ Running bash: cd /tmp [toolu_abc123]
+//	ls -la
+//	grep foo bar
+//	name: run_bash
+//	input: {"command":"cd /tmp\nls -la\ngrep foo bar"}
+//
+// Legacy multi-line (ID on last display line, before name/input):
+//
+//	→ Running bash: cd /tmp
+//	ls -la
+//	grep foo bar [toolu_abc123]
+//	name: run_bash
+//	input: {"command":"cd /tmp\nls -la\ngrep foo bar"}
+//
 // Legacy format (SESS-1):
 //
 //	→ Reading file: main.go [toolu_abc123]
@@ -604,11 +620,17 @@ func extractToolUseMetadata(content string) (toolUseID, toolName string, input m
 		return "", "", nil
 	}
 
-	// Extract tool_use_id from first line (progress line with [toolu_xxx])
-	firstLine := lines[0]
-	matches := toolUseIDRegex.FindStringSubmatch(firstLine)
-	if len(matches) >= 2 {
-		toolUseID = matches[1]
+	// Extract tool_use_id by scanning ALL lines for [toolu_xxx].
+	// For single-line display messages the ID is on line 0, but for
+	// multi-line display messages (e.g. run_bash with newlines in the
+	// command) the ID may appear on any line — either line 0 (new writer)
+	// or the last display line (legacy writer that appended to the end).
+	for _, line := range lines {
+		matches := toolUseIDRegex.FindStringSubmatch(line)
+		if len(matches) >= 2 {
+			toolUseID = matches[1]
+			break
+		}
 	}
 
 	// Try to extract tool name and input from subsequent lines
@@ -625,7 +647,7 @@ func extractToolUseMetadata(content string) (toolUseID, toolName string, input m
 
 	// Fallback: infer tool name from display message if not explicitly stored
 	if toolName == "" {
-		toolName = inferToolName(firstLine)
+		toolName = inferToolName(lines[0])
 	}
 
 	// Ensure input is non-nil (API requires it)

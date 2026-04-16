@@ -283,11 +283,20 @@ func StripANSI(s string) string {
 	return re.ReplaceAllString(s, "")
 }
 
-// FormatToolUseID appends the tool use ID to a progress message in brackets.
-// Example: "→ Reading file: agent.go" + "toolu_abc123" → "→ Reading file: agent.go [toolu_abc123]"
+// FormatToolUseID appends the tool use ID to the first line of a progress
+// message in brackets. For multi-line display messages (e.g. run_bash with
+// newlines), the ID is always placed on line 1 so that extractToolUseMetadata
+// can find it reliably during session reconstruction.
+//
+// Example (single-line):  "→ Reading file: agent.go" → "→ Reading file: agent.go [toolu_abc123]"
+// Example (multi-line):   "→ Running bash: cd /tmp\nls" → "→ Running bash: cd /tmp [toolu_abc123]\nls"
 func FormatToolUseID(progressMsg, toolUseID string) string {
 	if toolUseID == "" {
 		return progressMsg
+	}
+	if idx := strings.Index(progressMsg, "\n"); idx >= 0 {
+		// Multi-line: insert ID at end of first line, keep remaining lines after
+		return fmt.Sprintf("%s [%s]%s", progressMsg[:idx], toolUseID, progressMsg[idx:])
 	}
 	return fmt.Sprintf("%s [%s]", progressMsg, toolUseID)
 }
