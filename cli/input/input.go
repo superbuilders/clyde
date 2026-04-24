@@ -36,6 +36,22 @@ type Reader struct {
 	// When true, the next line accepted by readline should be accumulated
 	// as a multiline continuation instead of returned.
 	ctrlJPressed atomic.Bool
+
+	// browsingHistory tracks whether the user is currently cycling through
+	// history entries with up/down arrows. Once history browsing starts
+	// (from an empty, non-multiline prompt), further up/down presses
+	// continue navigating history until any other key is pressed.
+	browsingHistory atomic.Bool
+
+	// inMultiline mirrors the multiline field for safe cross-goroutine
+	// access from FuncFilterInputRune (runs in readline's ioloop goroutine).
+	inMultiline atomic.Bool
+
+	// currentBufLen tracks the current readline buffer length, updated by
+	// the Listener callback after each keystroke in the ioloop goroutine.
+	// Used by FuncFilterInputRune to decide whether to allow history
+	// navigation (only when the buffer is empty).
+	currentBufLen atomic.Int32
 }
 
 // Config holds configuration for the input Reader.
@@ -86,20 +102,50 @@ func New(cfg Config) (*Reader, error) {
 		InterruptPrompt:        "^C",
 		EOFPrompt:              "exit",
 
-		// FuncFilterInputRune intercepts Ctrl+J (0x0A / LF) before readline
-		// processes it. Normally readline treats Ctrl+J and Enter identically
-		// (both accept the line). We translate Ctrl+J to Enter but set a flag
-		// so ReadLine() knows to accumulate instead of return.
+		// Listener tracks the current buffer length after each keystroke.
+		// This runs in readline's ioloop goroutine. We store the length
+		// atomically so FuncFilterInputRune can check whether the buffer
+		// is empty when deciding to allow/suppress history navigation.
+		Listener: readline.FuncListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
+			reader.currentBufLen.Store(int32(len(line)))
+			return line, pos, false // observe only, don't modify
+		}),
+
+		// FuncFilterInputRune intercepts special keys before readline
+		// processes them. Runs in readline's ioloop goroutine.
 		//
-		// Alt+Enter (ESC+CR) is handled at a lower level by metaCRReader,
-		// which translates the ESC+CR byte sequence to LF (0x0A) before
-		// readline's terminal layer sees it. This makes Alt+Enter arrive here
-		// as Ctrl+J, receiving the same treatment.
+		// 1. Ctrl+J (0x0A / LF) — translate to Enter but flag for multiline
+		//    accumulation. Alt+Enter (ESC+CR) arrives as Ctrl+J via the
+		//    metaCRReader translation layer.
+		//
+		// 2. Up/Down arrows (CharPrev/CharNext) — suppress history navigation
+		//    unless the prompt is empty and we're not in multiline mode.
+		//    Once history browsing starts, further up/down presses continue
+		//    navigating until any other key is pressed.
 		FuncFilterInputRune: func(r rune) (rune, bool) {
 			if r == readline.CharCtrlJ { // 0x0A / LF
 				reader.ctrlJPressed.Store(true)
+				reader.browsingHistory.Store(false)
 				return readline.CharEnter, true // Accept line; ReadLine will accumulate
 			}
+
+			// Up/Down arrow: only allow history navigation when appropriate
+			if r == readline.CharPrev || r == readline.CharNext {
+				// Already cycling through history — continue
+				if reader.browsingHistory.Load() {
+					return r, true
+				}
+				// Empty buffer + not in multiline mode — start history browsing
+				if !reader.inMultiline.Load() && reader.currentBufLen.Load() == 0 {
+					reader.browsingHistory.Store(true)
+					return r, true
+				}
+				// Buffer has content or in multiline mode — suppress
+				return r, false
+			}
+
+			// Any other key exits history browsing mode
+			reader.browsingHistory.Store(false)
 			return r, true
 		},
 	}
@@ -155,6 +201,8 @@ const ContinuationPrompt = "  > "
 // History saves the complete assembled block as a single entry.
 func (r *Reader) ReadLine() (string, error) {
 	r.multiline = false
+	r.inMultiline.Store(false)
+	r.browsingHistory.Store(false)
 	r.lines = nil
 
 	for {
@@ -164,6 +212,7 @@ func (r *Reader) ReadLine() (string, error) {
 			// discard the partial input
 			if r.multiline {
 				r.multiline = false
+				r.inMultiline.Store(false)
 				r.lines = nil
 				r.rl.SetPrompt(r.rl.Config.Prompt)
 			}
@@ -177,6 +226,7 @@ func (r *Reader) ReadLine() (string, error) {
 			r.ctrlJPressed.Store(false)
 			r.lines = append(r.lines, line)
 			r.multiline = true
+			r.inMultiline.Store(true)
 			r.rl.SetPrompt(ContinuationPrompt)
 			continue
 		}
@@ -187,6 +237,7 @@ func (r *Reader) ReadLine() (string, error) {
 			line = line[:len(line)-1] // strip the backslash
 			r.lines = append(r.lines, line)
 			r.multiline = true
+			r.inMultiline.Store(true)
 			r.rl.SetPrompt(ContinuationPrompt)
 			continue
 		}
@@ -196,6 +247,7 @@ func (r *Reader) ReadLine() (string, error) {
 			r.lines = append(r.lines, line)
 			result := strings.Join(r.lines, "\n")
 			r.multiline = false
+			r.inMultiline.Store(false)
 			r.lines = nil
 			r.rl.SetPrompt(r.rl.Config.Prompt)
 

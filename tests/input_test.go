@@ -1050,6 +1050,206 @@ func TestReadLine_CtrlC_DuringCtrlJMultiline(t *testing.T) {
 }
 
 // ============================================================================
+// Up/Down arrow history suppression tests
+// ============================================================================
+
+// upArrow is the terminal escape sequence for the Up arrow key (ESC [ A).
+const upArrow = "\x1b[A"
+
+// downArrow is the terminal escape sequence for the Down arrow key (ESC [ B).
+const downArrow = "\x1b[B"
+
+// TestReadLine_UpArrow_EmptyPrompt_RecallsHistory tests that up arrow on an
+// empty prompt recalls the previous history entry (existing behavior preserved).
+func TestReadLine_UpArrow_EmptyPrompt_RecallsHistory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// First input: "previous" + Enter (creates history)
+	// Second input: Up arrow + Enter (should recall "previous")
+	testInput := "previous\r" + upArrow + "\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	// First: type "previous"
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() 1 error = %v", err)
+	}
+	if got != "previous" {
+		t.Errorf("ReadLine() 1 = %q, want %q", got, "previous")
+	}
+
+	// Second: up arrow should recall "previous" from history
+	got, err = r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() 2 error = %v", err)
+	}
+	if got != "previous" {
+		t.Errorf("ReadLine() 2 = %q, want %q (history recall)", got, "previous")
+	}
+}
+
+// TestReadLine_UpArrow_NonEmptyPrompt_Suppressed tests that up arrow is
+// suppressed (does nothing) when the user has typed content on a single line.
+func TestReadLine_UpArrow_NonEmptyPrompt_Suppressed(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// First: "old entry" + Enter (creates history)
+	// Second: "current" + Up arrow + Enter
+	// Up arrow should be suppressed; result should be "current" (not "old entry")
+	testInput := "old entry\r" + "current" + upArrow + "\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	// First: create history
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() 1 error = %v", err)
+	}
+	if got != "old entry" {
+		t.Errorf("ReadLine() 1 = %q, want %q", got, "old entry")
+	}
+
+	// Second: "current" + up (suppressed) + Enter → should get "current"
+	got, err = r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() 2 error = %v", err)
+	}
+	if got != "current" {
+		t.Errorf("ReadLine() 2 = %q, want %q (up arrow should be suppressed)", got, "current")
+	}
+}
+
+// TestReadLine_UpArrow_MultilineMode_Suppressed tests that up arrow is
+// suppressed when in multiline accumulation mode (even on an empty continuation line).
+func TestReadLine_UpArrow_MultilineMode_Suppressed(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// First: "history entry" + Enter (creates history)
+	// Second: "first line" + Ctrl+J + Up arrow + "second" + Enter
+	// The up arrow on the continuation line should be suppressed.
+	testInput := "history entry\r" + "first line\n" + upArrow + "second\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	// First: create history
+	_, err = r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() 1 error = %v", err)
+	}
+
+	// Second: multiline with up arrow suppressed on continuation line
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() 2 error = %v", err)
+	}
+	want := "first line\nsecond"
+	if got != want {
+		t.Errorf("ReadLine() 2 = %q, want %q (up arrow should be suppressed in multiline)", got, want)
+	}
+}
+
+// TestReadLine_UpArrow_ContinuedHistoryBrowsing tests that once history
+// browsing starts (from empty prompt), further up/down presses continue
+// navigating history.
+func TestReadLine_UpArrow_ContinuedHistoryBrowsing(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create two history entries, then browse with up arrow twice
+	// First: "entry1" + Enter
+	// Second: "entry2" + Enter
+	// Third: Up (→ "entry2") + Up (→ "entry1") + Enter
+	testInput := "entry1\r" + "entry2\r" + upArrow + upArrow + "\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	_, _ = r.ReadLine() // "entry1"
+	_, _ = r.ReadLine() // "entry2"
+
+	// Third: up twice should recall "entry1" (the oldest)
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() 3 error = %v", err)
+	}
+	if got != "entry1" {
+		t.Errorf("ReadLine() 3 = %q, want %q (double up should browse to oldest)", got, "entry1")
+	}
+}
+
+// TestReadLine_DownArrow_NonEmptyPrompt_Suppressed tests that down arrow
+// is suppressed when the buffer has content (same as up arrow behavior).
+func TestReadLine_DownArrow_NonEmptyPrompt_Suppressed(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// First: "old" + Enter (creates history)
+	// Second: "typed" + Down arrow + Enter
+	// Down arrow should be suppressed; result should be "typed"
+	testInput := "old\r" + "typed" + downArrow + "\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	_, _ = r.ReadLine() // "old"
+
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() 2 error = %v", err)
+	}
+	if got != "typed" {
+		t.Errorf("ReadLine() 2 = %q, want %q (down arrow should be suppressed)", got, "typed")
+	}
+}
+
+// ============================================================================
 // metaCRReader unit tests
 // ============================================================================
 
