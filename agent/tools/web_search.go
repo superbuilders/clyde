@@ -71,15 +71,44 @@ func executeWebSearch(input map[string]interface{}, apiClient *providers.Client,
 	req.Header.Set("X-Subscription-Token", apiKey)
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("search request failed: %w\n\nCheck your internet connection", err)
-	}
-	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read search response: %w", err)
+	// Retry loop for rate limiting (429). Brave's free tier has a per-second
+	// rate limit (~1 qps) that's easily hit when multiple searches fire in
+	// parallel.  We retry up to 3 times with exponential backoff before giving up.
+	maxRetries := 3
+	var resp *http.Response
+	var body []byte
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Re-create request since the body of the previous one was consumed
+			req, err = http.NewRequest("GET", apiURL, nil)
+			if err != nil {
+				return "", fmt.Errorf("failed to create search request: %w", err)
+			}
+			req.Header.Set("Accept", "application/json")
+			req.Header.Set("X-Subscription-Token", apiKey)
+		}
+
+		resp, err = client.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("search request failed: %w\n\nCheck your internet connection", err)
+		}
+
+		body, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return "", fmt.Errorf("failed to read search response: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusTooManyRequests {
+			break
+		}
+
+		// 429 — wait and retry
+		if attempt < maxRetries {
+			backoff := time.Duration(1<<uint(attempt)) * time.Second // 1s, 2s, 4s
+			time.Sleep(backoff)
+		}
 	}
 
 	// Handle HTTP errors
@@ -88,7 +117,7 @@ func executeWebSearch(input map[string]interface{}, apiClient *providers.Client,
 		case 401:
 			return "", fmt.Errorf("search API authentication failed (401)\n\nYour API key may be invalid:\n  - Verify BRAVE_SEARCH_API_KEY in .env file\n  - Try generating a new key at https://brave.com/search/api/")
 		case 429:
-			return "", fmt.Errorf("search rate limit exceeded (429)\n\nYou've reached your monthly search limit (2000 free searches).\n  - Wait until next month for limit reset\n  - Or upgrade at https://brave.com/search/api/ ($5/mo for 20K searches)")
+			return "", fmt.Errorf("search rate limit exceeded (429) after %d retries\n\nThis may be a per-second rate limit (concurrent searches) or a monthly quota issue.\n  - Free tier: ~1,000 searches/month, ~1 query/second\n  - Check usage at https://api-dashboard.search.brave.com/\n  - Or upgrade at https://brave.com/search/api/", maxRetries)
 		case 400:
 			return "", fmt.Errorf("invalid search query (400): %s\n\nCheck your query syntax", string(body))
 		default:
