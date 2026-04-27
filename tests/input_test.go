@@ -1140,15 +1140,19 @@ func TestReadLine_UpArrow_NonEmptyPrompt_Suppressed(t *testing.T) {
 	}
 }
 
-// TestReadLine_UpArrow_MultilineMode_Suppressed tests that up arrow is
-// suppressed when in multiline accumulation mode (even on an empty continuation line).
-func TestReadLine_UpArrow_MultilineMode_Suppressed(t *testing.T) {
+// TestReadLine_UpArrow_MultilineMode_NavigatesToPreviousLine tests that up arrow
+// navigates to the previous line when in multiline accumulation mode.
+func TestReadLine_UpArrow_MultilineMode_NavigatesToPreviousLine(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// First: "history entry" + Enter (creates history)
-	// Second: "first line" + Ctrl+J + Up arrow + "second" + Enter
-	// The up arrow on the continuation line should be suppressed.
-	testInput := "history entry\r" + "first line\n" + upArrow + "second\r"
+	// First: "history entry" + Enter (creates history — should NOT be recalled)
+	// Second: "first line" + Ctrl+J + Up arrow (navigates back to "first line")
+	//         + Ctrl+U (clear line) + "edited" + Enter
+	// Up arrow triggers Listener to swap buffer → "first line" appears in buffer.
+	// Ctrl+U clears the buffer, then "edited" is typed. Enter submits.
+	// Since no content was saved for the new line (it was empty when we went up),
+	// the only line is "edited".
+	testInput := "history entry\r" + "first line\n" + upArrow + "\x15" + "edited\r"
 
 	r, err := input.New(input.Config{
 		Prompt:      "> ",
@@ -1168,14 +1172,14 @@ func TestReadLine_UpArrow_MultilineMode_Suppressed(t *testing.T) {
 		t.Fatalf("ReadLine() 1 error = %v", err)
 	}
 
-	// Second: multiline with up arrow suppressed on continuation line
+	// Second: multiline with up arrow navigation
 	got, err := r.ReadLine()
 	if err != nil {
 		t.Fatalf("ReadLine() 2 error = %v", err)
 	}
-	want := "first line\nsecond"
+	want := "edited"
 	if got != want {
-		t.Errorf("ReadLine() 2 = %q, want %q (up arrow should be suppressed in multiline)", got, want)
+		t.Errorf("ReadLine() 2 = %q, want %q (up arrow should navigate to previous line)", got, want)
 	}
 }
 
@@ -1246,6 +1250,101 @@ func TestReadLine_DownArrow_NonEmptyPrompt_Suppressed(t *testing.T) {
 	}
 	if got != "typed" {
 		t.Errorf("ReadLine() 2 = %q, want %q (down arrow should be suppressed)", got, "typed")
+	}
+}
+
+// TestReadLine_UpDown_MultilineNavigation tests navigating up then down
+// through a multiline block, editing a line and submitting.
+func TestReadLine_UpDown_MultilineNavigation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// "line1" + Ctrl+J + "line2" + Ctrl+J + "line3"
+	// Then: Up (→ line2 via Listener swap) + Up (→ line1) + Down (→ line2)
+	// + Ctrl+U (clear) + "line2 edited" + Enter (submit all)
+	testInput := "line1\nline2\nline3" + upArrow + upArrow + downArrow + "\x15" + "line2 edited\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+	// line3 saved, up to line2, up to line1, down to line2, clear+type "line2 edited", submit
+	want := "line1\nline2 edited\nline3"
+	if got != want {
+		t.Errorf("ReadLine() = %q, want %q", got, want)
+	}
+}
+
+// TestReadLine_UpArrow_EditFirstLine tests navigating up to the first line,
+// editing it, and submitting.
+func TestReadLine_UpArrow_EditFirstLine(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// "original" + Ctrl+J + Up (→ original via Listener) + Ctrl+U (clear) + "replaced" + Enter
+	testInput := "original\n" + upArrow + "\x15" + "replaced\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+	want := "replaced"
+	if got != want {
+		t.Errorf("ReadLine() = %q, want %q", got, want)
+	}
+}
+
+// TestReadLine_DownArrow_ToNewLine tests navigating down past the last
+// saved line to a fresh new line.
+func TestReadLine_DownArrow_ToNewLine(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// "line1" + Ctrl+J + "line2" + Up (→ line1) + Down (→ line2) + Down (→ new) + "line3" + Enter
+	// The up arrow from "line2" saves "line2", goes to "line1".
+	// First down goes back to "line2". Second down goes to new empty line.
+	testInput := "line1\nline2" + upArrow + downArrow + downArrow + "line3\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+	want := "line1\nline2\nline3"
+	if got != want {
+		t.Errorf("ReadLine() = %q, want %q", got, want)
 	}
 }
 

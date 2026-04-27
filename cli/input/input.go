@@ -6,7 +6,8 @@
 //     1. Backslash continuation: end a line with \ to continue
 //     2. Ctrl+J: inserts a newline without submitting (universal, works everywhere)
 //     3. Alt+Enter: inserts a newline without submitting (requires Meta key)
-//   - Session-level history recall (up/down arrows)
+//   - Session-level history recall (up/down arrows, only on empty prompt)
+//   - Up/down navigation between lines in multiline mode
 //   - No artificial length limit
 //   - Dynamic prompt updates (git branch, context %, You: label)
 //
@@ -29,6 +30,7 @@ type Reader struct {
 	rl          *readline.Instance
 	multiline   bool     // true if we're in multiline accumulation mode
 	lines       []string // accumulated lines in multiline mode
+	lineIdx     int      // current editing position within lines (len(lines) = new line)
 	historyPath string   // path to the history file
 
 	// ctrlJPressed is set atomically by FuncFilterInputRune (runs in
@@ -52,6 +54,19 @@ type Reader struct {
 	// Used by FuncFilterInputRune to decide whether to allow history
 	// navigation (only when the buffer is empty).
 	currentBufLen atomic.Int32
+
+	// lineIdxAtomic and numLinesAtomic mirror lineIdx and len(lines) for
+	// safe access from FuncFilterInputRune in the ioloop goroutine.
+	// Used for boundary checks when navigating between multiline lines.
+	lineIdxAtomic  atomic.Int32
+	numLinesAtomic atomic.Int32
+
+	// navigateDir is set by FuncFilterInputRune and consumed by the
+	// Listener callback, both running in readline's ioloop goroutine.
+	// -1 = navigate up, +1 = navigate down, 0 = no navigation pending.
+	// The Listener replaces the readline buffer with the target line's
+	// content when this is non-zero.
+	navigateDir atomic.Int32
 }
 
 // Config holds configuration for the input Reader.
@@ -77,7 +92,8 @@ type Config struct {
 //   - Ctrl+J to insert a newline (multiline input) — works on all terminals
 //   - Alt+Enter to insert a newline (multiline input) — requires Meta key
 //   - Backslash at end of line to continue on next line
-//   - Up/down arrow keys to recall previous inputs
+//   - Up/down arrow keys to recall previous inputs (empty prompt only)
+//   - Up/down arrow keys to navigate lines (in multiline mode)
 //   - Ctrl+C to cancel current input (returns empty)
 //   - Ctrl+D to signal EOF (exit)
 func New(cfg Config) (*Reader, error) {
@@ -102,13 +118,57 @@ func New(cfg Config) (*Reader, error) {
 		InterruptPrompt:        "^C",
 		EOFPrompt:              "exit",
 
-		// Listener tracks the current buffer length after each keystroke.
-		// This runs in readline's ioloop goroutine. We store the length
-		// atomically so FuncFilterInputRune can check whether the buffer
-		// is empty when deciding to allow/suppress history navigation.
+		// Listener runs in readline's ioloop goroutine after each keystroke.
+		// It has two responsibilities:
+		//   1. Track the current buffer length (for history navigation gating)
+		//   2. Handle multiline navigation: when navigateDir is set by
+		//      FuncFilterInputRune, save the current line, update lineIdx,
+		//      and replace the buffer with the target line's content.
+		//
+		// Navigation is handled here (in the ioloop) rather than in ReadLine
+		// (main goroutine) to avoid a race condition: the terminal continues
+		// reading stdin after processing arrow keys, so by the time the main
+		// goroutine could call ReadlineWithDefault, subsequent characters may
+		// have already been consumed. The Listener replaces the buffer in-place
+		// within the same ioloop iteration, before any subsequent characters
+		// are processed.
 		Listener: readline.FuncListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
 			reader.currentBufLen.Store(int32(len(line)))
-			return line, pos, false // observe only, don't modify
+
+			dir := reader.navigateDir.Load()
+			if dir != 0 {
+				reader.navigateDir.Store(0)
+
+				// Save current line at lineIdx
+				curLine := string(line)
+				if reader.lineIdx >= len(reader.lines) {
+					// At "new line" position — only save if non-empty
+					// to avoid phantom empty lines
+					if curLine != "" {
+						reader.lines = append(reader.lines, curLine)
+					}
+				} else {
+					reader.lines[reader.lineIdx] = curLine
+				}
+
+				// Navigate
+				reader.lineIdx += int(dir)
+
+				// Load target line content
+				var newBuf []rune
+				if reader.lineIdx < len(reader.lines) {
+					newBuf = []rune(reader.lines[reader.lineIdx])
+				}
+				// else: new-line position, empty buffer
+
+				// Update atomics for FuncFilterInputRune boundary checks
+				reader.lineIdxAtomic.Store(int32(reader.lineIdx))
+				reader.numLinesAtomic.Store(int32(len(reader.lines)))
+
+				return newBuf, len(newBuf), true // replace buffer
+			}
+
+			return line, pos, false // observe only
 		}),
 
 		// FuncFilterInputRune intercepts special keys before readline
@@ -118,10 +178,10 @@ func New(cfg Config) (*Reader, error) {
 		//    accumulation. Alt+Enter (ESC+CR) arrives as Ctrl+J via the
 		//    metaCRReader translation layer.
 		//
-		// 2. Up/Down arrows (CharPrev/CharNext) — suppress history navigation
-		//    unless the prompt is empty and we're not in multiline mode.
-		//    Once history browsing starts, further up/down presses continue
-		//    navigating until any other key is pressed.
+		// 2. Up/Down arrows (CharPrev/CharNext) — in multiline mode, set
+		//    navigateDir and translate to CharBell (a no-op that triggers the
+		//    Listener to perform the buffer swap). In non-multiline mode,
+		//    allow history browsing only from an empty prompt.
 		FuncFilterInputRune: func(r rune) (rune, bool) {
 			if r == readline.CharCtrlJ { // 0x0A / LF
 				reader.ctrlJPressed.Store(true)
@@ -129,19 +189,34 @@ func New(cfg Config) (*Reader, error) {
 				return readline.CharEnter, true // Accept line; ReadLine will accumulate
 			}
 
-			// Up/Down arrow: only allow history navigation when appropriate
+			// Up/Down arrow handling
 			if r == readline.CharPrev || r == readline.CharNext {
-				// Already cycling through history — continue
+				// --- Multiline mode: navigate between lines ---
+				if reader.inMultiline.Load() {
+					if r == readline.CharPrev {
+						if reader.lineIdxAtomic.Load() > 0 {
+							reader.navigateDir.Store(-1)
+							return readline.CharBell, true // trigger Listener
+						}
+						return r, false // already at first line
+					}
+					// CharNext (down)
+					if reader.lineIdxAtomic.Load() < reader.numLinesAtomic.Load() {
+						reader.navigateDir.Store(1)
+						return readline.CharBell, true // trigger Listener
+					}
+					return r, false // already at/past last line
+				}
+
+				// --- Non-multiline: history browsing ---
 				if reader.browsingHistory.Load() {
 					return r, true
 				}
-				// Empty buffer + not in multiline mode — start history browsing
-				if !reader.inMultiline.Load() && reader.currentBufLen.Load() == 0 {
+				if reader.currentBufLen.Load() == 0 {
 					reader.browsingHistory.Store(true)
 					return r, true
 				}
-				// Buffer has content or in multiline mode — suppress
-				return r, false
+				return r, false // buffer has content, suppress
 			}
 
 			// Any other key exits history browsing mode
@@ -199,11 +274,19 @@ const ContinuationPrompt = "  > "
 // Plain Enter submits the accumulated multiline input (or single-line input).
 // Ctrl+C during multiline mode discards the partial input.
 // History saves the complete assembled block as a single entry.
+//
+// In multiline mode, up/down arrow keys navigate between accumulated lines
+// (handled by the Listener in the ioloop goroutine — the buffer is swapped
+// in-place without returning to ReadLine). The user can edit any previously
+// entered line; pressing Enter from any position submits the entire block.
 func (r *Reader) ReadLine() (string, error) {
 	r.multiline = false
 	r.inMultiline.Store(false)
 	r.browsingHistory.Store(false)
+	r.navigateDir.Store(0)
 	r.lines = nil
+	r.lineIdx = 0
+	r.syncAtomics()
 
 	for {
 		line, err := r.rl.Readline()
@@ -214,41 +297,54 @@ func (r *Reader) ReadLine() (string, error) {
 				r.multiline = false
 				r.inMultiline.Store(false)
 				r.lines = nil
+				r.lineIdx = 0
+				r.syncAtomics()
 				r.rl.SetPrompt(r.rl.Config.Prompt)
 			}
-			// Clear any stale ctrlJ flag from the interrupted line
+			// Clear any stale flags from the interrupted line
 			r.ctrlJPressed.Store(false)
+			r.navigateDir.Store(0)
 			return "", err
 		}
 
-		// Check for Ctrl+J / Alt+Enter (newline insertion)
+		// --- Ctrl+J / Alt+Enter: insert newline, continue multiline ---
 		if r.ctrlJPressed.Load() {
 			r.ctrlJPressed.Store(false)
-			r.lines = append(r.lines, line)
+			r.saveLineAlways(line)
+			// Move to a new line at the end of the block
+			r.lineIdx = len(r.lines)
 			r.multiline = true
 			r.inMultiline.Store(true)
+			r.syncAtomics()
 			r.rl.SetPrompt(ContinuationPrompt)
 			continue
 		}
 
-		// Check for line continuation (trailing backslash)
+		// --- Backslash continuation ---
 		if strings.HasSuffix(line, "\\") {
-			// Enter or continue multiline mode
 			line = line[:len(line)-1] // strip the backslash
-			r.lines = append(r.lines, line)
+			r.saveLineAlways(line)
+			// Move to a new line at the end of the block
+			r.lineIdx = len(r.lines)
 			r.multiline = true
 			r.inMultiline.Store(true)
+			r.syncAtomics()
 			r.rl.SetPrompt(ContinuationPrompt)
 			continue
 		}
 
+		// --- Enter: submit ---
 		if r.multiline {
-			// Final line of multiline input
-			r.lines = append(r.lines, line)
+			// Final submission of the multiline block.
+			// Save the current line at whatever position we're editing
+			// (the Listener may have changed lineIdx via navigation).
+			r.saveLineAlways(line)
 			result := strings.Join(r.lines, "\n")
 			r.multiline = false
 			r.inMultiline.Store(false)
 			r.lines = nil
+			r.lineIdx = 0
+			r.syncAtomics()
 			r.rl.SetPrompt(r.rl.Config.Prompt)
 
 			// Save assembled input to history
@@ -264,6 +360,25 @@ func (r *Reader) ReadLine() (string, error) {
 		}
 		return line, nil
 	}
+}
+
+// saveLineAlways saves line content at lineIdx, always appending when at end.
+// Used for Ctrl+J, backslash continuation, and Enter submission where the
+// line is intentional content (even if empty).
+func (r *Reader) saveLineAlways(line string) {
+	if r.lineIdx >= len(r.lines) {
+		r.lines = append(r.lines, line)
+	} else {
+		r.lines[r.lineIdx] = line
+	}
+}
+
+// syncAtomics updates the atomic mirrors of lineIdx and len(lines) so that
+// FuncFilterInputRune (running in the ioloop goroutine) can perform
+// boundary checks for multiline navigation.
+func (r *Reader) syncAtomics() {
+	r.lineIdxAtomic.Store(int32(r.lineIdx))
+	r.numLinesAtomic.Store(int32(len(r.lines)))
 }
 
 // SetPrompt updates the prompt string displayed to the user.
