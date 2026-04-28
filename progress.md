@@ -36,6 +36,34 @@ communication, no callback hacks.
 - History file format: one entry per line (newlines in multiline entries span
   multiple lines). Matches old readline format for backward compatibility.
 
+### CSI Parser Fix: Parameterized Escape Sequences (2025-07-20)
+
+**Problem:** Down/Delete keys "sometimes malfunction" — only when modifier keys
+(Shift/Ctrl/Alt) are held. When modifiers are held, terminals switch from simple
+sequences (`ESC[A`) to parameterized ones (`ESC[1;5A`). The initial `readCSI()`
+dispatched on the first byte after `ESC[`, which broke when that byte was a digit
+(parameter) instead of a letter (final byte).
+
+**Two failure modes:**
+- Parameterized arrows (`ESC[1;5A`): `1` didn't match any case → arrow silently
+  swallowed (key lost)
+- Parameterized tilde sequences (`ESC[3;2~`): `3` matched Delete, consumed `;`
+  instead of `~` → `2~` leaked as typed characters into the input
+
+**Fix (`cli/input/keys.go`):** Rewrote `readCSI()` to follow the standard CSI
+format: consume all parameter bytes (digits + semicolons) first, then dispatch on
+the final byte. Also added tilde-terminated mappings for Home (`ESC[1~`, `ESC[7~`),
+End (`ESC[4~`, `ESC[8~`), and Delete (`ESC[3~`) used by rxvt and older xterm modes.
+Modifier values in parameters are consumed but ignored (Ctrl+Up = Up), matching
+typical shell behavior.
+
+**Tests:** Added 4 regression tests: `TestReadLine_ParameterizedUpArrow`,
+`TestReadLine_ParameterizedDownArrow`, `TestReadLine_ParameterizedDelete`,
+`TestReadLine_TildeHomeEnd`.
+
+**LOC summary:** 984 lines total across 8 files (was 957 pre-fix), 45 test
+functions in 1475 lines (was 41 in 1342 pre-fix).
+
 ## Bugs Fixed
 
 ### Brave Search 429s on concurrent requests (2025-07-17)
