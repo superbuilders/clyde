@@ -598,7 +598,7 @@ func TestNew_NoHistoryFile(t *testing.T) {
 		Stdout:      io.Discard,
 		Stderr:      io.Discard,
 	})
-	// readline should still work even if history file can't be created
+	// The reader should still work even if history file can't be created
 	if err != nil {
 		// This is acceptable — some systems may error on missing parent dirs
 		t.Logf("input.New() returned error (acceptable): %v", err)
@@ -1148,10 +1148,6 @@ func TestReadLine_UpArrow_MultilineMode_NavigatesToPreviousLine(t *testing.T) {
 	// First: "history entry" + Enter (creates history — should NOT be recalled)
 	// Second: "first line" + Ctrl+J + Up arrow (navigates back to "first line")
 	//         + Ctrl+U (clear line) + "edited" + Enter
-	// Up arrow triggers Listener to swap buffer → "first line" appears in buffer.
-	// Ctrl+U clears the buffer, then "edited" is typed. Enter submits.
-	// Since no content was saved for the new line (it was empty when we went up),
-	// the only line is "edited".
 	testInput := "history entry\r" + "first line\n" + upArrow + "\x15" + "edited\r"
 
 	r, err := input.New(input.Config{
@@ -1259,7 +1255,7 @@ func TestReadLine_UpDown_MultilineNavigation(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// "line1" + Ctrl+J + "line2" + Ctrl+J + "line3"
-	// Then: Up (→ line2 via Listener swap) + Up (→ line1) + Down (→ line2)
+	// Then: Up (→ line2) + Up (→ line1) + Down (→ line2)
 	// + Ctrl+U (clear) + "line2 edited" + Enter (submit all)
 	testInput := "line1\nline2\nline3" + upArrow + upArrow + downArrow + "\x15" + "line2 edited\r"
 
@@ -1279,7 +1275,6 @@ func TestReadLine_UpDown_MultilineNavigation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadLine() error = %v", err)
 	}
-	// line3 saved, up to line2, up to line1, down to line2, clear+type "line2 edited", submit
 	want := "line1\nline2 edited\nline3"
 	if got != want {
 		t.Errorf("ReadLine() = %q, want %q", got, want)
@@ -1291,7 +1286,7 @@ func TestReadLine_UpDown_MultilineNavigation(t *testing.T) {
 func TestReadLine_UpArrow_EditFirstLine(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// "original" + Ctrl+J + Up (→ original via Listener) + Ctrl+U (clear) + "replaced" + Enter
+	// "original" + Ctrl+J + Up (→ original) + Ctrl+U (clear) + "replaced" + Enter
 	testInput := "original\n" + upArrow + "\x15" + "replaced\r"
 
 	r, err := input.New(input.Config{
@@ -1322,8 +1317,6 @@ func TestReadLine_DownArrow_ToNewLine(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// "line1" + Ctrl+J + "line2" + Up (→ line1) + Down (→ line2) + Down (→ new) + "line3" + Enter
-	// The up arrow from "line2" saves "line2", goes to "line1".
-	// First down goes back to "line2". Second down goes to new empty line.
 	testInput := "line1\nline2" + upArrow + downArrow + downArrow + "line3\r"
 
 	r, err := input.New(input.Config{
@@ -1345,139 +1338,5 @@ func TestReadLine_DownArrow_ToNewLine(t *testing.T) {
 	want := "line1\nline2\nline3"
 	if got != want {
 		t.Errorf("ReadLine() = %q, want %q", got, want)
-	}
-}
-
-// ============================================================================
-// metaCRReader unit tests
-// ============================================================================
-
-// TestMetaCRReader_PassThrough tests that normal bytes pass through unchanged.
-func TestMetaCRReader_PassThrough(t *testing.T) {
-	testInput := "hello\rworld\r"
-	m := input.NewMetaCRReader(newMockStdin(testInput))
-
-	var result []byte
-	buf := make([]byte, 1)
-	for {
-		n, err := m.Read(buf)
-		if n > 0 {
-			result = append(result, buf[0])
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	if string(result) != testInput {
-		t.Errorf("metaCRReader passthrough = %q, want %q", string(result),testInput)
-	}
-}
-
-// TestMetaCRReader_AltEnterTranslation tests that ESC+CR is translated to LF.
-func TestMetaCRReader_AltEnterTranslation(t *testing.T) {
-	// "hello" + ESC CR + "world" + CR
-	testInput := "hello\x1b\x0dworld\r"
-	m := input.NewMetaCRReader(newMockStdin(testInput))
-
-	var result []byte
-	buf := make([]byte, 1)
-	for {
-		n, err := m.Read(buf)
-		if n > 0 {
-			result = append(result, buf[0])
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	// ESC+CR should become LF (0x0A)
-	want := "hello\nworld\r"
-	if string(result) != want {
-		t.Errorf("metaCRReader Alt+Enter = %q, want %q", string(result), want)
-	}
-}
-
-// TestMetaCRReader_EscapeSequencePreserved tests that non-Alt+Enter escape
-// sequences (like ESC [ A for up arrow) pass through correctly.
-func TestMetaCRReader_EscapeSequencePreserved(t *testing.T) {
-	// ESC + '[' + 'A' = up arrow escape sequence
-	testInput := "\x1b[A"
-	m := input.NewMetaCRReader(newMockStdin(testInput))
-
-	var result []byte
-	buf := make([]byte, 1)
-	for {
-		n, err := m.Read(buf)
-		if n > 0 {
-			result = append(result, buf[0])
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	// ESC + non-CR should pass through: ESC, then '[', then 'A'
-	if string(result) != testInput {
-		t.Errorf("metaCRReader escape seq = %q, want %q", string(result),testInput)
-	}
-}
-
-// TestMetaCRReader_MultipleAltEnters tests multiple Alt+Enter sequences.
-func TestMetaCRReader_MultipleAltEnters(t *testing.T) {
-	// "a" + ESC CR + "b" + ESC CR + "c" + CR
-	testInput := "a\x1b\x0db\x1b\x0dc\r"
-	m := input.NewMetaCRReader(newMockStdin(testInput))
-
-	var result []byte
-	buf := make([]byte, 1)
-	for {
-		n, err := m.Read(buf)
-		if n > 0 {
-			result = append(result, buf[0])
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	want := "a\nb\nc\r"
-	if string(result) != want {
-		t.Errorf("metaCRReader multiple = %q, want %q", string(result), want)
-	}
-}
-
-// TestMetaCRReader_EscAtEOF tests that ESC at the end of input passes through.
-func TestMetaCRReader_EscAtEOF(t *testing.T) {
-	testInput := "hello\x1b"
-	m := input.NewMetaCRReader(newMockStdin(testInput))
-
-	var result []byte
-	buf := make([]byte, 1)
-	for {
-		n, err := m.Read(buf)
-		if n > 0 {
-			result = append(result, buf[0])
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	// ESC at EOF should be passed through
-	if string(result) != testInput {
-		t.Errorf("metaCRReader ESC at EOF = %q, want %q", string(result),testInput)
-	}
-}
-
-// TestMetaCRReader_Close tests that Close delegates to underlying reader.
-func TestMetaCRReader_Close(t *testing.T) {
-	mock := newMockStdin("test")
-	m := input.NewMetaCRReader(mock)
-
-	err := m.Close()
-	if err != nil {
-		t.Errorf("metaCRReader.Close() error = %v", err)
 	}
 }

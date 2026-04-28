@@ -1,5 +1,41 @@
 # Clyde Progress
 
+## Rewrites
+
+### Input Editor: Drop chzyer/readline, Own the Terminal (2026-04-27)
+
+**Motivation:** The `chzyer/readline` wrapper handled data capture (multiline
+accumulation, history) but failed at display: readline is a single-line editor
+and had no concept of a multi-line block. Navigating between lines caused visual
+duplication. The wrapper required 7 atomic variables and a Listener/FuncFilterInputRune
+dance across goroutines to intercept keystrokes. Unmaintained (last real commit 2022).
+
+**What changed:**
+- Replaced 1 file (517 lines wrapping readline) with 8 files (957 lines owning
+  the terminal): `input.go` (editor), `keys.go` (key reader), `buffer.go` (line
+  buffer), `history.go` (file-backed history), `display.go` (ANSI rendering),
+  `rawmode_bsd.go` / `rawmode_linux.go` / `rawmode_other.go` (platform raw mode).
+- Removed `chzyer/readline` dependency (was 5,425 lines of third-party Go).
+  `golang.org/x/sys` promoted from indirect to direct (already in tree via readline).
+- **Public API unchanged** — `cli/cli.go` required zero modifications.
+- All 40 input tests pass (removed 6 metaCRReader tests that tested a now-obsolete
+  internal; the key reader handles ESC+CR natively).
+
+**Architecture:** Single-goroutine event loop. `readKey()` decodes stdin bytes into
+logical key events (ESC sequences, UTF-8, Ctrl+X). The editor maintains a
+`[]lineBuffer` with a virtual "new line" position. Display redraws the entire block
+on each keystroke using ANSI escapes. No atomic variables, no goroutine
+communication, no callback hacks.
+
+**Design decisions:**
+- `activeIdx` can be `len(lines)` (virtual new-line position). `activeLine()`
+  materializes on demand; navigation away doesn't materialize empty lines. This
+  matches the old system's behavior where phantom empty trailing lines were avoided.
+- OPOST left enabled so `\n → \r\n` translation works for agent output between
+  ReadLine calls. Only ICANON/ECHO/ISIG disabled.
+- History file format: one entry per line (newlines in multiline entries span
+  multiple lines). Matches old readline format for backward compatibility.
+
 ## Bugs Fixed
 
 ### Brave Search 429s on concurrent requests (2025-07-17)
