@@ -64,6 +64,44 @@ typical shell behavior.
 **LOC summary:** 984 lines total across 8 files (was 957 pre-fix), 45 test
 functions in 1475 lines (was 41 in 1342 pre-fix).
 
+### Line-Wrap Duplication Fix in Display (2025-07-20)
+
+**Problem:** When typing a line long enough to wrap past the terminal width,
+every subsequent keystroke duplicated the entire editing block one row further
+down the screen. The display became increasingly garbled as typing continued.
+
+**Root cause:** `redraw()` tracked `cursorRow` as a *logical line index*
+(0 = first line, 1 = second line, etc.) but the terminal cursor moves in
+*physical rows*. When content wraps past `termWidth`, a single logical line
+occupies multiple physical rows. The code moved up by `cursorRow` rows to
+reach the top of the editing block, but the terminal cursor was further down
+than that — so each redraw started one physical row too low, printing a
+duplicate below the previous content.
+
+Three specific sub-bugs:
+1. `\033[2K` (clear line) cleared one physical row per logical line — didn't
+   clear extra rows created by wrapping.
+2. Cursor-up/down movement used logical line counts, not physical row counts.
+3. `cursorRow` was set to logical `activeRow`, not the physical row offset.
+
+**Fix (`cli/input/display.go`):**
+- `cursorRow` now tracks physical terminal rows, not logical line indices.
+- Added `physRowCount(width, termWidth)` helper: `ceil(width / termWidth)`,
+  returning 1 for content that fits one row (and for non-TTY where termWidth=0).
+- Replaced per-line `\033[2K` with a single `\033[J` (clear to end of screen)
+  after moving to the top of the block — correctly cleans up any number of
+  wrapped physical rows.
+- Cursor positioning after redraw computes the physical row within the active
+  line based on `cursorOffset / termWidth`.
+- `finishDisplay()` updated to use physical row counts for cursor-down movement.
+- Deferred-wrap edge case (cursor at exact `termWidth` boundary) handled:
+  cursor stays at end of previous physical row rather than jumping to column 0
+  of a phantom next row.
+
+**Non-TTY backward compatibility:** When `termWidth=0` (testing/non-interactive),
+`physRowCount` returns 1 for every line, so all physical-row math degenerates to
+the old logical-line math. Existing tests unaffected.
+
 ## Bugs Fixed
 
 ### Brave Search 429s on concurrent requests (2025-07-17)
