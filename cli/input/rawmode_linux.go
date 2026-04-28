@@ -4,6 +4,12 @@ package input
 
 import "golang.org/x/sys/unix"
 
+// isTerminal returns true if fd refers to a terminal.
+func isTerminal(fd int) bool {
+	_, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	return err == nil
+}
+
 // setupRawMode puts the terminal into raw mode for direct keystroke reading.
 func setupRawMode(fd int) (restore func(), width int, err error) {
 	orig, err := unix.IoctlGetTermios(fd, unix.TCGETS)

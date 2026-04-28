@@ -47,11 +47,10 @@ type Reader struct {
 	history         *history
 
 	// Terminal state (only set when stdin is a real terminal)
-	isTTY           bool
-	fd              int
-	termWidth       int
-	restoreTerminal func()
-	cursorRow       int // row offset of cursor from top of editing block (0 = first line)
+	isTTY     bool
+	fd        int
+	termWidth int
+	cursorRow int // row offset of cursor from top of editing block (0 = first line)
 }
 
 // Config holds configuration for the input Reader.
@@ -102,17 +101,16 @@ func New(cfg Config) (*Reader, error) {
 		// Testing / non-interactive mode
 		r.stdin = cfg.Stdin
 	} else {
-		// Real REPL mode — enter raw terminal mode
+		// Real REPL mode — verify stdin is a terminal.
+		// Raw mode is entered/exited per ReadLine() call so that
+		// Ctrl+C generates SIGINT while the agent is running.
 		r.stdin = os.Stdin
 		fd := int(os.Stdin.Fd())
-		restore, width, err := setupRawMode(fd)
-		if err != nil {
-			return nil, fmt.Errorf("input: %w", err)
+		if !isTerminal(fd) {
+			return nil, fmt.Errorf("input: stdin is not a terminal")
 		}
 		r.isTTY = true
 		r.fd = fd
-		r.termWidth = width
-		r.restoreTerminal = restore
 	}
 
 	r.history = newHistory(historyFile, 1000)
@@ -143,6 +141,18 @@ func (r *Reader) ReadLine() (string, error) {
 	r.activeIdx = 0
 	r.cursorRow = 0
 	r.history.Reset()
+
+	// Enter raw mode for the duration of this ReadLine call.
+	// Between calls the terminal is in cooked mode so that
+	// Ctrl+C generates SIGINT during agent execution.
+	if r.isTTY {
+		restore, width, err := setupRawMode(r.fd)
+		if err != nil {
+			return "", fmt.Errorf("input: %w", err)
+		}
+		r.termWidth = width
+		defer restore()
+	}
 
 	r.redraw()
 
@@ -346,11 +356,9 @@ func (r *Reader) SetPrompt(prompt string) {
 	r.prompt = prompt
 }
 
-// Close restores the terminal to its original state. Must be called on exit.
+// Close cleans up resources. Raw mode is scoped to each ReadLine() call,
+// so there is no terminal state to restore here.
 func (r *Reader) Close() error {
-	if r.restoreTerminal != nil {
-		r.restoreTerminal()
-	}
 	return nil
 }
 
