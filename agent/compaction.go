@@ -97,8 +97,17 @@ func (a *Agent) Compact() error {
 			len(a.history), keepCount))
 	}
 
-	// Step 4: Run multi-phase compaction workflow
-	summary, err := a.runCompactionWorkflow(firstUserMsg, toSummarize, keptMessages)
+	// Step 4: Run multi-phase compaction workflow.
+	// In multi-turn conversations the most recent user message captures the
+	// current objective, which may differ from the original mission.
+	lastUserMsg, lastUserIdx := a.findLastUserMessage()
+	// Only treat as a distinct current objective if it's a different message
+	// than the first user message (i.e., a multi-turn conversation).
+	var currentObjective string
+	if lastUserIdx > firstUserIdx {
+		currentObjective = messageText(lastUserMsg)
+	}
+	summary, err := a.runCompactionWorkflow(firstUserMsg, currentObjective, toSummarize, keptMessages)
 	if err != nil {
 		return fmt.Errorf("compaction failed: %w", err)
 	}
@@ -164,6 +173,28 @@ func (a *Agent) findFirstUserMessage() (providers.Message, int) {
 	return providers.Message{}, -1
 }
 
+// FindLastUserMessage locates the most recent user text message in history.
+// In multi-turn conversations this captures the current objective, which may
+// differ from the original mission. Exported for testing.
+func (a *Agent) FindLastUserMessage() (providers.Message, int) {
+	return a.findLastUserMessage()
+}
+
+// findLastUserMessage locates the most recent user text message in history.
+func (a *Agent) findLastUserMessage() (providers.Message, int) {
+	for i := len(a.history) - 1; i >= 0; i-- {
+		msg := a.history[i]
+		if msg.Role == "user" {
+			if text, ok := msg.Content.(string); ok {
+				if !strings.HasPrefix(text, "[System:") {
+					return msg, i
+				}
+			}
+		}
+	}
+	return providers.Message{}, -1
+}
+
 // RecentKeepCount returns the number of recent messages to keep after compaction.
 // Exported for testing; used internally by Compact().
 func (a *Agent) RecentKeepCount() int {
@@ -201,6 +232,7 @@ func (a *Agent) recentKeepCount() int {
 //  5. Handoff drafting
 func (a *Agent) runCompactionWorkflow(
 	firstUserMsg providers.Message,
+	currentObjective string,
 	toSummarize []providers.Message,
 	keptMessages []providers.Message,
 ) (string, error) {
@@ -221,13 +253,20 @@ func (a *Agent) runCompactionWorkflow(
 
 	// Phase 1: Goal/constraint extraction
 	a.emitCompactionProgress("🗜️ Compaction phase 1/5: extracting goals & constraints...")
+	phase1System := "You are analyzing a conversation to extract the original goal and any constraints.\n" +
+		"Return a concise Markdown section with:\n" +
+		"- **Goal**: The core task/mission in 1-3 sentences\n" +
+		"- **Constraints**: Any requirements, limitations, or acceptance criteria mentioned\n" +
+		"Be precise. Quote exact requirements when possible."
+	if currentObjective != "" {
+		phase1System += "\n\nIMPORTANT: A 'Current Objective' section is provided in addition to the Original Mission. " +
+			"This is the user's most recent request and represents what they are CURRENTLY working on. " +
+			"Your Goal section should capture BOTH the original mission AND the current objective, " +
+			"clearly distinguishing between them. The current objective takes priority for determining next steps."
+	}
 	goals, err := a.compactionPhaseCall(
-		"You are analyzing a conversation to extract the original goal and any constraints.\n"+
-			"Return a concise Markdown section with:\n"+
-			"- **Goal**: The core task/mission in 1-3 sentences\n"+
-			"- **Constraints**: Any requirements, limitations, or acceptance criteria mentioned\n"+
-			"Be precise. Quote exact requirements when possible.",
-		missionText, convText, recentCtx,
+		phase1System,
+		missionText, currentObjective, convText, recentCtx,
 	)
 	if err != nil {
 		return "", fmt.Errorf("phase 1 (goals) failed: %w", err)
@@ -243,7 +282,7 @@ func (a *Agent) runCompactionWorkflow(
 			"- **Alternatives Rejected**: Notable alternatives that were considered but not chosen\n"+
 			"Focus on decisions that a future reader would need to understand to continue the work.\n"+
 			"Preserve specific names, paths, and technical details.",
-		missionText, convText, recentCtx,
+		missionText, currentObjective, convText, recentCtx,
 	)
 	if err != nil {
 		return "", fmt.Errorf("phase 2 (decisions) failed: %w", err)
@@ -260,7 +299,7 @@ func (a *Agent) runCompactionWorkflow(
 			"- **Current State**: What state the code is in right now\n"+
 			"Do NOT include raw diffs. Reference file paths precisely.\n\n"+
 			"Git state information:\n"+gitState,
-		missionText, convText, recentCtx,
+		missionText, currentObjective, convText, recentCtx,
 	)
 	if err != nil {
 		return "", fmt.Errorf("phase 3 (file-state) failed: %w", err)
@@ -275,7 +314,7 @@ func (a *Agent) runCompactionWorkflow(
 			"- **Significant Outputs**: Key results from tool executions (test results, errors encountered, search findings)\n"+
 			"- **Errors Resolved**: Any errors that were encountered and how they were fixed\n"+
 			"Skip routine outputs (simple file reads, directory listings). Focus on outputs that informed decisions.",
-		missionText, convText, recentCtx,
+		missionText, currentObjective, convText, recentCtx,
 	)
 	if err != nil {
 		return "", fmt.Errorf("phase 4 (tool-results) failed: %w", err)
@@ -303,20 +342,27 @@ func (a *Agent) runCompactionWorkflow(
 			"Call out any open threads, pending actions, or decisions that bridge between your summary and those recent messages."
 	}
 
+	phase5System := "You are writing a developer handoff document from phase outputs.\n" +
+		"Combine the provided phase outputs into a single, well-structured Markdown document with these sections:\n\n" +
+		"## Goal\n(from phase 1)\n\n" +
+		"## Constraints\n(from phase 1)\n\n" +
+		"## Progress\n(synthesize from all phases — what has been accomplished)\n\n" +
+		"## Key Decisions\n(from phase 2)\n\n" +
+		"## Current State\n(from phase 3 — include git SHA/branch if available)\n\n" +
+		"## Next Steps\n(infer from the conversation what should happen next)\n\n" +
+		"## Critical Context\n(anything a future reader must know — errors, gotchas, important details)\n\n" +
+		"Be concise but thorough. This document replaces the conversation history, so nothing important should be lost.\n" +
+		"Do NOT include the original user message — it is preserved separately."
+	if currentObjective != "" {
+		phase5System += "\n\nIMPORTANT: The conversation has multiple user requests. A 'Current Objective' is provided " +
+			"representing the user's most recent request. Your Goal section MUST clearly state this current objective " +
+			"as the active focus. The Next Steps section should be derived from the current objective, not the original mission."
+	}
+	phase5System += bridgeInstruction
+
 	handoff, err := a.compactionPhaseCall(
-		"You are writing a developer handoff document from phase outputs.\n"+
-			"Combine the provided phase outputs into a single, well-structured Markdown document with these sections:\n\n"+
-			"## Goal\n(from phase 1)\n\n"+
-			"## Constraints\n(from phase 1)\n\n"+
-			"## Progress\n(synthesize from all phases — what has been accomplished)\n\n"+
-			"## Key Decisions\n(from phase 2)\n\n"+
-			"## Current State\n(from phase 3 — include git SHA/branch if available)\n\n"+
-			"## Next Steps\n(infer from the conversation what should happen next)\n\n"+
-			"## Critical Context\n(anything a future reader must know — errors, gotchas, important details)\n\n"+
-			"Be concise but thorough. This document replaces the conversation history, so nothing important should be lost.\n"+
-			"Do NOT include the original user message — it is preserved separately."+
-			bridgeInstruction,
-		missionText, assemblyInput, "",
+		phase5System,
+		missionText, currentObjective, assemblyInput, "",
 	)
 	if err != nil {
 		return "", fmt.Errorf("phase 5 (handoff) failed: %w", err)
@@ -337,15 +383,24 @@ func (a *Agent) runCompactionWorkflow(
 // compactionPhaseCall makes a single LLM call for one compaction phase.
 // It builds a user message from the mission, conversation, and optional recent context,
 // then sends it with the given system prompt.
+//
+// currentObjective is non-empty in multi-turn conversations and contains the
+// most recent user request. Phases should prefer this over the original mission
+// when determining what the user is currently working on.
 func (a *Agent) compactionPhaseCall(
 	systemPrompt string,
 	missionText string,
+	currentObjective string,
 	conversationOrInput string,
 	recentContext string,
 ) (string, error) {
 	var content strings.Builder
 	content.WriteString("## Original Mission\n\n")
 	content.WriteString(missionText)
+	if currentObjective != "" {
+		content.WriteString("\n\n## Current Objective (Most Recent User Request)\n\n")
+		content.WriteString(currentObjective)
+	}
 	content.WriteString("\n\n## Conversation\n\n")
 	content.WriteString(conversationOrInput)
 	if recentContext != "" {
