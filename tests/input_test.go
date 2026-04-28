@@ -1340,3 +1340,136 @@ func TestReadLine_DownArrow_ToNewLine(t *testing.T) {
 		t.Errorf("ReadLine() = %q, want %q", got, want)
 	}
 }
+
+// ============================================================================
+// CSI parameter handling tests — ensures parameterized escape sequences
+// (e.g. from modifier keys or certain terminal modes) are parsed correctly
+// without leaving garbage bytes in the buffer.
+// ============================================================================
+
+// Parameterized arrow keys: ESC [ 1 ; <mod> A/B/C/D
+// Sent by many terminals when Shift/Ctrl/Alt is held with an arrow key.
+const modifiedUpArrow = "\x1b[1;5A"   // Ctrl+Up
+const modifiedDownArrow = "\x1b[1;5B" // Ctrl+Down
+
+// TestReadLine_ParameterizedUpArrow tests that CSI sequences with parameters
+// (e.g. ESC [ 1 ; 5 A for Ctrl+Up) are correctly parsed as arrow keys
+// instead of being swallowed or leaking garbage characters.
+func TestReadLine_ParameterizedUpArrow(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// "entry" + Enter → history, then Ctrl+Up (parameterized) + Enter
+	testInput := "entry\r" + modifiedUpArrow + "\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	_, _ = r.ReadLine() // "entry" — saved to history
+
+	// Ctrl+Up should recall history (same as plain Up on empty prompt)
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+	if got != "entry" {
+		t.Errorf("ReadLine() = %q, want %q (parameterized Up should work like Up)", got, "entry")
+	}
+}
+
+// TestReadLine_ParameterizedDownArrow tests that Ctrl+Down doesn't leak
+// garbage characters into the input.
+func TestReadLine_ParameterizedDownArrow(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Type "hello" + Ctrl+Down (should be ignored, not insert garbage) + Enter
+	testInput := "hello" + modifiedDownArrow + "\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+	if got != "hello" {
+		t.Errorf("ReadLine() = %q, want %q (modified Down should not insert garbage)", got, "hello")
+	}
+}
+
+// TestReadLine_ParameterizedDelete tests that ESC [ 3 ; 2 ~ (Shift+Delete)
+// is parsed as Delete without leaking ";2~" into the buffer.
+func TestReadLine_ParameterizedDelete(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Type "abc" + Home + Shift+Delete (ESC [ 3 ; 2 ~) + Enter
+	// Shift+Delete should delete 'a', leaving "bc"
+	testInput := "abc\x01\x1b[3;2~\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+	if got != "bc" {
+		t.Errorf("ReadLine() = %q, want %q (parameterized Delete should work)", got, "bc")
+	}
+}
+
+// TestReadLine_TildeHomeEnd tests ESC [ 1 ~ (Home) and ESC [ 4 ~ (End)
+// tilde-terminated sequences used by some terminals.
+func TestReadLine_TildeHomeEnd(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Type "abc" + ESC[1~ (Home) + ESC[3~ (Delete) + Enter
+	// Home moves to start, Delete removes 'a' → "bc"
+	testInput := "abc\x1b[1~\x1b[3~\r"
+
+	r, err := input.New(input.Config{
+		Prompt:      "> ",
+		HistoryFile: filepath.Join(tmpDir, "history"),
+		Stdin:       newMockStdin(testInput),
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("input.New() error = %v", err)
+	}
+	defer r.Close()
+
+	got, err := r.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v", err)
+	}
+	if got != "bc" {
+		t.Errorf("ReadLine() = %q, want %q (tilde Home+Delete should work)", got, "bc")
+	}
+}

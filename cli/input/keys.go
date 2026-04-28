@@ -110,12 +110,34 @@ func readEscSequence(r io.Reader) (key, error) {
 }
 
 // readCSI decodes a CSI (ESC [) sequence.
+//
+// CSI sequences have the general form: ESC [ <params> <final>
+// where <params> is zero or more digits and semicolons (0x30–0x3B),
+// and <final> is a byte in 0x40–0x7E that identifies the key/action.
+//
+// Examples:
+//
+//	ESC [ A          — Up arrow (no params)
+//	ESC [ 1 ; 5 A   — Ctrl+Up (params "1;5")
+//	ESC [ 3 ~       — Delete (param "3", final "~")
+//	ESC [ 3 ; 2 ~   — Shift+Delete (params "3;2", final "~")
+//	ESC [ 1 ; 2 H   — Shift+Home
 func readCSI(r io.Reader) (key, error) {
+	// Read parameter bytes and the final byte.
+	var params []byte
 	b, err := readByte(r)
 	if err != nil {
 		return key{}, nil
 	}
+	for (b >= '0' && b <= '9') || b == ';' {
+		params = append(params, b)
+		b, err = readByte(r)
+		if err != nil {
+			return key{}, nil
+		}
+	}
 
+	// b is now the final byte that identifies the key.
 	switch b {
 	case 'A':
 		return key{special: keyUp}, nil
@@ -129,18 +151,23 @@ func readCSI(r io.Reader) (key, error) {
 		return key{special: keyHome}, nil
 	case 'F':
 		return key{special: keyEnd}, nil
-	case '3': // ESC [ 3 ~ = Delete
-		readByte(r) // consume trailing '~'
-		return key{special: keyDelete}, nil
-	default:
-		// Unknown CSI — consume until a letter terminates
-		for (b >= '0' && b <= '9') || b == ';' {
-			b, err = readByte(r)
-			if err != nil {
-				return key{}, nil
+	case '~':
+		// Tilde-terminated: ESC [ <n> ~
+		// The first param digit identifies the key.
+		if len(params) > 0 {
+			switch params[0] {
+			case '1', '7':
+				return key{special: keyHome}, nil
+			case '3':
+				return key{special: keyDelete}, nil
+			case '4', '8':
+				return key{special: keyEnd}, nil
+			// 2=Insert, 5=PageUp, 6=PageDown — unhandled, ignored
 			}
 		}
 		return key{}, nil
+	default:
+		return key{}, nil // unknown CSI sequence
 	}
 }
 
