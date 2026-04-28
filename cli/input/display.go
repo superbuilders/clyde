@@ -5,9 +5,15 @@ import "fmt"
 // redraw repaints the entire multi-line editing block.
 //
 // Strategy:
-//  1. Move cursor to the top of the block (up displayedRows rows).
+//  1. Move cursor to the top of the block (up cursorRow rows).
 //  2. For each line: clear row, print prompt + content.
 //  3. Position cursor at (activeIdx, cursor column).
+//
+// cursorRow tracks where the terminal cursor actually is (row offset from
+// the top of the block). This is essential: after redraw the cursor is
+// moved to activeRow, NOT the bottom of the block, so the next redraw
+// must move up by cursorRow (the actual position), not by the total
+// block height.
 func (r *Reader) redraw() {
 	if !r.isTTY {
 		return
@@ -16,8 +22,8 @@ func (r *Reader) redraw() {
 	var buf []byte
 
 	// Move to the first line of our block
-	if r.displayedRows > 0 {
-		buf = append(buf, fmt.Sprintf("\033[%dA", r.displayedRows)...)
+	if r.cursorRow > 0 {
+		buf = append(buf, fmt.Sprintf("\033[%dA", r.cursorRow)...)
 	}
 	buf = append(buf, '\r')
 
@@ -70,7 +76,7 @@ func (r *Reader) redraw() {
 		buf = append(buf, fmt.Sprintf("\033[%dC", col)...)
 	}
 
-	r.displayedRows = n - 1
+	r.cursorRow = activeRow
 	r.stdout.Write(buf)
 }
 
@@ -84,13 +90,12 @@ func (r *Reader) finishDisplay() {
 	if r.activeIdx >= n {
 		n = r.activeIdx + 1
 	}
-	activeRow := min(r.activeIdx, n-1)
-	rowsDown := (n - 1) - activeRow
+	rowsDown := (n - 1) - r.cursorRow
 	if rowsDown > 0 {
 		fmt.Fprintf(r.stdout, "\033[%dB", rowsDown)
 	}
 	fmt.Fprint(r.stdout, "\n")
-	r.displayedRows = 0
+	r.cursorRow = 0
 }
 
 // clearScreen clears the terminal and redraws the editing block.
@@ -99,7 +104,7 @@ func (r *Reader) clearScreen() {
 		return
 	}
 	fmt.Fprint(r.stdout, "\033[2J\033[H")
-	r.displayedRows = 0
+	r.cursorRow = 0
 	r.redraw()
 }
 

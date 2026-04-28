@@ -51,7 +51,7 @@ type Reader struct {
 	fd              int
 	termWidth       int
 	restoreTerminal func()
-	displayedRows   int // rows below the first row occupied by the editing block
+	cursorRow       int // row offset of cursor from top of editing block (0 = first line)
 }
 
 // Config holds configuration for the input Reader.
@@ -141,7 +141,7 @@ func (r *Reader) ReadLine() (string, error) {
 	r.browsingHistory = false
 	r.lines = []lineBuffer{{}}
 	r.activeIdx = 0
-	r.displayedRows = 0
+	r.cursorRow = 0
 	r.history.Reset()
 
 	r.redraw()
