@@ -23,7 +23,6 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
 	"github.com/this-is-alpha-iota/clyde/agent/session"
 	"github.com/this-is-alpha-iota/clyde/cli/input"
 	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
@@ -757,7 +756,7 @@ func runResumeMode(target string, level loglevel.Level, noThink bool) {
 
 // runREPLModeWithSession runs the REPL with a pre-existing session and history.
 // Used by both resume mode and (potentially) regular REPL mode.
-func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config, sess *session.Session, history []providers.Message) {
+func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config, sess *session.Session, history []agent.Message) {
 	// Create spinner for animated progress display (REPL mode only).
 	sp := spinner.New()
 

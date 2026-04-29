@@ -1639,28 +1639,28 @@ Additionally, `agent/config` is dead code within the agent — nothing under `ag
 **Acceptance Criteria**:
 
 *Type re-exports in `agent/agent.go`:*
-- [ ] `type Message = providers.Message` is exported from the `agent` package.
-- [ ] `type ContentBlock = providers.ContentBlock` is exported (or whichever types appear in `Message` fields that callers need to construct).
-- [ ] The existing `type Usage = providers.Usage` remains.
-- [ ] `cli/cli.go` is updated: `import "…/agent/providers"` is removed; all `providers.Message` references become `agent.Message`.
-- [ ] `go vet ./...` passes with no unused imports.
+- [x] `type Message = providers.Message` is exported from the `agent` package.
+- [x] `type ContentBlock = providers.ContentBlock` is exported (or whichever types appear in `Message` fields that callers need to construct).
+- [x] The existing `type Usage = providers.Usage` remains.
+- [x] `cli/cli.go` is updated: `import "…/agent/providers"` is removed; all `providers.Message` references become `agent.Message`.
+- [x] `go vet ./...` passes with no unused imports.
 
 *Session re-exports or facade:*
-- [ ] The `agent` package exposes session functionality sufficient for the CLI's needs. This can be either:
+- [x] The `agent` package exposes session functionality sufficient for the CLI's needs. This can be either:
   - (a) Type aliases and wrapper functions in `agent/` that delegate to `agent/session`, or
   - (b) A documented decision that `agent/session` is a supported public subpackage (acceptable for MONO-1; can revisit in a follow-up).
-- [ ] If option (b): the decision is documented in `progress.md` with rationale.
-- [ ] If option (a): `cli/cli.go` no longer imports `agent/session` directly.
+- [x] If option (b): the decision is documented in `progress.md` with rationale.
+- [x] If option (a): `cli/cli.go` no longer imports `agent/session` directly.
 
 *Dead code cleanup:*
-- [ ] `agent/config/` is evaluated: if nothing under `agent/` imports it, either delete it (move test helpers inline) or mark it clearly as a test utility.
-- [ ] No new dead code introduced.
+- [x] `agent/config/` is evaluated: if nothing under `agent/` imports it, either delete it (move test helpers inline) or mark it clearly as a test utility.
+- [x] No new dead code introduced.
 
 *Tests (zero test file changes):*
-- [ ] `go build ./...` succeeds.
-- [ ] `cd tests && go test ./...` — all tests pass, same count as before, **no test files modified**.
-- [ ] Test files continue to import `agent/providers` directly — this is intentional and correct (they test internals; the type alias means `providers.Message` and `agent.Message` are interchangeable at compile time).
-- [ ] A manual check confirms that a hypothetical external consumer can use the agent with only `import "…/agent"` for the core workflow (create agent, handle message, get history).
+- [x] `go build ./...` succeeds.
+- [x] `cd tests && go test ./...` — all tests pass, same count as before, **no test files modified**.
+- [x] Test files continue to import `agent/providers` directly — this is intentional and correct (they test internals; the type alias means `providers.Message` and `agent.Message` are interchangeable at compile time).
+- [x] A manual check confirms that a hypothetical external consumer can use the agent with only `import "…/agent"` for the core workflow (create agent, handle message, get history).
 
 ---
 

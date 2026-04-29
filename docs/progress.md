@@ -986,9 +986,88 @@ Created demo showing all error message improvements:
 **Philosophy**:
 Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
 
-## Current Status (2026-04-09)
+## Current Status (2026-04-10)
 
-**Latest Update**: CMP-3: Intelligent Tool-Result Summarization ✅
+**Latest Update**: MONO-1: Seal the Agent's Public API Surface ✅
+
+### MONO-1: Seal the Agent's Public API Surface (Completed 2026-04-10)
+
+**Story**: Make all types needed by callers accessible via `import "…/agent"` alone, so consumers never have to import agent subpackages for core workflows.
+
+**Depends on**: ARCH-3 (agent encapsulation — done)
+
+**What Changed**:
+
+| Change | Details |
+|--------|---------|
+| `agent/agent.go` | Added `type Message = providers.Message` and `type ContentBlock = providers.ContentBlock` re-exports |
+| `cli/cli.go` | Removed `import "…/agent/providers"`; changed `[]providers.Message` → `[]agent.Message` |
+| `agent/config/config.go` | Added doc comment marking it as a test utility (not imported by agent code) |
+
+**Type re-exports added to `agent/agent.go`**:
+```go
+// Message is re-exported from providers so that external consumers
+// can work with conversation history using only import "…/agent".
+type Message = providers.Message
+
+// ContentBlock is re-exported from providers so that external consumers
+// can inspect or construct message content blocks using only import "…/agent".
+type ContentBlock = providers.ContentBlock
+
+// Usage is re-exported (already existed).
+type Usage = providers.Usage
+```
+
+**CLI import cleanup** — `cli/cli.go` before vs after:
+```go
+// Before:
+import (
+    "github.com/this-is-alpha-iota/clyde/agent"
+    "github.com/this-is-alpha-iota/clyde/agent/providers"
+    "github.com/this-is-alpha-iota/clyde/agent/session"
+)
+func runREPLModeWithSession(..., history []providers.Message) {
+
+// After:
+import (
+    "github.com/this-is-alpha-iota/clyde/agent"
+    "github.com/this-is-alpha-iota/clyde/agent/session"
+)
+func runREPLModeWithSession(..., history []agent.Message) {
+```
+
+**Design decision — `agent/session` is a supported public subpackage**:
+Option (b) from the acceptance criteria was chosen. `agent/session` is used in 52 places across `cli/cli.go` for session creation, writing, format helpers, resume, and listing. Re-exporting all of this through the agent package would create a massive, unwieldy facade. Instead, `agent/session` is documented as a supported public subpackage that consumers may import directly. This is acceptable because:
+- Session functionality is a coherent, self-contained concern
+- The types it exposes (`Session`, `TypeUser`, `FormatToolUseID`, etc.) are session-specific, not core agent types
+- External consumers who need sessions will import `agent/session`; those who don't won't
+- This can be revisited in a follow-up if the session API needs to be hidden
+
+**Dead code cleanup — `agent/config/`**:
+Nothing under `agent/` imports `agent/config/`. The CLI has its own `loadAgentConfig()` that does the same thing. Only test files (`tests/compaction_test.go`, `tests/config_test.go`, `tests/test_helpers.go`) import it. Rather than deleting it and touching test files (which the story explicitly forbids), a doc comment was added marking it as a test utility / legacy package.
+
+**External consumer verification**:
+A throwaway Go module was created outside the repo that imports only `"…/agent"` and successfully:
+- Creates `agent.Config{}` and calls `agent.New(cfg)`
+- Uses `agent.Message`, `agent.ContentBlock`, `agent.Usage` types
+- Calls `SetHistory([]agent.Message{...})`, `GetHistory()`, `LastUsage()`
+- Compiles and runs successfully
+
+**Verification**:
+- `go build -o /dev/null .` succeeds
+- `go vet ./...` clean
+- `cli/cli.go` has zero `agent/providers` imports (only the doc comment mentions it)
+- All unit tests pass — **zero test files modified**
+- External consumer smoke test passes
+
+**Files changed**: 3 (no test files)
+- `agent/agent.go` — Added Message and ContentBlock type aliases (+370 bytes)
+- `cli/cli.go` — Removed providers import, updated function signature (-59 bytes)
+- `agent/config/config.go` — Added test-utility doc comment (+440 bytes)
+
+---
+
+### CMP-3: Intelligent Tool-Result Summarization (Completed 2026-04-09)
 
 ### CMP-3: Intelligent Tool-Result Summarization (Completed 2026-04-09)
 

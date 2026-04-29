@@ -1,3 +1,10 @@
+// Package config provides configuration loading from dotenv-style files.
+//
+// NOTE: This package is not imported by any code under agent/. The agent
+// receives its configuration via agent.Config (populated by the CLI layer).
+// This package exists as a convenience for tests and for backwards
+// compatibility with consumers that used it before ARCH-3 encapsulated
+// the agent. New code should use agent.New(agent.Config{…}) instead.
 package config
 
 import (

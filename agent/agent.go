@@ -301,6 +301,14 @@ func (a *Agent) Close() error {
 	return nil
 }
 
+// Message is re-exported from providers so that external consumers
+// can work with conversation history using only import "…/agent".
+type Message = providers.Message
+
+// ContentBlock is re-exported from providers so that external consumers
+// can inspect or construct message content blocks using only import "…/agent".
+type ContentBlock = providers.ContentBlock
+
 // Usage is re-exported from providers for use by external consumers
 // who should not need to import agent/providers directly.
 type Usage = providers.Usage
