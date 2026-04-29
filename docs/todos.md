@@ -1734,7 +1734,7 @@ Without `go.work`, the root module would resolve the agent dependency from the G
 `go.work` tells the Go toolchain to use local directories as module sources. This is the Go 1.18+ standard for multi-module monorepo development. The file is committed to the repo (this is a private/internal monorepo pattern; for public libraries, `go.work` is sometimes `.gitignore`d, but since our CLI binary and agent live together, committing it is correct).
 
 **Acceptance Criteria**:
-- [ ] A `go.work` file exists at the repo root:
+- [x] A `go.work` file exists at the repo root:
   ```
   go 1.24
 
@@ -1743,14 +1743,14 @@ Without `go.work`, the root module would resolve the agent dependency from the G
       ./agent
   )
   ```
-- [ ] `go.work.sum` is committed alongside `go.work`.
-- [ ] From the repo root: `go build ./...` succeeds (builds both the CLI binary and all agent packages).
-- [ ] From the repo root: `go vet ./...` is clean across both modules.
-- [ ] From the repo root: `cd tests && go test ./...` — all tests pass (same count as before the split).
-- [ ] A change to a file in `agent/` (e.g., add a comment to `agent/agent.go`) is immediately reflected when building the CLI at the root — no `go get` or version bump needed.
-- [ ] `go work sync` runs without error.
-- [ ] The `clyde` binary still builds and runs correctly: `go build -o clyde . && ./clyde --help`.
-- [ ] CI pipeline (if any) is updated to use `go work` or explicitly build each module.
+- [x] `go.work.sum` is committed alongside `go.work`.
+- [x] From the repo root: `go build ./...` succeeds (builds both the CLI binary and all agent packages).
+- [x] From the repo root: `go vet ./...` is clean across both modules.
+- [x] From the repo root: `cd tests && go test ./...` — all tests pass (same count as before the split).
+- [x] A change to a file in `agent/` (e.g., add a comment to `agent/agent.go`) is immediately reflected when building the CLI at the root — no `go get` or version bump needed.
+- [x] `go work sync` runs without error.
+- [x] The `clyde` binary still builds and runs correctly: `go build -o clyde . && ./clyde --help`.
+- [x] CI pipeline (if any) is updated to use `go work` or explicitly build each module.
 
 ---
 

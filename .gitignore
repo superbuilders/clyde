@@ -12,7 +12,6 @@ audit-cli
 *.out
 
 # Go build cache
-go.work
 
 # Environment files
 .env

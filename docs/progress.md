@@ -988,7 +988,25 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-04-10)
 
-**Latest Update**: MONO-2: Extract agent/ as Independent Go Module ✅
+**Latest Update**: MONO-3: Add go.work for Workspace Development ✅
+
+### MONO-3: Add go.work for Workspace Development (Completed 2026-04-29)
+
+**Story**: Add `go.work` at repo root linking both modules so local changes to `agent/` are immediately reflected when building the CLI.
+
+**What Changed**:
+
+| File | Change |
+|------|--------|
+| `go.work` | **New** — workspace linking root (`.`) and `./agent` |
+
+**Key points**:
+- `go work init . ./agent` created the workspace
+- `go work sync` runs clean
+- No `go.work.sum` was generated (both modules' `go.sum` already fully resolve deps)
+- The `replace` directive in root `go.mod` is kept as a safety net for `GOWORK=off` scenarios
+- Local agent changes are immediately reflected in root builds (verified)
+- `go build`, `go vet`, all tests pass from workspace root
 
 ### MONO-2: Extract agent/ as Independent Go Module (Completed 2026-04-29)
 
