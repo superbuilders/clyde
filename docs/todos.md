@@ -1850,71 +1850,127 @@ Both modules can share version numbers (tag `v0.1.0` and `agent/v0.1.0` on the s
 
 ---
 
-### MONO-6: Private Consumer Repo Pattern
+### MONO-6: Migrate Private Audit Branch to Multi-Module Architecture
 
-**As a** team maintaining a proprietary auditing tool that builds on Clyde's agent,
-**I want** a documented pattern for a separate private repo that imports the public agent module,
-**so that** we get public agent updates via `go get` without maintaining a divergent fork, merge conflicts, or branch tracking.
+**As a** team maintaining the proprietary security auditer on the `security-auditer` branch,
+**I want** that branch updated to work with the new multi-module structure and consume the agent via `agent.New()`,
+**so that** merging from `master` continues to work cleanly and the audit tool benefits from the sealed agent API.
 
-**Depends on**: MONO-5 (tagged releases exist to pin against)
+**Depends on**: MONO-5 (tagged releases exist; the agent module's public API is stable)
 
 **Context & Analysis**:
 
-The original question posed two options: (A) a separate private repo that imports the public agent, or (B) a long-lived branch in the same repo with a third module. Option A is strongly preferred because:
-- No merge conflicts when public repo evolves.
-- No risk of accidentally pushing proprietary code to the public repo.
-- Standard Go dependency management (`go get` to update).
-- The private repo is a normal Go project — no workspace tricks, no branch juggling.
+The audit tool already exists as ~11,200 lines of Go across 28 files on the `security-auditer` branch (pushed to `private` remote at `clyde-private.git`). The current setup is a long-lived branch — not a separate repo — where `audit/` is an additional directory that only exists on that branch. Merges from `master` have historically been clean because `audit/` doesn't exist on `master`.
 
-The `audit/` directory currently contains a pre-built binary. This story documents the pattern for building it as a proper Go project in a separate repo.
+**Current state (on `private/security-auditer`)**:
+
+The audit code uses the **pre-ARCH-3 construction pattern**, reaching into agent subpackages directly:
+
+```go
+// audit/pipeline/runner.go — current
+import (
+    "github.com/this-is-alpha-iota/clyde/agent"
+    "github.com/this-is-alpha-iota/clyde/agent/prompts"
+    "github.com/this-is-alpha-iota/clyde/agent/providers"
+    _ "github.com/this-is-alpha-iota/clyde/agent/tools"
+)
+
+apiClient := providers.NewClient(r.apiKey, r.apiURL, r.modelID, r.maxTokens)
+return agent.NewAgent(apiClient, prompts.SystemPrompt, opts...)
+```
+
+```go
+// audit/main.go — current
+import "github.com/this-is-alpha-iota/clyde/agent/config"
+
+cfg, err := config.LoadFromFile(configPath)
+```
+
+This will break after MONO-1–3 because:
+1. `agent.NewAgent()` is the legacy constructor — `agent.New(agent.Config{})` is the current API.
+2. `providers.NewClient()` is an internal concern — the agent creates its own client now.
+3. `_ "clyde/agent/tools"` blank import for init() registration is no longer needed — `agent.New()` handles tool registration internally.
+4. `prompts.SystemPrompt` is no longer accessed directly — `agent.New()` loads it internally.
+5. `agent/config.LoadFromFile()` is dead code in the agent module — the CLI has its own config loader.
+
+The branch is also ~20 commits behind `master` (missing the input editor rewrite, CSI parser fix, line-wrap fix, compaction improvements, and now the MONO stories).
+
+**Target state**:
+
+```go
+// audit/pipeline/runner.go — after migration
+import "github.com/this-is-alpha-iota/clyde/agent"
+
+agentInstance := agent.New(agent.Config{
+    APIKey:    r.apiKey,
+    APIURL:    r.apiURL,
+    ModelID:   r.modelID,
+    MaxTokens: r.maxTokens,
+}, agent.WithProgressCallback(func(msg string, _ string) {
+    progressCallback(msg)
+}))
+```
+
+```go
+// audit/main.go — after migration
+// Config loading uses its own godotenv call or a local helper,
+// not agent/config.LoadFromFile().
+```
+
+No more imports of `agent/providers`, `agent/prompts`, `agent/tools`, or `agent/config`. The audit tool talks only to `agent.New()` and `agent.HandleMessage()` — the same sealed API that external consumers use.
+
+**Execution plan**:
+
+1. Checkout `security-auditer`, merge latest `master` (which now has MONO-1–5 changes).
+2. Resolve any merge conflicts (expected: none in `audit/` since it doesn't exist on `master`; possible conflicts in `go.mod`/`go.sum` and shared files that both branches touched).
+3. Update `audit/pipeline/runner.go`:
+   - Remove imports: `agent/providers`, `agent/prompts`, `agent/tools`.
+   - Replace `providers.NewClient()` + `agent.NewAgent()` with `agent.New(agent.Config{...})`.
+   - Remove the `_ "clyde/agent/tools"` blank import.
+4. Update `audit/main.go`:
+   - Replace `agent/config.LoadFromFile()` with a local config loader (or inline `godotenv` + `os.Getenv`, matching what `cli/cli.go` does).
+5. If the repo now has `go.work`, add `./audit` to the `use` directive (audit is part of the root module since it's under the same `go.mod`, OR give it its own `go.mod` — see decision below).
+6. Run `go build ./audit/...` and `cd audit && go test ./...` — all audit tests pass.
+7. Push to `private` remote.
+
+**Decision — audit module structure**:
+- [ ] Decide: does `audit/` stay as a package in the root module (same `go.mod` as the CLI), or get its own `go.mod` (third module)?
+  - **Same root module (recommended)**: simplest. `audit/` is just another directory in the root module, like `cli/`. The branch adds it; `master` doesn't have it. `go.work` doesn't need to change. Audit imports agent via the same `require` the CLI uses.
+  - **Own module**: more isolation, but adds complexity to the branch (three `go.mod` files, `go.work` needs updating). Only worth it if audit has dependencies the CLI shouldn't pull. Evaluate and document decision.
 
 **Acceptance Criteria**:
 
-*Template/documentation:*
-- [ ] A `docs/private-consumer-pattern.md` document describes:
-  - **Repo structure** for the private consumer:
-    ```
-    clyde-enterprise/
-    ├── go.mod              # requires github.com/this-is-alpha-iota/clyde/agent
-    ├── audit/
-    │   ├── audit.go        # imports "github.com/this-is-alpha-iota/clyde/agent"
-    │   └── ...
-    ├── cmd/
-    │   └── clyde-audit/
-    │       └── main.go     # binary entry point
-    └── README.md
-    ```
-  - **go.mod** example:
-    ```
-    module github.com/this-is-alpha-iota/clyde-enterprise
-    go 1.24
-    require github.com/this-is-alpha-iota/clyde/agent v0.1.0
-    ```
-  - **Update workflow**: `go get github.com/this-is-alpha-iota/clyde/agent@latest` → `go mod tidy` → test → commit.
-  - **Why not a fork**: explains the merge-conflict and branch-tracking problems; links to Go module documentation.
-  - **Accessing CLI too**: the private repo can also `require github.com/this-is-alpha-iota/clyde` if it needs CLI packages, but this is optional and independent.
-  - **Local development**: if actively developing both repos simultaneously, a `go.work` in the private repo can `use` a local checkout of the public repo:
-    ```
-    // clyde-enterprise/go.work (not committed)
-    go 1.24
-    use (
-        .
-        ../clyde/agent
-    )
-    ```
+*Merge & update:*
+- [ ] `security-auditer` branch is rebased on or merged with `master` at the MONO-5 tag (or later).
+- [ ] All merge conflicts are resolved cleanly.
+- [ ] `go.mod` / `go.sum` are consistent after merge (no stale deps, `go mod tidy` is clean).
 
-*Cleanup:*
-- [ ] The `audit/` directory in the public repo is evaluated: if it only contains a pre-built binary, remove it (binaries shouldn't be in git). If it contains Go source, document whether it should migrate to the private repo or stay.
-- [ ] `.gitignore` is updated if `audit/` is removed.
+*Audit code migrated to sealed API:*
+- [ ] `audit/pipeline/runner.go` imports only `"github.com/this-is-alpha-iota/clyde/agent"` (no `agent/providers`, `agent/prompts`, `agent/tools`).
+- [ ] `audit/main.go` does not import `agent/config` — config loading is self-contained.
+- [ ] `agent.New(agent.Config{...})` is the sole agent construction path in audit code.
+- [ ] No blank import `_ "clyde/agent/tools"` anywhere in `audit/`.
+- [ ] `agent.NewAgent()` is not called anywhere in `audit/` (legacy constructor removed from audit code).
 
-*Validation:*
-- [ ] The documented pattern is tested by creating a minimal private consumer repo (can be a temp directory) that:
-  1. `go mod init private-test`
-  2. `require`s the agent at the latest tagged version.
-  3. Writes a `main.go` that imports the agent, creates a config, calls `agent.New()`.
-  4. `go build .` succeeds.
-  5. `go get github.com/this-is-alpha-iota/clyde/agent@latest` updates cleanly.
-- [ ] The pattern is reviewed and approved by at least one other developer familiar with Go modules.
+*Build & test:*
+- [ ] `go build ./...` succeeds from the repo root on the `security-auditer` branch.
+- [ ] All existing audit tests pass (`cd audit && go test ./...` or `go test ./audit/...`).
+- [ ] All existing CLI/agent tests pass (`cd tests && go test ./...`).
+- [ ] No test files were deleted — same test count as before on both the audit and core sides.
+
+*Private remote:*
+- [ ] Updated branch is pushed to `private` remote (`git push private security-auditer`).
+- [ ] The branch can be cleanly merged with future `master` changes (verified by a dry-run: `git merge --no-commit --no-ff master` produces no conflicts in `audit/`).
+
+*Documentation:*
+- [ ] `progress.md` is updated with the migration details: what changed in audit code, why, and the module structure decision.
+- [ ] `docs/private-consumer-pattern.md` documents the branch-based private consumer pattern as actually practiced:
+  - How the `security-auditer` branch relates to `master`.
+  - The merge workflow: `git checkout security-auditer && git merge master`.
+  - Why `audit/` doesn't conflict (it only exists on the branch).
+  - How the audit tool consumes the agent's sealed API.
+  - The `private` remote setup (`git remote add private <url>`).
+  - Trade-offs vs. a separate repo (acknowledged: branch-based is simpler for a single team; separate repo is better if multiple teams or CI isolation is needed).
 
 ---
 
