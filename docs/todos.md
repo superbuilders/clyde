@@ -1706,16 +1706,16 @@ After the split:
 10. Commit.
 
 **Acceptance Criteria**:
-- [ ] `agent/go.mod` exists with module path `github.com/this-is-alpha-iota/clyde/agent`.
-- [ ] `agent/go.sum` exists and is committed.
-- [ ] `cd agent && go build ./...` succeeds with zero errors (agent compiles standalone).
-- [ ] `cd agent && go vet ./...` is clean.
-- [ ] `agent/go.mod` does NOT contain `golang.org/x/sys` (CLI-only dep).
-- [ ] `agent/go.mod` contains `html-to-markdown` and `godotenv` (agent deps).
-- [ ] Root `go.mod` contains `golang.org/x/sys` and `godotenv` and a `require` for the agent module.
-- [ ] Root `go.mod` does NOT contain `html-to-markdown` as a direct dependency (it's the agent's concern now).
-- [ ] No import paths changed in Go source files (Go's module resolution handles nested modules transparently).
-- [ ] `.gitignore` is NOT updated to exclude `agent/go.sum` (it must be committed per Go conventions).
+- [x] `agent/go.mod` exists with module path `github.com/this-is-alpha-iota/clyde/agent`.
+- [x] `agent/go.sum` exists and is committed.
+- [x] `cd agent && go build ./...` succeeds with zero errors (agent compiles standalone).
+- [x] `cd agent && go vet ./...` is clean.
+- [x] `agent/go.mod` does NOT contain `golang.org/x/sys` (CLI-only dep).
+- [x] `agent/go.mod` contains `html-to-markdown` and `godotenv` (agent deps).
+- [x] Root `go.mod` contains `golang.org/x/sys` and `godotenv` and a `require` for the agent module.
+- [x] Root `go.mod` does NOT contain `html-to-markdown` as a direct dependency (it's the agent's concern now).
+- [x] No import paths changed in Go source files (Go's module resolution handles nested modules transparently).
+- [x] `.gitignore` is NOT updated to exclude `agent/go.sum` (it must be committed per Go conventions).
 
 ---
 

@@ -988,9 +988,44 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-04-10)
 
-**Latest Update**: MONO-1: Seal the Agent's Public API Surface ✅
+**Latest Update**: MONO-2: Extract agent/ as Independent Go Module ✅
 
-### MONO-1: Seal the Agent's Public API Surface (Completed 2026-04-10)
+### MONO-2: Extract agent/ as Independent Go Module (Completed 2026-04-29)
+
+**Story**: Give `agent/` its own `go.mod` so `go get …/clyde/agent` pulls only agent deps — not CLI/TUI baggage.
+
+**What Changed**:
+
+| File | Change |
+|------|--------|
+| `agent/go.mod` | **New** — `module github.com/this-is-alpha-iota/clyde/agent` with `html-to-markdown` + `godotenv` |
+| `agent/go.sum` | **New** — transitive dep checksums (goquery, cascadia, x/net) |
+| `go.mod` | Added `require …/clyde/agent v0.0.0` + `replace => ./agent`; `html-to-markdown` demoted to indirect |
+| `go.sum` | Updated (fewer direct entries, agent owns its own) |
+
+**Dependency split**:
+```
+agent/go.mod (agent's own deps):
+  direct:   html-to-markdown v1.6.0, godotenv v1.5.1
+  indirect: goquery v1.9.2, cascadia v1.3.2, x/net v0.25.0
+  NOT present: x/sys ← this is the whole point
+
+go.mod (root/CLI deps):
+  direct:   godotenv v1.5.1, x/sys v0.33.0, clyde/agent v0.0.0
+  indirect: html-to-markdown (via agent), goquery, cascadia, x/net
+  replace:  clyde/agent => ./agent (local dev; go.work in MONO-3)
+```
+
+**Design decisions**:
+- **`replace` directive for local dev**: Root go.mod uses `replace github.com/…/clyde/agent => ./agent` so the root module can resolve the unpublished agent module locally. MONO-3 will add `go.work` as the standard workspace mechanism.
+- **Zero source file changes**: Go's module resolution transparently handles the nested module. Import path `github.com/…/clyde/agent/providers` resolves to the agent module's `providers` package — no rewriting needed.
+
+**Verification**:
+- `cd agent && go build ./... && go vet ./...` — clean
+- `go build -o /dev/null . && go vet ./...` — clean
+- All unit tests pass; same pre-existing integration failures (API keys, playwright snapshot)
+
+### MONO-1: Seal the Agent's Public API Surface (Completed 2026-04-29)
 
 **Story**: Make all types needed by callers accessible via `import "…/agent"` alone, so consumers never have to import agent subpackages for core workflows.
 
