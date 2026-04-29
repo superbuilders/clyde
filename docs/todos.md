@@ -1596,6 +1596,328 @@ Stories are dependency-ordered:
 
 ---
 
+## Monorepo Stories
+
+> **Goal**: Split the project from a single Go module into a multi-module monorepo so that (a) other teams can `go get` the agent library without pulling CLI/TUI dependencies, (b) the CLI remains installable via `go install`, and (c) a separate private repo can consume the public agent module cleanly.
+>
+> **Current state (post-ARCH-3)**: Single `go.mod` at root (`module github.com/this-is-alpha-iota/clyde`). The agent is architecturally self-contained under `agent/` with subpackages (`config/`, `mcp/`, `prompts/`, `providers/`, `session/`, `tools/`). The CLI is under `cli/` with its own subpackages. `main.go` is a 3-line wrapper calling `cli.Run()`. Tests are flat under `tests/` importing from both agent and cli.
+>
+> **Target state**: The `agent/` subtree becomes its own Go module (`github.com/this-is-alpha-iota/clyde/agent`) with its own `go.mod`. The root module remains the CLI binary. A `go.work` file at the root enables seamless local development. External consumers import only the agent module and get minimal dependencies (no TUI, no `x/sys`).
+>
+> **Design decision — root module is the CLI**: The root module (`github.com/this-is-alpha-iota/clyde`) stays as the CLI binary. This preserves `go install github.com/this-is-alpha-iota/clyde@latest` for the binary while `go get github.com/this-is-alpha-iota/clyde/agent@latest` fetches only the agent's `go.mod` with its minimal deps. No need for a third `cli/` module — the root IS the CLI module. The `tests/` directory stays in the root module and can import from both agent (via `go.work` locally, via published version in CI) and cli (same module).
+>
+> **Design decision — session stays as an agent subpackage**: `agent/session` is heavily used by the CLI for writing session files. In the multi-module world, it remains a public subpackage of the agent module. External consumers who import `agent/session` get a clean, focused dependency. Moving session to a third module would add complexity without clear benefit.
+
+Stories are dependency-ordered:
+
+---
+
+### MONO-1: Seal the Agent's Public API Surface
+
+**As a** developer preparing the agent for independent consumption,
+**I want** all types needed by callers to be accessible via `import "…/agent"` alone,
+**so that** consumers never have to import agent subpackages (`agent/providers`, `agent/session`) for core workflows — and those subpackages can eventually become `internal/` if desired.
+
+**Depends on**: ARCH-3 (agent encapsulation — done)
+
+**Context & Analysis**:
+
+Today `cli/cli.go` imports two agent subpackages it shouldn't need:
+
+1. **`agent/providers`** — for the `providers.Message` type used in one function signature:
+   ```go
+   func runREPLModeWithSession(..., history []providers.Message)
+   ```
+   The agent already re-exports `Usage` as `type Usage = providers.Usage` but doesn't do the same for `Message`.
+
+2. **`agent/session`** — used heavily (session writing, format helpers, resume, listing). This is a bigger surface: `session.New()`, `session.Session`, `session.WriteMessage()`, `session.FormatToolUseID()`, `session.StripANSI()`, `session.ReconstructHistory()`, `session.ListSessions()`, `session.FindMostRecentSession()`, `session.FindSessionByID()`, `session.CopyForResume()`, `session.SessionOwner()`, `session.GetUsername()`, `session.FindSessionsRoot()`, `session.Open()`, and the `TypeXxx` constants.
+
+Additionally, `agent/config` is dead code within the agent — nothing under `agent/` imports it (the CLI has its own `loadAgentConfig()`), yet tests import it. This should be cleaned up as part of sealing the surface.
+
+**Scope — CLI only, not tests**: This story updates only `cli/cli.go` imports. Test files (`tests/*.go`) currently reference `providers.Message`, `providers.ContentBlock`, `providers.NewClient`, etc. — 164 references across 10 files. These are **intentionally left unchanged**. Tests are internal consumers that test agent internals; importing `agent/providers` directly is correct for that purpose. The type aliases are Go type aliases (`type Message = providers.Message`), so `providers.Message` and `agent.Message` are the *same type* — code using either compiles and interoperates without casts. Migrating tests to `agent.Message` would be a 164-reference mechanical rename with zero behavioral benefit; it can be done later as a style cleanup if desired, but is explicitly not a goal of this story.
+
+**Acceptance Criteria**:
+
+*Type re-exports in `agent/agent.go`:*
+- [ ] `type Message = providers.Message` is exported from the `agent` package.
+- [ ] `type ContentBlock = providers.ContentBlock` is exported (or whichever types appear in `Message` fields that callers need to construct).
+- [ ] The existing `type Usage = providers.Usage` remains.
+- [ ] `cli/cli.go` is updated: `import "…/agent/providers"` is removed; all `providers.Message` references become `agent.Message`.
+- [ ] `go vet ./...` passes with no unused imports.
+
+*Session re-exports or facade:*
+- [ ] The `agent` package exposes session functionality sufficient for the CLI's needs. This can be either:
+  - (a) Type aliases and wrapper functions in `agent/` that delegate to `agent/session`, or
+  - (b) A documented decision that `agent/session` is a supported public subpackage (acceptable for MONO-1; can revisit in a follow-up).
+- [ ] If option (b): the decision is documented in `progress.md` with rationale.
+- [ ] If option (a): `cli/cli.go` no longer imports `agent/session` directly.
+
+*Dead code cleanup:*
+- [ ] `agent/config/` is evaluated: if nothing under `agent/` imports it, either delete it (move test helpers inline) or mark it clearly as a test utility.
+- [ ] No new dead code introduced.
+
+*Tests (zero test file changes):*
+- [ ] `go build ./...` succeeds.
+- [ ] `cd tests && go test ./...` — all tests pass, same count as before, **no test files modified**.
+- [ ] Test files continue to import `agent/providers` directly — this is intentional and correct (they test internals; the type alias means `providers.Message` and `agent.Message` are interchangeable at compile time).
+- [ ] A manual check confirms that a hypothetical external consumer can use the agent with only `import "…/agent"` for the core workflow (create agent, handle message, get history).
+
+---
+
+### MONO-2: Extract agent/ as an Independent Go Module
+
+**As a** developer splitting the monorepo,
+**I want** `agent/` to have its own `go.mod` declaring only its own dependencies,
+**so that** `go get github.com/this-is-alpha-iota/clyde/agent` pulls only agent-relevant code and deps — not the CLI, TUI, or `x/sys`.
+
+**Depends on**: MONO-1 (clean API surface — minimizes cross-module import churn)
+
+**Context & Analysis**:
+
+Today the single root `go.mod` has three direct deps:
+- `github.com/JohannesKaufmann/html-to-markdown` — used only by `agent/tools/browse.go`
+- `github.com/joho/godotenv` — used by `agent/config/config.go` AND `cli/cli.go`
+- `golang.org/x/sys` — used only by `cli/input/rawmode_{bsd,linux}.go`
+
+After the split:
+- `agent/go.mod` declares `html-to-markdown` and `godotenv` (and their transitives: `goquery`, `cascadia`, `x/net`).
+- Root `go.mod` declares `godotenv`, `x/sys`, and a `require` on the agent module.
+- `x/sys` does NOT appear in `agent/go.mod` — this is the whole point.
+
+**Execution plan (one atomic commit)**:
+
+1. `git add -A && git commit -m "checkpoint before module split"` (safety net)
+2. Create `agent/go.mod`:
+   ```
+   module github.com/this-is-alpha-iota/clyde/agent
+   go 1.24
+   require (
+       github.com/JohannesKaufmann/html-to-markdown v1.6.0
+       github.com/joho/godotenv v1.5.1
+   )
+   ```
+3. Run `cd agent && go mod tidy` to generate `agent/go.sum` and resolve transitives.
+4. Verify: `cd agent && go build ./...` succeeds (the agent module compiles standalone).
+5. Update root `go.mod`: add `require github.com/this-is-alpha-iota/clyde/agent v0.0.0` (pseudo-version, resolved by `go.work`).
+6. Update root `go.mod`: `html-to-markdown`, `goquery`, `cascadia`, `x/net` can be removed (they're agent's deps now); keep `godotenv` and `x/sys`.
+7. Run `go mod tidy` at root.
+8. Rewrite all import paths in root-module files (`cli/`, `tests/`, `main.go`): `"github.com/this-is-alpha-iota/clyde/agent"` stays the same (Go resolves it to the nested module); `"github.com/this-is-alpha-iota/clyde/agent/providers"` etc. also stay the same.
+9. Verify: `go build ./...` at root may fail until `go.work` is added (next story) — that's expected. At minimum, `cd agent && go build ./...` must pass.
+10. Commit.
+
+**Acceptance Criteria**:
+- [ ] `agent/go.mod` exists with module path `github.com/this-is-alpha-iota/clyde/agent`.
+- [ ] `agent/go.sum` exists and is committed.
+- [ ] `cd agent && go build ./...` succeeds with zero errors (agent compiles standalone).
+- [ ] `cd agent && go vet ./...` is clean.
+- [ ] `agent/go.mod` does NOT contain `golang.org/x/sys` (CLI-only dep).
+- [ ] `agent/go.mod` contains `html-to-markdown` and `godotenv` (agent deps).
+- [ ] Root `go.mod` contains `golang.org/x/sys` and `godotenv` and a `require` for the agent module.
+- [ ] Root `go.mod` does NOT contain `html-to-markdown` as a direct dependency (it's the agent's concern now).
+- [ ] No import paths changed in Go source files (Go's module resolution handles nested modules transparently).
+- [ ] `.gitignore` is NOT updated to exclude `agent/go.sum` (it must be committed per Go conventions).
+
+---
+
+### MONO-3: Add go.work for Workspace Development
+
+**As a** developer working in the monorepo,
+**I want** a `go.work` file at the root that links both modules,
+**so that** local changes to `agent/` are immediately reflected when building or testing the CLI — without publishing a version first.
+
+**Depends on**: MONO-2 (agent has its own `go.mod`)
+
+**Context & Analysis**:
+
+Without `go.work`, the root module would resolve the agent dependency from the Go module proxy (or a git tag), not from the local `agent/` directory. Every agent change would require a commit + tag + `go get` cycle — unworkable for development.
+
+`go.work` tells the Go toolchain to use local directories as module sources. This is the Go 1.18+ standard for multi-module monorepo development. The file is committed to the repo (this is a private/internal monorepo pattern; for public libraries, `go.work` is sometimes `.gitignore`d, but since our CLI binary and agent live together, committing it is correct).
+
+**Acceptance Criteria**:
+- [ ] A `go.work` file exists at the repo root:
+  ```
+  go 1.24
+
+  use (
+      .
+      ./agent
+  )
+  ```
+- [ ] `go.work.sum` is committed alongside `go.work`.
+- [ ] From the repo root: `go build ./...` succeeds (builds both the CLI binary and all agent packages).
+- [ ] From the repo root: `go vet ./...` is clean across both modules.
+- [ ] From the repo root: `cd tests && go test ./...` — all tests pass (same count as before the split).
+- [ ] A change to a file in `agent/` (e.g., add a comment to `agent/agent.go`) is immediately reflected when building the CLI at the root — no `go get` or version bump needed.
+- [ ] `go work sync` runs without error.
+- [ ] The `clyde` binary still builds and runs correctly: `go build -o clyde . && ./clyde --help`.
+- [ ] CI pipeline (if any) is updated to use `go work` or explicitly build each module.
+
+---
+
+### MONO-4: Verify External Consumability
+
+**As an** engineer on another team who wants to use Clyde's agent as a library,
+**I want** to confirm that `go get github.com/this-is-alpha-iota/clyde/agent@<version>` works correctly and pulls only agent dependencies,
+**so that** I can integrate the agent into my own service without inheriting CLI/TUI baggage.
+
+**Depends on**: MONO-3 (workspace development working end-to-end)
+
+**Context & Analysis**:
+
+This story is a verification/documentation story, not a code change. It confirms the module split actually delivers on its promise by simulating the external consumer experience. The test creates a throwaway Go module outside the repo that imports and uses the agent.
+
+**Acceptance Criteria**:
+
+*External consumer smoke test:*
+- [ ] A test script (checked in as `scripts/test-external-consume.sh` or similar) does the following:
+  1. Creates a temp directory outside the repo.
+  2. `go mod init testconsumer`
+  3. `go get github.com/this-is-alpha-iota/clyde/agent@<latest-tag-or-commit>`
+  4. Writes a minimal `main.go` that imports `"github.com/this-is-alpha-iota/clyde/agent"`, creates an `agent.Config{}`, and calls `agent.New(cfg)`.
+  5. `go build .` succeeds.
+  6. Inspects `go.sum` and confirms `golang.org/x/sys` is NOT present (proves CLI deps weren't pulled).
+  7. Cleans up the temp directory.
+- [ ] The script passes on a clean machine (no local replace directives or workspace magic).
+
+*Dependency audit:*
+- [ ] `cd agent && go list -m all` is captured and documented. It should contain only:
+  - `github.com/JohannesKaufmann/html-to-markdown`
+  - `github.com/joho/godotenv`
+  - `github.com/PuerkitoBio/goquery` (transitive)
+  - `github.com/andybalholm/cascadia` (transitive)
+  - `golang.org/x/net` (transitive)
+  - NO `golang.org/x/sys`, NO TUI/readline libraries, NO CLI framework.
+- [ ] This list is added to `README.md` or a new `agent/README.md` under a "Dependencies" section.
+
+*Consumer documentation:*
+- [ ] `agent/README.md` (or a section in root `README.md`) documents:
+  - How to install the agent library: `go get github.com/this-is-alpha-iota/clyde/agent@latest`
+  - Minimal usage example (create config, create agent, handle message).
+  - How to install the CLI binary: `go install github.com/this-is-alpha-iota/clyde@latest`
+  - That these are separate modules with independent dependency trees.
+
+*Tests:*
+- [ ] The smoke test script is runnable via `make test-external` or equivalent.
+- [ ] The test is documented in `progress.md` as a verification gate for future module changes.
+
+---
+
+### MONO-5: Release Tagging Convention & First Tagged Release
+
+**As a** maintainer publishing releases,
+**I want** a documented tagging convention that versions the agent and CLI modules independently (or in lockstep),
+**so that** consumers can pin stable versions and `go get` resolves correct code.
+
+**Depends on**: MONO-4 (consumability verified)
+
+**Context & Analysis**:
+
+Go's multi-module versioning uses **prefixed tags**. For a module at path `github.com/org/repo/agent`, Go looks for tags prefixed with `agent/`:
+- `agent/v0.1.0` → resolves `github.com/org/repo/agent@v0.1.0`
+- `v0.1.0` → resolves `github.com/org/repo@v0.1.0` (root module = CLI)
+
+Both modules can share version numbers (tag `v0.1.0` and `agent/v0.1.0` on the same commit) for simplicity, or version independently if their release cadences diverge.
+
+**Acceptance Criteria**:
+
+*Tagging convention:*
+- [ ] The convention is documented in `CONTRIBUTING.md` or `docs/releasing.md`:
+  - Agent module: `agent/vX.Y.Z` (e.g., `agent/v0.1.0`)
+  - CLI module (root): `vX.Y.Z` (e.g., `v0.1.0`)
+  - Both tags are created on the same commit for lockstep releases.
+  - Pre-v1: use `v0.x.y` (no compatibility guarantees per Go semver convention).
+- [ ] The root `go.mod` pins the agent dependency to the latest tagged version (not a pseudo-version) after the first release.
+
+*First tagged release:*
+- [ ] Tags `v0.1.0` and `agent/v0.1.0` are created on a clean, passing commit.
+- [ ] `go install github.com/this-is-alpha-iota/clyde@v0.1.0` succeeds from a clean machine.
+- [ ] `go get github.com/this-is-alpha-iota/clyde/agent@v0.1.0` succeeds from a clean machine.
+- [ ] The Go module proxy (proxy.golang.org) has indexed both modules (may take a few minutes; verified via `GOPROXY=https://proxy.golang.org go list -m github.com/this-is-alpha-iota/clyde/agent@v0.1.0`).
+
+*Release script/Makefile target:*
+- [ ] A `make release VERSION=0.1.0` target (or equivalent script) automates:
+  1. Verify working tree is clean.
+  2. Run `go build ./...` and `cd tests && go test ./...`.
+  3. Update root `go.mod` to pin `agent@vX.Y.Z` (remove `go.work` replace).
+  4. `git tag agent/vX.Y.Z && git tag vX.Y.Z`
+  5. `git push origin agent/vX.Y.Z vX.Y.Z`
+  6. Print post-release verification commands.
+- [ ] The script refuses to run if tests fail or the tree is dirty.
+
+*Tests:*
+- [ ] The release script is tested with a dry-run mode (`make release VERSION=0.1.0 DRY_RUN=1`) that prints what it would do without executing.
+- [ ] Post-release, the MONO-4 external consumer smoke test passes with the tagged version.
+
+---
+
+### MONO-6: Private Consumer Repo Pattern
+
+**As a** team maintaining a proprietary auditing tool that builds on Clyde's agent,
+**I want** a documented pattern for a separate private repo that imports the public agent module,
+**so that** we get public agent updates via `go get` without maintaining a divergent fork, merge conflicts, or branch tracking.
+
+**Depends on**: MONO-5 (tagged releases exist to pin against)
+
+**Context & Analysis**:
+
+The original question posed two options: (A) a separate private repo that imports the public agent, or (B) a long-lived branch in the same repo with a third module. Option A is strongly preferred because:
+- No merge conflicts when public repo evolves.
+- No risk of accidentally pushing proprietary code to the public repo.
+- Standard Go dependency management (`go get` to update).
+- The private repo is a normal Go project — no workspace tricks, no branch juggling.
+
+The `audit/` directory currently contains a pre-built binary. This story documents the pattern for building it as a proper Go project in a separate repo.
+
+**Acceptance Criteria**:
+
+*Template/documentation:*
+- [ ] A `docs/private-consumer-pattern.md` document describes:
+  - **Repo structure** for the private consumer:
+    ```
+    clyde-enterprise/
+    ├── go.mod              # requires github.com/this-is-alpha-iota/clyde/agent
+    ├── audit/
+    │   ├── audit.go        # imports "github.com/this-is-alpha-iota/clyde/agent"
+    │   └── ...
+    ├── cmd/
+    │   └── clyde-audit/
+    │       └── main.go     # binary entry point
+    └── README.md
+    ```
+  - **go.mod** example:
+    ```
+    module github.com/this-is-alpha-iota/clyde-enterprise
+    go 1.24
+    require github.com/this-is-alpha-iota/clyde/agent v0.1.0
+    ```
+  - **Update workflow**: `go get github.com/this-is-alpha-iota/clyde/agent@latest` → `go mod tidy` → test → commit.
+  - **Why not a fork**: explains the merge-conflict and branch-tracking problems; links to Go module documentation.
+  - **Accessing CLI too**: the private repo can also `require github.com/this-is-alpha-iota/clyde` if it needs CLI packages, but this is optional and independent.
+  - **Local development**: if actively developing both repos simultaneously, a `go.work` in the private repo can `use` a local checkout of the public repo:
+    ```
+    // clyde-enterprise/go.work (not committed)
+    go 1.24
+    use (
+        .
+        ../clyde/agent
+    )
+    ```
+
+*Cleanup:*
+- [ ] The `audit/` directory in the public repo is evaluated: if it only contains a pre-built binary, remove it (binaries shouldn't be in git). If it contains Go source, document whether it should migrate to the private repo or stay.
+- [ ] `.gitignore` is updated if `audit/` is removed.
+
+*Validation:*
+- [ ] The documented pattern is tested by creating a minimal private consumer repo (can be a temp directory) that:
+  1. `go mod init private-test`
+  2. `require`s the agent at the latest tagged version.
+  3. Writes a `main.go` that imports the agent, creates a config, calls `agent.New()`.
+  4. `go build .` succeeds.
+  5. `go get github.com/this-is-alpha-iota/clyde/agent@latest` updates cleanly.
+- [ ] The pattern is reviewed and approved by at least one other developer familiar with Go modules.
+
+---
+
 ### CMP-1: Conversation Token Counting & Automatic Compaction Trigger
 
 **As a** user running a long autonomous session,
