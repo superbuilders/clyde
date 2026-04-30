@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/joho/godotenv v1.5.1
-	github.com/this-is-alpha-iota/clyde/agent v0.0.0
+	github.com/this-is-alpha-iota/clyde/agent v0.1.0
 	golang.org/x/sys v0.33.0
 )
 
@@ -15,4 +15,3 @@ require (
 	golang.org/x/net v0.25.0 // indirect
 )
 
-replace github.com/this-is-alpha-iota/clyde/agent => ./agent
