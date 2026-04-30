@@ -988,7 +988,87 @@ Error messages should be **teachers**, not just reporters. Every error is an opp
 
 ## Current Status (2026-04-30)
 
-**Latest Update**: MONO-4: Verify External Consumability ✅
+**Latest Update**: MONO-5: Release Tagging Convention & First Tagged Release ✅
+
+### MONO-5: Release Tagging Convention & First Tagged Release (Completed 2026-04-30)
+
+**Story**: Document a tagging convention for the multi-module monorepo, create release automation, and publish the first tagged release (`v0.1.0` + `agent/v0.1.0`).
+
+**Depends on**: MONO-4 (external consumability verified)
+
+**What Was Built**:
+
+#### 1. Release Documentation (`docs/releasing.md`)
+Comprehensive release process documentation covering:
+- Tagging convention: `v0.1.0` for CLI, `agent/v0.1.0` for agent library
+- Lockstep release workflow (both tags on same commit)
+- Automated and manual release procedures
+- Post-release verification commands
+- Post-release development workflow (go.work for local dev)
+- Release checklist
+
+#### 2. Release Script (`scripts/release.sh`)
+9-step automated release script:
+1. Verify clean working tree + no existing tags
+2. Build both modules (root CLI + agent standalone)
+3. Run tests (unit tests required, integration tests allowed to fail without API keys)
+4. Update `go.mod` to pin agent to tagged version, remove `replace` directive
+5. Commit `go.mod` changes
+6. Create both tags on the same commit
+7. Push to origin (master + both tags)
+8. Trigger Go module proxy indexing
+9. Print verification commands
+
+**Features**:
+- `DRY_RUN=1` mode shows what would happen without executing
+- Refuses to run with dirty working tree
+- Validates semver format
+- Detects existing tags to prevent conflicts
+- Handles macOS grep quirks (BSD vs GNU)
+
+#### 3. Makefile
+Convenience targets for common operations:
+- `make build` — Build the CLI binary
+- `make test` — Run all tests
+- `make vet` — Run go vet
+- `make release VERSION=0.1.0` — Release automation
+- `make release VERSION=0.1.0 DRY_RUN=1` — Dry run
+- `make test-external` — Run external consumer smoke test
+- `make test-external VERSION=0.1.0` — Test published version
+
+#### 4. First Tagged Release: v0.1.0
+**Tags created**: `v0.1.0` and `agent/v0.1.0` on commit `1bf6b57`
+
+**go.mod changes**:
+```
+# Before:
+require github.com/this-is-alpha-iota/clyde/agent v0.0.0
+replace github.com/this-is-alpha-iota/clyde/agent => ./agent
+
+# After:
+require github.com/this-is-alpha-iota/clyde/agent v0.1.0
+# (no replace — go.work handles local dev)
+```
+
+**Verification results**:
+- ✅ `go install github.com/this-is-alpha-iota/clyde@v0.1.0` — succeeds (9.8 MB binary)
+- ✅ `go get github.com/this-is-alpha-iota/clyde/agent@v0.1.0` — succeeds
+- ✅ `GOPROXY=https://proxy.golang.org go list -m …/agent@v0.1.0` — indexed
+- ✅ `GOPROXY=https://proxy.golang.org go list -m …/clyde@v0.1.0` — indexed
+- ✅ `./scripts/test-external-consume.sh v0.1.0` — all checks pass
+- ✅ Local dev still works via `go.work` (agent changes immediately reflected)
+
+**Proxy indexing note**: Initial proxy request returned 404 for the agent module (cached from pre-tag request). Resolved within minutes; the `@latest` endpoint resolved correctly immediately, and subsequent requests to `@v/v0.1.0.info` succeeded after cache expiry.
+
+**Files Changed**:
+| File | Change |
+|------|--------|
+| `docs/releasing.md` | **New** — release process documentation (~4 KB) |
+| `scripts/release.sh` | **New** — automated release script (~12 KB) |
+| `Makefile` | **New** — convenience targets (~800 bytes) |
+| `go.mod` | Pinned agent to v0.1.0, removed replace directive |
+| `docs/todos.md` | Checked off all MONO-5 acceptance criteria |
+| `docs/progress.md` | This entry |
 
 ### MONO-4: Verify External Consumability (Completed 2026-04-30)
 

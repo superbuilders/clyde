@@ -1821,32 +1821,32 @@ Both modules can share version numbers (tag `v0.1.0` and `agent/v0.1.0` on the s
 **Acceptance Criteria**:
 
 *Tagging convention:*
-- [ ] The convention is documented in `CONTRIBUTING.md` or `docs/releasing.md`:
+- [x] The convention is documented in `CONTRIBUTING.md` or `docs/releasing.md`:
   - Agent module: `agent/vX.Y.Z` (e.g., `agent/v0.1.0`)
   - CLI module (root): `vX.Y.Z` (e.g., `v0.1.0`)
   - Both tags are created on the same commit for lockstep releases.
   - Pre-v1: use `v0.x.y` (no compatibility guarantees per Go semver convention).
-- [ ] The root `go.mod` pins the agent dependency to the latest tagged version (not a pseudo-version) after the first release.
+- [x] The root `go.mod` pins the agent dependency to the latest tagged version (not a pseudo-version) after the first release.
 
 *First tagged release:*
-- [ ] Tags `v0.1.0` and `agent/v0.1.0` are created on a clean, passing commit.
-- [ ] `go install github.com/this-is-alpha-iota/clyde@v0.1.0` succeeds from a clean machine.
-- [ ] `go get github.com/this-is-alpha-iota/clyde/agent@v0.1.0` succeeds from a clean machine.
-- [ ] The Go module proxy (proxy.golang.org) has indexed both modules (may take a few minutes; verified via `GOPROXY=https://proxy.golang.org go list -m github.com/this-is-alpha-iota/clyde/agent@v0.1.0`).
+- [x] Tags `v0.1.0` and `agent/v0.1.0` are created on a clean, passing commit.
+- [x] `go install github.com/this-is-alpha-iota/clyde@v0.1.0` succeeds from a clean machine.
+- [x] `go get github.com/this-is-alpha-iota/clyde/agent@v0.1.0` succeeds from a clean machine.
+- [x] The Go module proxy (proxy.golang.org) has indexed both modules (may take a few minutes; verified via `GOPROXY=https://proxy.golang.org go list -m github.com/this-is-alpha-iota/clyde/agent@v0.1.0`).
 
 *Release script/Makefile target:*
-- [ ] A `make release VERSION=0.1.0` target (or equivalent script) automates:
+- [x] A `make release VERSION=0.1.0` target (or equivalent script) automates:
   1. Verify working tree is clean.
   2. Run `go build ./...` and `cd tests && go test ./...`.
   3. Update root `go.mod` to pin `agent@vX.Y.Z` (remove `go.work` replace).
   4. `git tag agent/vX.Y.Z && git tag vX.Y.Z`
   5. `git push origin agent/vX.Y.Z vX.Y.Z`
   6. Print post-release verification commands.
-- [ ] The script refuses to run if tests fail or the tree is dirty.
+- [x] The script refuses to run if tests fail or the tree is dirty.
 
 *Tests:*
-- [ ] The release script is tested with a dry-run mode (`make release VERSION=0.1.0 DRY_RUN=1`) that prints what it would do without executing.
-- [ ] Post-release, the MONO-4 external consumer smoke test passes with the tagged version.
+- [x] The release script is tested with a dry-run mode (`make release VERSION=0.1.0 DRY_RUN=1`) that prints what it would do without executing.
+- [x] Post-release, the MONO-4 external consumer smoke test passes with the tagged version.
 
 ---
 
