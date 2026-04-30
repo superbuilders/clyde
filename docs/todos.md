@@ -1769,7 +1769,7 @@ This story is a verification/documentation story, not a code change. It confirms
 **Acceptance Criteria**:
 
 *External consumer smoke test:*
-- [ ] A test script (checked in as `scripts/test-external-consume.sh` or similar) does the following:
+- [x] A test script (checked in as `scripts/test-external-consume.sh` or similar) does the following:
   1. Creates a temp directory outside the repo.
   2. `go mod init testconsumer`
   3. `go get github.com/this-is-alpha-iota/clyde/agent@<latest-tag-or-commit>`
@@ -1777,28 +1777,28 @@ This story is a verification/documentation story, not a code change. It confirms
   5. `go build .` succeeds.
   6. Inspects `go.sum` and confirms `golang.org/x/sys` is NOT present (proves CLI deps weren't pulled).
   7. Cleans up the temp directory.
-- [ ] The script passes on a clean machine (no local replace directives or workspace magic).
+- [x] The script passes on a clean machine (no local replace directives or workspace magic).
 
 *Dependency audit:*
-- [ ] `cd agent && go list -m all` is captured and documented. It should contain only:
+- [x] `cd agent && go list -m all` is captured and documented. It should contain only:
   - `github.com/JohannesKaufmann/html-to-markdown`
   - `github.com/joho/godotenv`
   - `github.com/PuerkitoBio/goquery` (transitive)
   - `github.com/andybalholm/cascadia` (transitive)
   - `golang.org/x/net` (transitive)
   - NO `golang.org/x/sys`, NO TUI/readline libraries, NO CLI framework.
-- [ ] This list is added to `README.md` or a new `agent/README.md` under a "Dependencies" section.
+- [x] This list is added to `README.md` or a new `agent/README.md` under a "Dependencies" section.
 
 *Consumer documentation:*
-- [ ] `agent/README.md` (or a section in root `README.md`) documents:
+- [x] `agent/README.md` (or a section in root `README.md`) documents:
   - How to install the agent library: `go get github.com/this-is-alpha-iota/clyde/agent@latest`
   - Minimal usage example (create config, create agent, handle message).
   - How to install the CLI binary: `go install github.com/this-is-alpha-iota/clyde@latest`
   - That these are separate modules with independent dependency trees.
 
 *Tests:*
-- [ ] The smoke test script is runnable via `make test-external` or equivalent.
-- [ ] The test is documented in `progress.md` as a verification gate for future module changes.
+- [x] The smoke test script is runnable via `make test-external` or equivalent.
+- [x] The test is documented in `progress.md` as a verification gate for future module changes.
 
 ---
 

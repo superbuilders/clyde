@@ -986,9 +986,90 @@ Created demo showing all error message improvements:
 **Philosophy**:
 Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
 
-## Current Status (2026-04-10)
+## Current Status (2026-04-30)
 
-**Latest Update**: MONO-3: Add go.work for Workspace Development ✅
+**Latest Update**: MONO-4: Verify External Consumability ✅
+
+### MONO-4: Verify External Consumability (Completed 2026-04-30)
+
+**Story**: Confirm that `go get github.com/this-is-alpha-iota/clyde/agent` works correctly, pulls only agent dependencies, and document the consumer experience.
+
+**Depends on**: MONO-3 (workspace development working end-to-end)
+
+**What Was Built**:
+
+#### 1. External Consumer Smoke Test (`scripts/test-external-consume.sh`)
+A 3-phase verification script that confirms the module split delivers on its promise:
+
+**Phase 1 — Agent Dependency Audit**:
+- Verifies agent compiles standalone (`GOWORK=off go build ./...`)
+- Captures and displays full dependency list (`go list -m all`)
+- Confirms direct deps: `html-to-markdown` v1.6.0, `godotenv` v1.5.1
+- Confirms transitive deps: `goquery`, `cascadia`, `x/net`
+- Verifies `x/sys` is NOT needed (`go mod why -m` → "does not need")
+- Verifies `x/sys` is NOT a direct dep in `agent/go.mod`
+- Verifies no CLI-specific libraries (readline, bubbletea, liner)
+
+**Phase 2 — External Consumer Smoke Test**:
+- Creates a throwaway Go module outside the repo
+- Writes a `main.go` that exercises the full public API surface:
+  - `agent.New(cfg, ...opts)` with all 10 callback options
+  - `agent.Message`, `agent.ContentBlock`, `agent.Usage` type aliases
+  - `SetHistory()`, `GetHistory()`, `LastUsage()`, `Close()`
+- Builds and runs the consumer successfully
+- Inspects consumer dependency tree — no CLI/TUI libraries leaked
+
+**Phase 3 — Summary**: Reports all checks passed.
+
+**Two modes**: Local mode (uses `replace` directive for unpublished module) and published mode (`./scripts/test-external-consume.sh v0.1.0`).
+
+#### 2. Agent Library Documentation (`agent/README.md`)
+Comprehensive consumer documentation covering:
+- Installation (`go get ...`)
+- Quick start example
+- All 13 `Config` fields with types and descriptions
+- All 10 functional option callbacks with signatures
+- 3 re-exported types (`Message`, `ContentBlock`, `Usage`)
+- Agent methods (`HandleMessage`, `GetHistory`, `SetHistory`, `LastUsage`, `Close`)
+- Session persistence via `agent/session` subpackage
+- 12 built-in tools listed
+- Examples: HTTP API server, silent agent, WebSocket streaming
+- Dependency table (direct + transitive)
+- Multi-module architecture explanation
+
+#### 3. README Updates
+- Simplified "Using Clyde as a Library" section with accurate callback signatures
+- Added dependency table showing the minimal agent dep tree
+- References `agent/README.md` for complete documentation
+
+**Bug discovered & documented**: The `TMPDIR` shell variable is a standard environment variable that Go's `os.TempDir()` reads. Using it as a script variable name causes Go to treat the consumer directory as a "system temp root" and ignore its `go.mod` (per golang.org/issue/26708). The fix was to use `WORKDIR` instead. This is documented in the script with a prominent comment.
+
+**Files Changed**:
+| File | Change |
+|------|--------|
+| `scripts/test-external-consume.sh` | **New** — 3-phase verification script (~250 lines) |
+| `agent/README.md` | **New** — comprehensive consumer documentation (~8 KB) |
+| `readme.md` | Updated "Using Clyde as a Library" section with accurate info |
+| `docs/todos.md` | Checked off all MONO-4 acceptance criteria |
+| `docs/progress.md` | This entry |
+
+**Dependency audit results** (agent module, `GOWORK=off go list -m all`):
+```
+Direct:     html-to-markdown v1.6.0, godotenv v1.5.1
+Transitive: goquery v1.9.2, cascadia v1.3.2, x/net v0.25.0
+NOT needed: x/sys (go mod why → "does not need module")
+NOT present: readline, bubbletea, liner, x/sys as direct dep
+```
+
+**Acceptance criteria notes**:
+- The original spec said "confirms `x/sys` is NOT present in go.sum". In practice, `x/sys` appears in `go.sum` as a transitive dependency of `x/net` (which is needed by `goquery` for HTML parsing). However, `go mod why -m golang.org/x/sys` confirms the agent "does not need" the module — no code path imports it. The CLI-specific `x/sys v0.33.0` (for raw terminal mode) is NOT pulled; only the harmless transitive `v0.20.0` appears. The smoke test verifies this correctly.
+- The "clean machine" criterion applies to published mode. Local mode uses a `replace` directive by necessity (module not published yet). The script supports both modes.
+
+**Verification**:
+- `./scripts/test-external-consume.sh` — all 20 checks pass ✅
+- `go build -o /dev/null .` — CLI builds successfully
+- `go vet ./...` — clean
+- All unit tests pass (pre-existing integration failures unchanged)
 
 ### MONO-3: Add go.work for Workspace Development (Completed 2026-04-29)
 

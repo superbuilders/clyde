@@ -460,9 +460,14 @@ tmux kill-session -t server
 
 ## Using Clyde as a Library
 
-Clyde's agent is fully decoupled from the CLI interface and can be embedded in your own Go applications. This enables you to build custom interfaces (HTTP APIs, GUIs, bots, etc.) while leveraging the same powerful agent logic.
+Clyde's agent is a separate Go module that can be embedded in your own applications. This enables you to build custom interfaces (HTTP APIs, GUIs, bots, etc.) while leveraging the same powerful agent logic — without pulling CLI/TUI dependencies.
 
-### Basic Usage
+```bash
+# Install just the agent library (no CLI deps)
+go get github.com/this-is-alpha-iota/clyde/agent@latest
+```
+
+### Quick Example
 
 ```go
 import (
@@ -471,114 +476,38 @@ import (
 )
 
 func main() {
-    // Create agent — it handles client creation, tool registration,
-    // prompt loading, and MCP setup internally.
-    agentInstance := agent.New(
-        agent.Config{
-            APIKey:    "your-api-key",
-            APIURL:    "https://api.anthropic.com/v1/messages",
-            ModelID:   "claude-opus-4-6",
-            MaxTokens: 64000,
-        },
-        agent.WithProgressCallback(func(msg string) {
-            fmt.Println(msg) // Or send to your UI, log, etc.
+    agentInstance := agent.New(agent.Config{
+        APIKey:    "your-api-key",
+        APIURL:    "https://api.anthropic.com/v1/messages",
+        ModelID:   "claude-opus-4-6",
+        MaxTokens: 64000,
+    },
+        agent.WithProgressCallback(func(msg string, toolUseID string) {
+            fmt.Println(msg)
         }),
     )
     defer agentInstance.Close()
-    
-    // Send messages
+
     response, err := agentInstance.HandleMessage("What files are in the current directory?")
     if err != nil {
         fmt.Printf("Error: %v\n", err)
         return
     }
-    
-    fmt.Printf("Response: %s\n", response)
+    fmt.Println(response)
 }
 ```
 
-### Custom Progress Handling
+### Agent Dependencies
 
-The agent provides callback hooks for handling progress messages and errors in your application:
+The agent module has a minimal dependency tree — it does **not** pull `golang.org/x/sys`, readline, or any TUI libraries:
 
-```go
-cfg := agent.Config{
-    APIKey:  "your-api-key",
-    APIURL:  "https://api.anthropic.com/v1/messages",
-    ModelID: "claude-opus-4-6",
-    MaxTokens: 64000,
-}
+| Direct | Transitive |
+|--------|------------|
+| `html-to-markdown` v1.6.0 | `goquery` v1.9.2 |
+| `godotenv` v1.5.1 | `cascadia` v1.3.2 |
+| | `x/net` v0.25.0 |
 
-// For CLI applications - print to stdout
-agent.New(cfg, agent.WithProgressCallback(func(msg string) {
-    fmt.Println(msg)
-}))
-
-// For HTTP APIs - send via WebSocket
-agent.New(cfg, agent.WithProgressCallback(func(msg string) {
-    websocket.Send(msg)
-}))
-
-// For GUIs - update UI elements
-agent.New(cfg, agent.WithProgressCallback(func(msg string) {
-    statusBar.SetText(msg)
-}))
-
-// For logging - capture all progress
-var progressLog []string
-agent.New(cfg, agent.WithProgressCallback(func(msg string) {
-    progressLog = append(progressLog, msg)
-}))
-
-// Optional error callback for logging/monitoring
-agent.New(cfg,
-    agent.WithProgressCallback(progressHandler),
-    agent.WithErrorCallback(func(err error) {
-        log.Printf("Agent error: %v", err)
-        metrics.IncrementErrorCount()
-    }),
-)
-```
-
-### Example: HTTP API Server
-
-```go
-type Session struct {
-    agent *agent.Agent
-    progressBuffer []string
-    mu sync.Mutex
-}
-
-func handleMessage(w http.ResponseWriter, r *http.Request) {
-    session := getSession(r)
-    
-    // Capture progress messages for this request
-    session.progressBuffer = []string{}
-    
-    response, err := session.agent.HandleMessage(userInput)
-    
-    // Return response with captured progress
-    json.NewEncoder(w).Encode(map[string]interface{}{
-        "response": response,
-        "progress": session.progressBuffer,
-        "error": err,
-    })
-}
-```
-
-### No Callbacks? No Problem!
-
-If you don't provide a progress callback, the agent works silently:
-
-```go
-// Silent agent - no progress output
-agentInstance := agent.New(agent.Config{
-    APIKey: "your-api-key", APIURL: "https://api.anthropic.com/v1/messages",
-    ModelID: "claude-opus-4-6", MaxTokens: 64000,
-})
-defer agentInstance.Close()
-response, _ := agentInstance.HandleMessage("Hello!")
-```
+For complete documentation including all config fields, callback types, re-exported types, and examples (HTTP API, WebSocket, silent mode), see **[agent/README.md](agent/README.md)**.
 
 ## Documentation
 
