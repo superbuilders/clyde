@@ -7,6 +7,7 @@ import (
 	"github.com/this-is-alpha-iota/clyde/agent/mcp"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
 	"github.com/this-is-alpha-iota/clyde/agent/providers"
+	"github.com/this-is-alpha-iota/clyde/agent/skills"
 	"github.com/this-is-alpha-iota/clyde/agent/tools"
 	// Blank-import all tool packages so their init() functions register tools
 	// into the global registry. This is the ONLY place this import exists —
@@ -114,6 +115,7 @@ type Agent struct {
 	compactIncludeRecentContext bool   // Feed recent kept messages into compaction phases
 	toolResultThreshold        int    // Char threshold for intelligent tool-result summarization
 	mcpServer          *mcp.PlaywrightServer // MCP server (nil if not enabled)
+	skillsRegistry     *skills.Registry      // Agent Skills registry (nil if no skills found)
 }
 
 // AgentOption is a functional option for configuring an Agent
@@ -269,6 +271,20 @@ func New(cfg Config, opts ...AgentOption) *Agent {
 		}
 	}
 
+	// Discover and load Agent Skills
+	reg := skills.NewRegistry()
+	reg.Load()
+	if catalog := reg.BuildCatalogBlock(); catalog != "" {
+		a.systemPrompt += catalog
+		a.skillsRegistry = reg
+	}
+	// Log any warnings from skill discovery
+	for _, w := range reg.Warnings() {
+		if a.errorCallback != nil {
+			a.errorCallback(fmt.Errorf("%s", w))
+		}
+	}
+
 	return a
 }
 
@@ -299,6 +315,43 @@ func (a *Agent) Close() error {
 		return a.mcpServer.Close()
 	}
 	return nil
+}
+
+// SkillsRegistry returns the Agent Skills registry (may be nil if no skills found).
+func (a *Agent) SkillsRegistry() *skills.Registry {
+	return a.skillsRegistry
+}
+
+// ReloadSkills re-discovers skills and rebuilds the catalog in the system prompt.
+// The base system prompt (without skills) is preserved and the catalog block
+// is replaced atomically.
+func (a *Agent) ReloadSkills() {
+	// Strip any existing catalog block from the system prompt
+	a.systemPrompt = stripSkillsCatalog(a.systemPrompt)
+
+	reg := skills.NewRegistry()
+	reg.Load()
+	if catalog := reg.BuildCatalogBlock(); catalog != "" {
+		a.systemPrompt += catalog
+		a.skillsRegistry = reg
+	} else {
+		a.skillsRegistry = nil
+	}
+	// Log warnings
+	for _, w := range reg.Warnings() {
+		if a.errorCallback != nil {
+			a.errorCallback(fmt.Errorf("%s", w))
+		}
+	}
+}
+
+// stripSkillsCatalog removes the skills catalog block from a system prompt string.
+func stripSkillsCatalog(prompt string) string {
+	marker := "\nYou have access to specialized Agent Skills."
+	if idx := strings.Index(prompt, marker); idx >= 0 {
+		return prompt[:idx]
+	}
+	return prompt
 }
 
 // Message is re-exported from providers so that external consumers

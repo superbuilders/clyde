@@ -1,5 +1,43 @@
 # Clyde Progress
 
+## Features Added
+
+### Agent Skills Support (2025-07-20)
+
+**What:** Implemented the open Agent Skills standard (agentskills.io / SKILL.md format)
+following Pi's philosophy — no new tools, no slash commands. Skills are discovered
+automatically and the model loads them via the existing `read_file` tool.
+
+**Architecture:**
+- New `agent/skills/` package: `types.go` (SkillMetadata struct), `catalog.go`
+  (discovery + YAML frontmatter parsing), `registry.go` (Registry + catalog builder).
+- Discovery locations (in priority order): `./.agents/skills/` (project-local),
+  `~/.agents/skills/` (user-global). Project-local wins on name conflicts.
+- YAML frontmatter parsed from `SKILL.md` files (name, description, version, triggers).
+  Missing/malformed frontmatter falls back to folder name with a logged warning.
+- Catalog block (~100-300 tokens) is dynamically appended to the system prompt at
+  startup. Zero overhead when no skills exist (empty string, no tokens).
+- `Agent` struct gains `skillsRegistry` field and `ReloadSkills()` method.
+- Added `gopkg.in/yaml.v3` dependency to the agent module.
+
+**Key design decisions:**
+- No new tools: model uses existing `read_file` to load full SKILL.md content.
+- No `.clyde/` paths — only the universal `.agents/` standard.
+- Catalog includes file paths so the model knows exactly what to `read_file`.
+- `stripSkillsCatalog()` enables clean reload without prompt duplication.
+- Skills enabled by default; zero-cost when no `.agents/skills/` dirs exist.
+
+**Tests:** 20 unit tests in `agent/skills/skills_test.go` covering:
+- Valid skill discovery, multi-skill, dedup (local wins over global)
+- Fallbacks: no frontmatter, malformed YAML, empty name, empty frontmatter
+- Edge cases: nonexistent dir, no SKILL.md, files-not-folders, extra YAML fields
+- Registry lifecycle: build catalog, reload, no-skills empty block
+- US-2 verification: paths are readable, catalog contains paths + read_file instruction
+
+**User stories implemented:**
+- US-1: Skills automatically discovered and catalogued at startup ✅
+- US-2: Model can load and follow a skill using existing read_file tooling ✅
+
 ## Rewrites
 
 ### Input Editor: Drop chzyer/readline, Own the Terminal (2026-04-27)
