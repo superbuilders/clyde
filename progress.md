@@ -197,6 +197,33 @@ the old logical-line math. Existing tests unaffected.
 
 ## Bugs Fixed
 
+### Compaction loop with small Ollama context windows (2025-05-14)
+
+**Problem:** When using `clyde-qwen` (Ollama provider), the agent entered an
+infinite compaction loop — compacting after every single API response, never
+making progress on the actual task. Observed in a Nim game build session:
+14 compaction events, 3 compaction cycles, handoff docs growing from 3.6KB
+to 6.3KB, and input tokens climbing (6929 → 7916 → 10697 → 11395).
+
+**Root cause:** `CONTEXT_WINDOW_SIZE` defaulted to 8192 for Ollama, but
+`DefaultReserveTokens` is 16000. The compaction threshold =
+`contextWindowSize - reserveTokens` = 8192 - 16000 = **-7808**. Every
+response with *any* tokens exceeded -7808, so `ShouldCompact()` always
+returned true. Each 5-phase compaction generated a ~3-6KB handoff summary
+that *itself* consumed context, making the next threshold check even worse.
+
+**Fix (two parts):**
+1. `cli/cli.go`: Ollama default `CONTEXT_WINDOW_SIZE` → 131072 (qwen3.5:35b
+   supports 262K natively; 128K is conservative)
+2. `agent/compaction.go`: Safety clamp in `ShouldCompact()` — `reserveTokens`
+   capped at `contextWindowSize / 2` so the threshold can never go negative,
+   regardless of user configuration
+
+**Lesson:** When adding new providers with different context windows, always
+verify that `DefaultReserveTokens` (16000, sized for Claude's 200K) doesn't
+create impossible thresholds. The safety clamp prevents this class of bug
+for any future provider or config combination.
+
 ### Brave Search 429s on concurrent requests (2025-07-17)
 
 **Problem:** When multiple `web_search` tool calls fire in the same turn (parallel
