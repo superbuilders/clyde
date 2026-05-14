@@ -122,6 +122,7 @@ type Agent struct {
 	toolResultThreshold        int    // Char threshold for intelligent tool-result summarization
 	mcpServer          *mcp.PlaywrightServer // MCP server (nil if not enabled)
 	skillsRegistry     *skills.Registry      // Agent Skills registry (nil if no skills found)
+	skipImages         bool                  // Skip image content blocks (for non-multimodal providers)
 }
 
 // AgentOption is a functional option for configuring an Agent
@@ -267,6 +268,7 @@ func New(cfg Config, opts ...AgentOption) *Agent {
 		reserveTokens:              cfg.ReserveTokens,
 		compactIncludeRecentContext: includeRecent,
 		toolResultThreshold:        cfg.ToolResultThreshold,
+		skipImages:                 cfg.Provider == "ollama",
 	}
 
 	// Apply functional options
@@ -603,8 +605,10 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			})
 		}
 
-		// If we loaded any images, add them to the tool results
-		if len(pendingImages) > 0 {
+		// If we loaded any images, add them to the tool results.
+		// Skip for non-multimodal providers (e.g. Ollama) where images
+		// in the conversation just confuse the model.
+		if len(pendingImages) > 0 && !a.skipImages {
 			toolResults = append(toolResults, pendingImages...)
 		}
 

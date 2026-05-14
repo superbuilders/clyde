@@ -1,8 +1,10 @@
 # Design: Ollama Provider Support
 
-**Status:** Draft  
+**Status:** Implemented  
 **Branch:** `design/ollama-support`  
 **Date:** 2025-07-20  
+**Model:** `qwen3.5:35b` (via Ollama)  
+**Binary:** `clyde-qwen` (`cmd/clyde-qwen/main.go`)  
 
 ## Goal
 

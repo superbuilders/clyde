@@ -210,8 +210,9 @@ func (c *OllamaClient) convertUserMessage(msg Message, allMessages []Message, ms
 				_ = toolName
 
 			case "image":
-				// MVP: skip images for Ollama
-				textParts = append(textParts, "[Image content not supported with Ollama provider]")
+				// MVP: skip images for Ollama — the text tool_result
+				// "Image loaded successfully" is sufficient context.
+				// Silently omit rather than inserting confusing placeholder text.
 			}
 		}
 

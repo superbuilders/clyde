@@ -40,7 +40,9 @@ pre-configured for Ollama with qwen3.5:35b.
 
 **MVP limitations (documented in design doc):**
 - No streaming (stream: false)
-- No image support (images logged as warning, omitted)
+- No image support — `skipImages` flag on Agent silently drops image content
+  blocks for non-multimodal providers; Ollama client omits any image blocks
+  that slip through rather than inserting confusing placeholder text
 - No `num_predict` (uses Ollama model defaults)
 - Cache stats always zero (Ollama has no prompt caching)
 
@@ -196,6 +198,51 @@ Three specific sub-bugs:
 the old logical-line math. Existing tests unaffected.
 
 ## Bugs Fixed
+
+### run_bash hangs on backgrounded processes (2025-07-20)
+
+**Problem:** When the model runs a command with `&` (e.g. `python3 -m http.server &`),
+`CombinedOutput()` blocks indefinitely because the backgrounded child inherits
+stdout/stderr pipes, keeping them open even after the parent bash exits. The tool
+call never returns, eventually stalling the entire agent session.
+
+**Fix (`agent/tools/run_bash.go`):**
+- Replaced `CombinedOutput()` with `Start()` + manual `Wait()` in a goroutine
+- Added 120-second timeout via `context.WithTimeout` + `exec.CommandContext`
+- Set `SysProcAttr.Setpgid = true` to put bash and all children in their own
+  process group
+- On timeout, kill the entire process group: `syscall.Kill(-pid, SIGKILL)` —
+  ensures orphaned children from `&` are cleaned up, not just the parent bash
+- Timeout error message explicitly tells the model to use tmux for background
+  processes: includes example `tmux new-session -d -s myserver '<command>'`
+- Tool description updated with tmux guidance and warning against `&`
+
+**Why 120 seconds:** Ollama inference is slow (~0.3 lines/sec for qwen3.5:35b
+at Q4_K_M). Commands that involve waiting for model responses (e.g. nested clyde
+calls) legitimately need this much time. The timeout message is the teaching
+mechanism — models read tool descriptions and error messages, so they self-correct
+after one timeout.
+
+### Image data confuses Ollama / non-multimodal providers (2025-07-20)
+
+**Problem:** Playwright MCP screenshot tool injects base64 PNG data into
+conversation as image content blocks. When sent to qwen3.5:35b (text-only),
+the model produces 100+ line monologues about whether it can see images,
+derailing the task.
+
+**Fix (two layers):**
+1. `agent/agent.go`: Added `skipImages` bool field, set to `true` when
+   `cfg.Provider == "ollama"`. When set, `pendingImages` are silently dropped
+   from tool results instead of being appended to the conversation.
+2. `agent/providers/ollama.go`: Image content blocks that slip through
+   (e.g. from session replay) are silently omitted rather than inserting
+   a confusing `[Image content not supported]` placeholder that itself
+   prompted the model to comment at length about images.
+
+**Design choice:** Config-flag approach (`skipImages`) rather than a provider
+interface method (`SupportsImages() bool`) — simpler, and the flag is set once
+in `New()` based on `cfg.Provider`. Future non-multimodal providers benefit by
+extending the condition.
 
 ### Compaction loop with small Ollama context windows (2025-05-14)
 
