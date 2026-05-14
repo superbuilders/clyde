@@ -7,6 +7,10 @@ all: build
 build:
 	go build -o clyde .
 
+# Build the Ollama/Qwen CLI binary
+build-qwen:
+	go build -o clyde-qwen ./cmd/clyde-qwen
+
 # Run all tests
 test:
 	cd tests && go test ./... -count=1 -timeout 120s
@@ -17,7 +21,7 @@ vet:
 
 # Clean build artifacts
 clean:
-	rm -f clyde
+	rm -f clyde clyde-qwen
 
 # Release a new version
 # Usage: make release VERSION=0.1.0

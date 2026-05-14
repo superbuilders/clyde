@@ -189,7 +189,7 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 
 // testAgent is a wrapper around the actual agent for testing
 type testAgent struct {
-	apiClient *providers.Client
+	apiClient providers.Provider
 	history   []Message
 }
 

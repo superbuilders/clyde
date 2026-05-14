@@ -1,5 +1,6 @@
 # Binaries
 clyde
+clyde-qwen
 audit/audit
 audit-cli
 *.exe

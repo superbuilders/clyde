@@ -33,6 +33,12 @@ type Config struct {
 	ThinkingBudget int
 	// NoThink disables extended thinking entirely when true.
 	NoThink bool
+	// Provider selects the LLM backend: "claude" (default) or "ollama".
+	Provider string
+	// OllamaBaseURL is the Ollama server URL (default "http://localhost:11434").
+	OllamaBaseURL string
+	// OllamaModel is the Ollama model name (e.g. "qwen3.5:35b").
+	OllamaModel string
 	// BraveSearchAPIKey is the optional Brave Search API key for the web_search tool.
 	BraveSearchAPIKey string
 	// MCPPlaywright enables Playwright MCP browser automation when true.
@@ -96,7 +102,7 @@ type ToolUseCallback func(displayMsg string, toolName string, toolUseID string, 
 
 // Agent handles conversation and tool execution
 type Agent struct {
-	apiClient          *providers.Client
+	apiClient          providers.Provider
 	systemPrompt       string
 	history            []providers.Message
 	progressCallback   ProgressCallback
@@ -218,21 +224,30 @@ func WithReserveTokens(tokens int) AgentOption {
 // The caller only needs to import the agent package — no need to import
 // providers, tools, config, or prompts.
 func New(cfg Config, opts ...AgentOption) *Agent {
-	// Create API client
-	client := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+	// Create provider based on config
+	var provider providers.Provider
 
-	// Configure thinking
-	if !cfg.NoThink {
-		thinking := &providers.ThinkingConfig{
-			Type: "adaptive",
-		}
-		if cfg.ThinkingBudget > 0 {
-			thinking = &providers.ThinkingConfig{
-				Type:         "enabled",
-				BudgetTokens: cfg.ThinkingBudget,
+	switch cfg.Provider {
+	case "ollama":
+		think := !cfg.NoThink
+		provider = providers.NewOllamaClient(cfg.OllamaBaseURL, cfg.OllamaModel, think)
+	default: // "claude" or ""
+		client := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
+
+		// Configure thinking
+		if !cfg.NoThink {
+			thinking := &providers.ThinkingConfig{
+				Type: "adaptive",
 			}
+			if cfg.ThinkingBudget > 0 {
+				thinking = &providers.ThinkingConfig{
+					Type:         "enabled",
+					BudgetTokens: cfg.ThinkingBudget,
+				}
+			}
+			client = client.WithThinking(thinking)
 		}
-		client = client.WithThinking(thinking)
+		provider = client
 	}
 
 	// Tool registration is handled by the blank import of agent/tools above,
@@ -245,7 +260,7 @@ func New(cfg Config, opts ...AgentOption) *Agent {
 	}
 
 	a := &Agent{
-		apiClient:                  client,
+		apiClient:                  provider,
 		systemPrompt:               prompts.SystemPrompt,
 		history:                    []providers.Message{},
 		contextWindowSize:          cfg.ContextWindowSize,
@@ -292,7 +307,7 @@ func New(cfg Config, opts ...AgentOption) *Agent {
 // This is a lower-level constructor primarily for tests and advanced library
 // consumers who need full control over the client and prompt. For typical
 // usage, prefer New(cfg, ...opts).
-func NewAgent(apiClient *providers.Client, systemPrompt string, opts ...AgentOption) *Agent {
+func NewAgent(apiClient providers.Provider, systemPrompt string, opts ...AgentOption) *Agent {
 	agent := &Agent{
 		apiClient:    apiClient,
 		systemPrompt: systemPrompt,

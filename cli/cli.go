@@ -69,24 +69,35 @@ func Run() {
 // The CLI owns config file discovery and parsing; it maps the result
 // into the agent's Config struct.
 func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
-	// Check if file exists
-	if _, err := os.Stat(configPath); err != nil {
-		return agent.Config{}, fmt.Errorf("config file '%s' not found: %w", configPath, err)
+	// If config path is provided, load env vars from it
+	if configPath != "" {
+		// Check if file exists
+		if _, err := os.Stat(configPath); err != nil {
+			return agent.Config{}, fmt.Errorf("config file '%s' not found: %w", configPath, err)
+		}
+
+		// Load environment variables from the file
+		if err := godotenv.Load(configPath); err != nil {
+			return agent.Config{}, fmt.Errorf("error loading config file from '%s': %w", configPath, err)
+		}
 	}
 
-	// Load environment variables from the file
-	if err := godotenv.Load(configPath); err != nil {
-		return agent.Config{}, fmt.Errorf("error loading config file from '%s': %w", configPath, err)
-	}
-
-	// Verify required API key is present
+	// Verify required API key is present (only for Claude provider)
+	provider := os.Getenv("PROVIDER")
 	apiKey := os.Getenv("TS_AGENT_API_KEY")
-	if apiKey == "" {
+	if provider != "ollama" && apiKey == "" {
 		return agent.Config{}, fmt.Errorf("TS_AGENT_API_KEY not found in '%s'\n\n"+
 			"Please add this line to your config file:\n"+
 			"  TS_AGENT_API_KEY=your-anthropic-api-key-here\n\n"+
 			"Get your API key from: https://console.anthropic.com/", configPath)
 	}
+
+	// Ollama configuration
+	ollamaBaseURL := os.Getenv("OLLAMA_BASE_URL")
+	if ollamaBaseURL == "" {
+		ollamaBaseURL = "http://localhost:11434"
+	}
+	ollamaModel := os.Getenv("OLLAMA_MODEL")
 
 	// Parse optional thinking budget tokens
 	thinkingBudget := 0
@@ -134,14 +145,28 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		toolResultThreshold = trt
 	}
 
+	// Context window size: default based on provider
+	contextWindowSize := 200000 // Claude Opus 4.6 context window
+	if provider == "ollama" {
+		contextWindowSize = 8192 // Conservative default for Ollama models
+	}
+	if cwsStr := os.Getenv("CONTEXT_WINDOW_SIZE"); cwsStr != "" {
+		if cws, err := strconv.Atoi(cwsStr); err == nil && cws > 0 {
+			contextWindowSize = cws
+		}
+	}
+
 	return agent.Config{
 		APIKey:            apiKey,
 		APIURL:            "https://api.anthropic.com/v1/messages",
 		ModelID:           "claude-opus-4-6",
 		MaxTokens:         64000,
-		ContextWindowSize: 200000, // Claude Opus 4.6 context window
+		ContextWindowSize: contextWindowSize,
 		ThinkingBudget:    thinkingBudget,
 		NoThink:           noThink,
+		Provider:          provider,
+		OllamaBaseURL:     ollamaBaseURL,
+		OllamaModel:       ollamaModel,
 		BraveSearchAPIKey: os.Getenv("BRAVE_SEARCH_API_KEY"),
 		MCPPlaywright:     os.Getenv("MCP_PLAYWRIGHT") == "true",
 		MCPPlaywrightArgs: os.Getenv("MCP_PLAYWRIGHT_ARGS"),
@@ -1079,7 +1104,10 @@ func readPromptFromStdin() (string, error) {
 	return string(content), nil
 }
 
-// getConfigPath determines the config file path for the production app
+// getConfigPath determines the config file path for the production app.
+// For non-Claude providers (e.g. PROVIDER=ollama), the config file is
+// optional — if it doesn't exist, returns empty string and the caller
+// should proceed with environment variables only.
 func getConfigPath() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -1090,6 +1118,10 @@ func getConfigPath() string {
 	configPath := filepath.Join(homeDir, ".clyde", "config")
 
 	if _, err := os.Stat(configPath); err != nil {
+		// Config file missing — OK for Ollama, fatal for Claude
+		if os.Getenv("PROVIDER") == "ollama" {
+			return ""
+		}
 		configDir := filepath.Join(homeDir, ".clyde")
 		fmt.Printf("Configuration file not found: %s\n\n", configPath)
 		fmt.Println("To get started, create a config file:")

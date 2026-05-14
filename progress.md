@@ -2,6 +2,61 @@
 
 ## Features Added
 
+### Ollama Provider Support (2025-05-14)
+
+**What:** Added Ollama as an alternative LLM backend, enabling local model usage
+(e.g. qwen3.5:35b) alongside the existing Claude API. Separate `clyde-qwen` binary
+pre-configured for Ollama with qwen3.5:35b.
+
+**Architecture:**
+- New `Provider` interface in `agent/providers/provider.go` — single method:
+  `Call(systemPrompt, messages, tools) → (*Response, error)`.
+- New `OllamaClient` in `agent/providers/ollama.go` (~300 lines) — translates
+  between Claude-canonical types and Ollama's `/api/chat` wire format.
+- Agent's `apiClient` field changed from `*providers.Client` to `providers.Provider`.
+- `ExecutorFunc` in tool registry changed to accept `providers.Provider`.
+- All 12 tool files + MCP register updated (signature change only).
+- New `cmd/clyde-qwen/main.go` — sets PROVIDER=ollama, OLLAMA_MODEL=qwen3.5:35b
+  as defaults, then delegates to `cli.Run()`.
+- `Makefile` gains `build-qwen` target.
+
+**Config (env vars / ~/.clyde/config):**
+- `PROVIDER=ollama` — selects Ollama backend (default: claude)
+- `OLLAMA_BASE_URL=http://localhost:11434` — Ollama server URL
+- `OLLAMA_MODEL=qwen3.5:35b` — model name
+- `CONTEXT_WINDOW_SIZE=N` — overrides default (200K for Claude, 8192 for Ollama)
+- Config file is optional when PROVIDER=ollama (env vars suffice).
+
+**Translation layer handles:**
+- Messages: Claude content blocks ↔ flat Ollama messages
+- Tool definitions: `input_schema` → `{type: "function", function: {parameters}}`
+- Tool results: Claude `role:user + tool_result` → Ollama `role:tool`
+- Thinking: Ollama `thinking` field → Claude thinking ContentBlock (signature="")
+- Thinking/redacted_thinking blocks stripped from outbound history
+- Synthetic IDs (`ollama_0`, `ollama_1`) for tool_use correlation
+- System prompt: top-level string → prepended system message
+- Usage: `prompt_eval_count`/`eval_count` → InputTokens/OutputTokens
+- Stop reason: presence of tool_calls → "tool_use" vs "end_turn"
+
+**MVP limitations (documented in design doc):**
+- No streaming (stream: false)
+- No image support (images logged as warning, omitted)
+- No `num_predict` (uses Ollama model defaults)
+- Cache stats always zero (Ollama has no prompt caching)
+
+**Tests:** 18 unit tests in `agent/providers/ollama_test.go`:
+- Tool conversion, message conversion (text, tool_use, tool_result, thinking)
+- System prompt prepending, empty system prompt
+- Response normalization (text, thinking, tool calls, synthetic IDs)
+- Synthetic ID round-trip through tool_use → tool_result cycle
+- Mock HTTP server integration (simple call, tool-use loop)
+- Error handling (server error, connection refused)
+- Compile-time Provider interface satisfaction check
+
+**What did NOT change:** Tool registry (tool implementations), system prompt,
+session persistence, compaction, MCP/Playwright, Agent Skills, CLI display,
+input editor. All existing tests pass unchanged.
+
 ### Agent Skills Support (2025-07-20)
 
 **What:** Implemented the open Agent Skills standard (agentskills.io / SKILL.md format)
