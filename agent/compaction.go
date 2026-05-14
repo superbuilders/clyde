@@ -51,6 +51,15 @@ func (a *Agent) ShouldCompact() bool {
 		reserve = DefaultReserveTokens
 	}
 
+	// Safety clamp: reserveTokens must never exceed half the context window,
+	// otherwise the compaction threshold goes negative and every response
+	// triggers compaction (which itself consumes context, creating an
+	// infinite compaction loop).
+	maxReserve := a.contextWindowSize / 2
+	if reserve > maxReserve {
+		reserve = maxReserve
+	}
+
 	threshold := a.contextWindowSize - reserve
 	return totalInput > threshold
 }

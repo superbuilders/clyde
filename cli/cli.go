@@ -148,7 +148,7 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 	// Context window size: default based on provider
 	contextWindowSize := 200000 // Claude Opus 4.6 context window
 	if provider == "ollama" {
-		contextWindowSize = 8192 // Conservative default for Ollama models
+		contextWindowSize = 131072 // Conservative default for Ollama models (many support 128K+)
 	}
 	if cwsStr := os.Getenv("CONTEXT_WINDOW_SIZE"); cwsStr != "" {
 		if cws, err := strconv.Atoi(cwsStr); err == nil && cws > 0 {
