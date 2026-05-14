@@ -35,7 +35,7 @@ var grepTool = providers.Tool{
 	},
 }
 
-func executeGrep(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
+func executeGrep(input map[string]interface{}, apiClient providers.Provider, conversationHistory []providers.Message) (string, error) {
 	pattern, patternOk := input["pattern"].(string)
 	if !patternOk || pattern == "" {
 		return "", fmt.Errorf("pattern is required. Example: grep(\"func main\") or grep(\"TODO\", \"src\", \"*.go\")")

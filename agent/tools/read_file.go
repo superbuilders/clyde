@@ -25,7 +25,7 @@ var readFileTool = providers.Tool{
 	},
 }
 
-func executeReadFile(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
+func executeReadFile(input map[string]interface{}, apiClient providers.Provider, conversationHistory []providers.Message) (string, error) {
 	path, ok := input["path"].(string)
 	if !ok || path == "" {
 		return "", fmt.Errorf("file path is required. Example: read_file(\"main.go\")")

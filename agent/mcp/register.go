@@ -26,7 +26,7 @@ func RegisterPlaywrightTools(server *PlaywrightServer) error {
 		t := tool
 		originalName := StripPrefix(t.Name)
 
-		executor := func(input map[string]interface{}, apiClient *providers.Client, history []providers.Message) (string, error) {
+		executor := func(input map[string]interface{}, apiClient providers.Provider, history []providers.Message) (string, error) {
 			// Lazy-start the server on first tool call
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()

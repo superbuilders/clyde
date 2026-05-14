@@ -50,7 +50,7 @@ type patchInfo struct {
 	NewText string
 }
 
-func executeMultiPatch(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
+func executeMultiPatch(input map[string]interface{}, apiClient providers.Provider, conversationHistory []providers.Message) (string, error) {
 	patches, ok := input["patches"].([]interface{})
 	if !ok || len(patches) == 0 {
 		return "", fmt.Errorf("multi_patch requires at least one patch. Example: {\"patches\": [{\"path\": \"file.go\", \"old_text\": \"...\", \"new_text\": \"...\"}]}")

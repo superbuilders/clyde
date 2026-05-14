@@ -31,7 +31,7 @@ var globTool = providers.Tool{
 	},
 }
 
-func executeGlob(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
+func executeGlob(input map[string]interface{}, apiClient providers.Provider, conversationHistory []providers.Message) (string, error) {
 	pattern, patternOk := input["pattern"].(string)
 	if !patternOk || pattern == "" {
 		return "", fmt.Errorf("pattern is required. Example: glob(\"**/*.go\") or glob(\"*_test.go\", \"src\")")

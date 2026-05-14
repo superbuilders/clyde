@@ -6,7 +6,7 @@ import (
 )
 
 // ExecutorFunc is a function that executes a tool
-type ExecutorFunc func(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error)
+type ExecutorFunc func(input map[string]interface{}, apiClient providers.Provider, conversationHistory []providers.Message) (string, error)
 
 // DisplayFunc is a function that formats a display message for a tool
 type DisplayFunc func(input map[string]interface{}) string

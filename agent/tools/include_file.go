@@ -31,7 +31,7 @@ var includeFileTool = providers.Tool{
 	},
 }
 
-func executeIncludeFile(input map[string]interface{}, apiClient *providers.Client, history []providers.Message) (string, error) {
+func executeIncludeFile(input map[string]interface{}, apiClient providers.Provider, history []providers.Message) (string, error) {
 	path, ok := input["path"].(string)
 	if !ok || path == "" {
 		return "", fmt.Errorf("path is required. Example: include_file(\"./screenshot.png\")")

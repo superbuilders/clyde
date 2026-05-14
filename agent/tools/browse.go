@@ -40,7 +40,7 @@ var browseTool = providers.Tool{
 	},
 }
 
-func executeBrowse(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
+func executeBrowse(input map[string]interface{}, apiClient providers.Provider, conversationHistory []providers.Message) (string, error) {
 	urlStr, urlOk := input["url"].(string)
 	if !urlOk || urlStr == "" {
 		return "", fmt.Errorf("url is required. Example: browse(\"https://example.com\")")

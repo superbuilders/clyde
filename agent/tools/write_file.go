@@ -31,7 +31,7 @@ var writeFileTool = providers.Tool{
 	},
 }
 
-func executeWriteFile(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
+func executeWriteFile(input map[string]interface{}, apiClient providers.Provider, conversationHistory []providers.Message) (string, error) {
 	path, pathOk := input["path"].(string)
 	content, contentOk := input["content"].(string)
 

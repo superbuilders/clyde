@@ -34,7 +34,7 @@ var patchFileTool = providers.Tool{
 	},
 }
 
-func executePatchFile(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
+func executePatchFile(input map[string]interface{}, apiClient providers.Provider, conversationHistory []providers.Message) (string, error) {
 	path, pathOk := input["path"].(string)
 	oldText, oldTextOk := input["old_text"].(string)
 	newText, newTextOk := input["new_text"].(string)

@@ -27,7 +27,7 @@ var listFilesTool = providers.Tool{
 	},
 }
 
-func executeListFiles(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
+func executeListFiles(input map[string]interface{}, apiClient providers.Provider, conversationHistory []providers.Message) (string, error) {
 	path := ""
 	if pathVal, ok := input["path"]; ok && pathVal != nil {
 		path, _ = pathVal.(string)

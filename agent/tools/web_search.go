@@ -36,7 +36,7 @@ var webSearchTool = providers.Tool{
 	},
 }
 
-func executeWebSearch(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
+func executeWebSearch(input map[string]interface{}, apiClient providers.Provider, conversationHistory []providers.Message) (string, error) {
 	query, queryOk := input["query"].(string)
 	if !queryOk || query == "" {
 		return "", fmt.Errorf("query is required. Example: web_search(\"golang http client\")")

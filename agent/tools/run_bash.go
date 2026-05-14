@@ -26,7 +26,7 @@ var runBashTool = providers.Tool{
 	},
 }
 
-func executeRunBash(input map[string]interface{}, apiClient *providers.Client, conversationHistory []providers.Message) (string, error) {
+func executeRunBash(input map[string]interface{}, apiClient providers.Provider, conversationHistory []providers.Message) (string, error) {
 	command, ok := input["command"].(string)
 	if !ok || command == "" {
 		return "", fmt.Errorf("command is required. Example: run_bash(\"ls -la\")")
