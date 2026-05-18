@@ -211,6 +211,12 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 		os.Exit(1)
 	}
 
+	// Prepend working directory context so the model knows where it is.
+	// This prevents the model from writing files to wrong locations.
+	if cwd, err := os.Getwd(); err == nil {
+		userPrompt = fmt.Sprintf("[cwd: %s]\n\n%s", cwd, userPrompt)
+	}
+
 	// Load config and build agent.Config
 	configPath := getConfigPath()
 	cfg, err := loadAgentConfig(configPath, noThink)

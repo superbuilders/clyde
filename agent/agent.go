@@ -564,10 +564,12 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 				resultContent = output
 				isError = false
 
-				// Check for IMAGE_LOADED marker
-				if strings.HasPrefix(output, "IMAGE_LOADED:") {
-					// Parse: IMAGE_LOADED:<media_type>:<size_kb>:<base64_data>
-					parts := strings.SplitN(output, ":", 4)
+				// Check for IMAGE_LOADED marker anywhere in the output.
+				// MCP tools (e.g., Playwright screenshots) may embed the marker
+				// after markdown text, so we search the whole output, not just prefix.
+				if idx := strings.Index(output, "IMAGE_LOADED:"); idx >= 0 {
+					imagePayload := output[idx:]
+					parts := strings.SplitN(imagePayload, ":", 4)
 					if len(parts) == 4 {
 						mediaType := parts[1]
 						sizeKB := parts[2]
@@ -583,15 +585,19 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 							},
 						})
 
-						// Update result content to confirmation message
-						resultContent = fmt.Sprintf("Image loaded successfully (%s, %s KB)", mediaType, sizeKB)
+						// Update result content: keep the text before the marker,
+						// replace the marker+data with a short confirmation.
+						prefix := output[:idx]
+						resultContent = strings.TrimSpace(prefix) +
+							fmt.Sprintf("\nImage loaded successfully (%s, %s KB)", mediaType, sizeKB)
 					}
 				}
 			}
 
 			// Emit tool output body unconditionally (full, untruncated).
 			// The CLI layer handles truncation and display filtering.
-			if resultContent != "" && !strings.HasPrefix(resultContent, "Image loaded") {
+			// Suppress display for image-loaded results (already confirmed inline).
+			if resultContent != "" && !strings.Contains(resultContent, "Image loaded successfully") {
 				if a.outputCallback != nil {
 					a.outputCallback(resultContent, toolBlock.ID)
 				}
@@ -610,6 +616,25 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 		// in the conversation just confuse the model.
 		if len(pendingImages) > 0 && !a.skipImages {
 			toolResults = append(toolResults, pendingImages...)
+		}
+		// When images were captured but skipped, rewrite the "Image loaded
+		// successfully" text result so the model knows it cannot view images
+		// and should rely on browser_snapshot / evaluate instead.
+		if len(pendingImages) > 0 && a.skipImages {
+			for i := range toolResults {
+				if toolResults[i].Type == "tool_result" {
+					if contentStr, ok := toolResults[i].Content.(string); ok &&
+						strings.Contains(contentStr, "Image loaded successfully") {
+						// Replace just the image-loaded part, keep any preceding text
+						cleaned := strings.SplitN(contentStr, "Image loaded successfully", 2)[0]
+						toolResults[i].Content = strings.TrimSpace(cleaned) +
+							"\n[Image captured but not viewable — " +
+							"this provider does not support vision. " +
+							"Use browser_snapshot for DOM state, " +
+							"or page.evaluate('window.gameAPI.getState()') for canvas games.]"
+					}
+				}
+			}
 		}
 
 		// Add tool results to history

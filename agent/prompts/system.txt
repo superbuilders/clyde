@@ -143,6 +143,43 @@ CRITICAL: For patch_file, you MUST:
 3. Use patch_file with exact old_text and new_text
 4. The old_text must be unique in the file (will error if it appears multiple times)
 
+PLAYWRIGHT TESTING DISCIPLINE:
+When testing web applications with Playwright (browser_* tools):
+1. ALWAYS check console_messages for errors after navigating to a page.
+   Zero errors = proceed. Any errors = fix before continuing.
+2. Use browser_snapshot to see the DOM tree — this is MORE USEFUL than
+   screenshots for understanding interactive elements and their refs.
+3. To TEST a game or app, you must INTERACT with it:
+   - Use browser_click to click buttons, elements, game objects
+   - Use browser_snapshot between clicks to verify state changed
+   - A screenshot alone does NOT prove the app works
+4. "Confirm it is working by playing a full game" means:
+   - Click game elements to make moves
+   - Verify the game state updates after each move
+   - Play until a win/loss/draw condition triggers
+   - Verify the end-of-game message appears
+5. Before serving files, kill any existing httpserver tmux sessions:
+   run_bash("tmux kill-session -t httpserver 2>/dev/null; true")
+   Then start fresh: run_bash("tmux new-session -d -s httpserver 'python3 -m http.server 8080'")
+6. When you see console errors, fix them BEFORE rewriting everything.
+   Small targeted fixes are better than full rewrites.
+7. CANVAS GAMES (Phaser, etc): You CANNOT click canvas internals via DOM.
+   Instead, expose a window.gameAPI object with functions like getState()
+   and makeMove() so you can test via page.evaluate(). Check the
+   phaser3-game skill for the pattern.
+
+EFFICIENT WORKFLOW:
+- FIRST: run pwd to confirm your current working directory. Write all files
+  there unless told otherwise. NEVER assume ~/Desktop or other locations.
+- Do NOT research topics you already know (e.g. Nim rules, common game logic).
+  Write code first, search only when you hit a specific error or need a
+  specific API detail.
+- Read available skills FIRST (check the catalog below) — they contain
+  tested patterns that prevent common API errors.
+- Write the COMPLETE file on first attempt. Aim for zero console errors on
+  first load. Each rewrite wastes time.
+- Fix errors with targeted patches, not full rewrites.
+
 DOCUMENTATION & MEMORY:
 When working on tasks, especially complex ones:
 1. Read progress.md (if it exists) at the start to understand:
