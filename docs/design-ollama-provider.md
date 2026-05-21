@@ -1,9 +1,9 @@
 # Design: Ollama Provider Support
 
-**Status:** Implemented  
+**Status:** Implemented (MVP); Phase 2 in progress  
 **Branch:** `design/ollama-support`  
-**Date:** 2025-07-20  
-**Model:** `qwen3.5:35b` (via Ollama)  
+**Date:** 2025-07-20 (MVP), 2025-07-21 (Phase 2)  
+**Model:** `qwen3.6:27b` (via Ollama) — upgraded from `qwen3.5:35b`  
 **Binary:** `clyde-qwen` (`cmd/clyde-qwen/main.go`)  
 
 ## Goal
@@ -451,17 +451,238 @@ for better UX with slow local models.
 
 ---
 
-## Future Work (out of scope for MVP)
+## Phase 2: Closing the Local-Model UX Gap
 
-- **Streaming responses** for better UX with slow local models
+### Context
+
+The MVP Ollama provider works but has significant UX gaps compared to both the
+Claude provider and a reference implementation (`qwlyde` — a minimal single-file
+Ollama coding agent). With local models generating at ~12–25 tok/s (vs ~50–80
+tok/s for the Claude API), these gaps are amplified. Phase 2 addresses the three
+concrete deficiencies identified by comparing the two implementations.
+
+### Default Model Change: `qwen3.5:35b` → `qwen3.6:27b`
+
+The default Ollama model changes from `qwen3.5:35b` (MoE, 35B total / 3B
+active) to `qwen3.6:27b` (dense, 27B). Rationale from verified benchmarks:
+
+| Metric | qwen3.5:35b (old) | qwen3.6:27b (new) | Delta |
+|---|:---:|:---:|:---:|
+| SWE-bench Verified | 69.2 | **77.2** | **+8.0** |
+| Terminal-Bench 2.0 | 40.5 | **59.3** | **+18.8** |
+| GPQA Diamond | 84.2 | **87.8** | **+3.6** |
+| Q4_K_M weight size | 23 GB | **16.8 GB** | **−6.2 GB** |
+| Intelligence tier | ≈ Claude Sonnet 4 | **≈ Claude Sonnet 4.5** | +1 tier |
+
+The 3.6 dense model is smaller, faster (fewer total weights to read), and
+dramatically better at agentic coding. On 48 GB M4 Pro hardware, it leaves
+31 GB free for KV cache and OS — comfortable headroom for long sessions.
+
+**Files to update:**
+- `cmd/clyde-qwen/main.go` — default `OLLAMA_MODEL`
+- `agent/agent.go` — doc comment example
+- `agent/providers/ollama.go` — doc comment example
+- `agent/providers/ollama_test.go` — test model strings
+- `docs/design-ollama-provider.md` — this document
+
+---
+
+### User Stories
+
+#### US-1: Streaming responses (token-by-token output)
+
+**As a** developer using Clyde with a local Ollama model,  
+**I want to** see the assistant's response appear token-by-token as it generates,  
+**so that** I don't stare at a frozen spinner for 30–60 seconds while the model
+produces a response.
+
+**Current behavior:** Clyde's Ollama client sets `stream: false` and waits for
+the complete response before displaying anything. With a 27B model at ~12 t/s,
+a 500-token response means ~40 seconds of spinner before any text appears.
+
+**Desired behavior:** Tokens stream to the terminal as they arrive (identical to
+qwlyde's behavior). The spinner stops as soon as the first token arrives and
+text flows in real-time. Tool calls are collected from the stream and dispatched
+after the response completes.
+
+**Acceptance criteria:**
+- [ ] First token appears on screen within ~1 second of model starting generation
+- [ ] Text tokens display incrementally (no buffering until completion)
+- [ ] Tool calls embedded in the stream are collected and dispatched correctly
+- [ ] Thinking content (if `think: true`) is collected and emitted via the
+      existing `ThinkingCallback` before text tokens display
+- [ ] Claude provider behavior is completely unchanged (still non-streaming)
+- [ ] Session persistence still captures the full final response
+
+**Technical approach:**
+
+Add a `StreamCall` method to the `Provider` interface (or a `StreamingProvider`
+optional interface to avoid breaking Claude):
+
+```go
+// StreamingProvider extends Provider with token-by-token streaming.
+// Providers that don't support streaming simply don't implement it,
+// and the agent falls back to Call().
+type StreamingProvider interface {
+    Provider
+    StreamCall(
+        systemPrompt string,
+        messages []Message,
+        tools []Tool,
+        onToken func(text string),        // called per text token
+        onThinking func(text string),      // called per thinking token
+    ) (*Response, error)
+}
+```
+
+The Ollama client implements `StreamingProvider` using Ollama's NDJSON streaming
+(`stream: true`). Each line is a `chatStreamChunk` with partial content:
+
+```go
+type chatStreamChunk struct {
+    Message struct {
+        Content   string     `json:"content"`
+        Thinking  string     `json:"thinking"`
+        ToolCalls []toolCall `json:"tool_calls,omitempty"`
+    } `json:"message"`
+    Done bool `json:"done"`
+}
+```
+
+The agent loop checks `if sp, ok := a.apiClient.(StreamingProvider); ok` and
+uses `StreamCall` when available. The `onToken` callback wires to the CLI's
+output (replacing the spinner with live text). The final assembled `*Response`
+is identical to what `Call()` would return — all downstream code (history,
+session persistence, compaction) is unaffected.
+
+**Estimated effort:** Medium-high  
+**Files changed:** `providers/provider.go`, `providers/ollama.go`, `agent/agent.go`, `cli/cli.go`
+
+---
+
+#### US-2: Auto-start Ollama and model verification
+
+**As a** developer starting Clyde with `PROVIDER=ollama`,  
+**I want** Clyde to automatically start Ollama if it's not running and verify
+the model is pulled,  
+**so that** I get a working session without manually running `ollama serve` in
+another terminal or debugging cryptic connection errors.
+
+**Current behavior:** If Ollama isn't running, the first API call fails with a
+connection-refused error wrapped in a suggestion to run `ollama serve`. If the
+model isn't pulled, Ollama returns a 404 that surfaces as a generic API error.
+
+**Desired behavior:**
+1. On startup (before the first API call), check if Ollama is reachable
+2. If not, start `ollama serve` as a background process and wait for readiness
+3. Query `/api/tags` to verify the configured model is available
+4. If the model isn't found, print a clear message: `Model "qwen3.6:27b" not
+   found. Run: ollama pull qwen3.6:27b`
+5. All checks complete in <5 seconds when Ollama is already running
+
+**Acceptance criteria:**
+- [ ] `clyde-qwen` works from a cold start (Ollama not running) without manual intervention
+- [ ] Model-not-found produces actionable error with the exact `ollama pull` command
+- [ ] When Ollama is already running, preflight adds <500ms to startup
+- [ ] Preflight timeout is configurable (default 15 seconds)
+- [ ] Claude provider is completely unaffected (no preflight for `PROVIDER=claude`)
+
+**Technical approach:**
+
+Add a `Preflight() error` method to the Ollama client (not on the `Provider`
+interface — this is Ollama-specific lifecycle, not an LLM call):
+
+```go
+func (c *OllamaClient) Preflight() error {
+    // 1. Check connectivity: GET baseURL/
+    // 2. If unreachable, exec "ollama serve" and poll for readiness
+    // 3. Check model: GET baseURL/api/tags, search for c.modelID
+    // 4. Return nil or descriptive error
+}
+```
+
+The agent constructor (`agent.New`) or the CLI startup calls `Preflight()` when
+the provider is Ollama. This is a one-time check, not per-call.
+
+**Estimated effort:** Low  
+**Files changed:** `providers/ollama.go`, `agent/agent.go` or `cli/cli.go`
+
+---
+
+#### US-3: Pass `num_predict` to control output length
+
+**As a** developer using Clyde with a local Ollama model,  
+**I want** the output token limit (`max_tokens`) to be forwarded to Ollama as
+`num_predict`,  
+**so that** the model doesn't generate runaway responses that waste time on
+slow local hardware.
+
+**Current behavior:** Clyde's Ollama client sends no `options` field. Ollama
+uses the model's default `num_predict`, which varies by model and can be
+unlimited. With a model generating at ~12 t/s, a 4000-token rambling response
+takes over 5 minutes.
+
+**Desired behavior:** The configured `MaxTokens` value (currently 64000 for
+Claude, but should have an Ollama-appropriate default) is passed as
+`options.num_predict` in the Ollama request. For local models, a sensible
+default like 4096 tokens prevents runaway generation while allowing substantial
+responses.
+
+**Acceptance criteria:**
+- [ ] Ollama requests include `options.num_predict` set from configuration
+- [ ] Default `num_predict` for Ollama is 4096 (not Claude's 64000)
+- [ ] Configurable via `OLLAMA_NUM_PREDICT` environment variable
+- [ ] Claude provider is unaffected
+
+**Technical approach:**
+
+Add an `options` field to the Ollama request struct:
+
+```go
+type ollamaRequest struct {
+    Model    string           `json:"model"`
+    Messages []ollamaMessage  `json:"messages"`
+    Tools    []ollamaTool     `json:"tools,omitempty"`
+    Stream   bool             `json:"stream"`
+    Think    bool             `json:"think,omitempty"`
+    Options  *ollamaOptions   `json:"options,omitempty"`
+}
+
+type ollamaOptions struct {
+    NumPredict int `json:"num_predict,omitempty"`
+}
+```
+
+The `OllamaClient` stores a `numPredict` field set from config. If non-zero,
+it's included in every request.
+
+**Estimated effort:** Trivial  
+**Files changed:** `providers/ollama.go`, `agent/agent.go`, `cli/cli.go`
+
+---
+
+### Implementation Order
+
+| Priority | Story | Rationale |
+|---|---|---|
+| **1** | Default model → `qwen3.6:27b` | Zero-effort +8 SWE-bench points. Just string changes. |
+| **2** | US-3: `num_predict` | Trivial to implement. Prevents the worst UX issue (runaway generation). |
+| **3** | US-2: Preflight | Low effort. Eliminates the #1 source of "it doesn't work" confusion. |
+| **4** | US-1: Streaming | Highest impact but highest effort. Transforms the UX from "frozen" to "live". |
+
+---
+
+## Future Work (out of scope for Phase 2)
+
 - **Image support** for multimodal Ollama models
-- **Model auto-detection** — query `/api/tags` to validate model exists
 - **Context window auto-detection** — query `/api/show` for model metadata
 - **Ollama-optimized system prompt** — shorter prompt for smaller context windows
 - **Provider-specific compaction** — different phase count or token budgets
   for smaller models
 - **OpenAI-compatible provider** — same interface, different translation
   (most of the Ollama work applies since Ollama's API is OpenAI-influenced)
+- **Batched inference** — for parallel agent workflows on local hardware
+  (requires vLLM/SGLang, not Ollama)
 
 ---
 
