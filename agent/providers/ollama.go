@@ -14,7 +14,7 @@ import (
 // Ollama's /api/chat wire format.
 type OllamaClient struct {
 	baseURL string // e.g. "http://localhost:11434"
-	modelID string // e.g. "qwen3.5:35b"
+	modelID string // e.g. "qwen3.6:27b"
 	think   bool   // enable thinking mode
 }
 

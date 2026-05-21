@@ -201,7 +201,7 @@ func TestConvertMessages_EmptySystemPrompt(t *testing.T) {
 func TestConvertResponse_TextOnly(t *testing.T) {
 	c := NewOllamaClient("http://localhost:11434", "test", false)
 	resp := &ollamaResponse{
-		Model: "qwen3.5:35b",
+		Model: "qwen3.6:27b",
 		Message: ollamaRespMsg{
 			Role:    "assistant",
 			Content: "Hello! How can I help?",
@@ -240,7 +240,7 @@ func TestConvertResponse_TextOnly(t *testing.T) {
 func TestConvertResponse_WithThinking(t *testing.T) {
 	c := NewOllamaClient("http://localhost:11434", "test", true)
 	resp := &ollamaResponse{
-		Model: "qwen3.5:35b",
+		Model: "qwen3.6:27b",
 		Message: ollamaRespMsg{
 			Role:     "assistant",
 			Content:  "The answer is 42.",
@@ -272,7 +272,7 @@ func TestConvertResponse_WithThinking(t *testing.T) {
 func TestConvertResponse_WithToolCalls(t *testing.T) {
 	c := NewOllamaClient("http://localhost:11434", "test", false)
 	resp := &ollamaResponse{
-		Model: "qwen3.5:35b",
+		Model: "qwen3.6:27b",
 		Message: ollamaRespMsg{
 			Role:    "assistant",
 			Content: "",
@@ -382,8 +382,8 @@ func TestOllamaClient_Call_MockServer(t *testing.T) {
 			return
 		}
 
-		if req.Model != "qwen3.5:35b" {
-			t.Errorf("expected model 'qwen3.5:35b', got %q", req.Model)
+		if req.Model != "qwen3.6:27b" {
+			t.Errorf("expected model 'qwen3.6:27b', got %q", req.Model)
 		}
 		if req.Stream {
 			t.Errorf("expected stream=false")
@@ -391,7 +391,7 @@ func TestOllamaClient_Call_MockServer(t *testing.T) {
 
 		// Return a simple text response
 		resp := ollamaResponse{
-			Model: "qwen3.5:35b",
+			Model: "qwen3.6:27b",
 			Message: ollamaRespMsg{
 				Role:    "assistant",
 				Content: "Hello from Ollama!",
@@ -408,7 +408,7 @@ func TestOllamaClient_Call_MockServer(t *testing.T) {
 	defer server.Close()
 
 	// Create client pointing at mock server
-	client := NewOllamaClient(server.URL, "qwen3.5:35b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
 
 	messages := []Message{
 		{Role: "user", Content: "Hello!"},
@@ -447,7 +447,7 @@ func TestOllamaClient_Call_ToolUseLoop(t *testing.T) {
 		if callCount == 1 {
 			// First call: return tool_use
 			resp = ollamaResponse{
-				Model: "qwen3.5:35b",
+				Model: "qwen3.6:27b",
 				Message: ollamaRespMsg{
 					Role: "assistant",
 					ToolCalls: []ollamaToolCall{
@@ -463,7 +463,7 @@ func TestOllamaClient_Call_ToolUseLoop(t *testing.T) {
 		} else {
 			// Second call: return text
 			resp = ollamaResponse{
-				Model: "qwen3.5:35b",
+				Model: "qwen3.6:27b",
 				Message: ollamaRespMsg{
 					Role:    "assistant",
 					Content: "The file contains a main function.",
@@ -478,7 +478,7 @@ func TestOllamaClient_Call_ToolUseLoop(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.5:35b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
 
 	// First call
 	messages := []Message{{Role: "user", Content: "Read main.go"}}

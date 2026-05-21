@@ -37,7 +37,7 @@ type Config struct {
 	Provider string
 	// OllamaBaseURL is the Ollama server URL (default "http://localhost:11434").
 	OllamaBaseURL string
-	// OllamaModel is the Ollama model name (e.g. "qwen3.5:35b").
+	// OllamaModel is the Ollama model name (e.g. "qwen3.6:27b").
 	OllamaModel string
 	// BraveSearchAPIKey is the optional Brave Search API key for the web_search tool.
 	BraveSearchAPIKey string
