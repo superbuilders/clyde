@@ -7,25 +7,202 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // OllamaClient handles communication with an Ollama server.
 // It translates between Claude-canonical types (used by the agent) and
 // Ollama's /api/chat wire format.
 type OllamaClient struct {
-	baseURL string // e.g. "http://localhost:11434"
-	modelID string // e.g. "qwen3.6:27b"
-	think   bool   // enable thinking mode
+	baseURL          string        // e.g. "http://localhost:11434"
+	modelID          string        // e.g. "qwen3.6:27b"
+	think            bool          // enable thinking mode
+	preflightTimeout time.Duration // timeout for Preflight health checks (default 15s)
 }
 
 // NewOllamaClient creates a new Ollama API client.
 func NewOllamaClient(baseURL, modelID string, think bool) *OllamaClient {
 	return &OllamaClient{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		modelID: modelID,
-		think:   think,
+		baseURL:          strings.TrimRight(baseURL, "/"),
+		modelID:          modelID,
+		think:            think,
+		preflightTimeout: 15 * time.Second,
 	}
+}
+
+// WithPreflightTimeout sets the timeout for Preflight health checks.
+// The timeout governs how long Preflight waits for Ollama to start
+// after launching 'ollama serve'. Default is 15 seconds.
+func (c *OllamaClient) WithPreflightTimeout(d time.Duration) *OllamaClient {
+	c.preflightTimeout = d
+	return c
+}
+
+// --- Preflight: auto-start Ollama and verify model ---
+
+// ollamaTagsResponse is the JSON shape of GET /api/tags.
+type ollamaTagsResponse struct {
+	Models []ollamaModelInfo `json:"models"`
+}
+
+// ollamaModelInfo is a single entry in the /api/tags response.
+type ollamaModelInfo struct {
+	Name string `json:"name"`
+}
+
+// Preflight performs startup checks for the Ollama provider:
+//  1. Checks if the Ollama server is reachable.
+//  2. If not, attempts to start 'ollama serve' and waits for readiness.
+//  3. Queries /api/tags to verify the configured model is available.
+//
+// Returns nil on success, or a descriptive error with actionable instructions.
+// This is a one-time check intended to be called before the first API call.
+//
+// When Ollama is already running with the model pulled, Preflight completes
+// in well under 500ms (two HTTP round-trips to localhost).
+func (c *OllamaClient) Preflight() error {
+	// 1. Check connectivity
+	if err := c.checkConnectivity(); err != nil {
+		// 2. Ollama is not reachable — try to auto-start it
+		if startErr := c.startOllamaServe(); startErr != nil {
+			return startErr
+		}
+	}
+
+	// 3. Check that the configured model is available
+	return c.checkModel()
+}
+
+// checkConnectivity performs a quick GET to the Ollama root endpoint.
+// Ollama returns "Ollama is running" with status 200 when healthy.
+func (c *OllamaClient) checkConnectivity() error {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(c.baseURL + "/")
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status %d from Ollama", resp.StatusCode)
+	}
+	return nil
+}
+
+// startOllamaServe attempts to start 'ollama serve' as a background process
+// and polls for readiness. Returns nil once the server is responding, or an
+// error if the binary is not found or the server fails to start within the
+// preflight timeout.
+func (c *OllamaClient) startOllamaServe() error {
+	// Verify the ollama binary exists
+	ollamaPath, err := exec.LookPath("ollama")
+	if err != nil {
+		return fmt.Errorf("Ollama is not running and the 'ollama' binary was not found in PATH.\n\n"+
+			"Install Ollama: https://ollama.com/download\n"+
+			"Then start it:  ollama serve")
+	}
+
+	// Start 'ollama serve' as a detached background process.
+	// Setpgid puts it in its own process group so Ctrl+C on our terminal
+	// doesn't kill it. Stdout/Stderr go to /dev/null to avoid cluttering
+	// the terminal.
+	cmd := exec.Command(ollamaPath, "serve")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err == nil {
+		cmd.Stdout = devNull
+		cmd.Stderr = devNull
+		defer devNull.Close()
+	}
+	cmd.Stdin = nil
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start 'ollama serve': %w\n\n"+
+			"Start it manually:\n  ollama serve", err)
+	}
+
+	// Reap the child asynchronously so it doesn't become a zombie
+	// if it exits while we're still running.
+	go cmd.Wait()
+
+	// Poll for readiness
+	deadline := time.Now().Add(c.preflightTimeout)
+	pollInterval := 250 * time.Millisecond
+	for time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+		if err := c.checkConnectivity(); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("started 'ollama serve' but it did not become ready within %s.\n\n"+
+		"Check Ollama logs or try starting it manually:\n  ollama serve",
+		c.preflightTimeout)
+}
+
+// checkModel queries /api/tags and verifies the configured model is available.
+// If the model is not found, returns an error with the exact 'ollama pull'
+// command and a list of available models.
+func (c *OllamaClient) checkModel() error {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(c.baseURL + "/api/tags")
+	if err != nil {
+		return fmt.Errorf("failed to query Ollama models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read Ollama models response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to query Ollama models (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var tags ollamaTagsResponse
+	if err := json.Unmarshal(body, &tags); err != nil {
+		return fmt.Errorf("failed to parse Ollama models response: %w", err)
+	}
+
+	// Try exact match first
+	for _, model := range tags.Models {
+		if model.Name == c.modelID {
+			return nil
+		}
+	}
+
+	// If the configured model has no tag (no ':'), also try matching with ":latest"
+	if !strings.Contains(c.modelID, ":") {
+		for _, model := range tags.Models {
+			if model.Name == c.modelID+":latest" {
+				return nil
+			}
+		}
+	}
+
+	// Model not found — build a helpful error message
+	var available []string
+	for _, model := range tags.Models {
+		available = append(available, model.Name)
+	}
+
+	msg := fmt.Sprintf("Model %q not found in Ollama.\n\nPull it with:\n  ollama pull %s",
+		c.modelID, c.modelID)
+	if len(available) > 0 {
+		msg += "\n\nAvailable models:\n"
+		for _, name := range available {
+			msg += fmt.Sprintf("  - %s\n", name)
+		}
+	} else {
+		msg += "\n\nNo models are currently pulled. Pull one with:\n  ollama pull " + c.modelID
+	}
+
+	return fmt.Errorf("%s", msg)
 }
 
 // --- Ollama wire-format types (private) ---

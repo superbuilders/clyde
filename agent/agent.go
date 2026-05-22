@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/this-is-alpha-iota/clyde/agent/mcp"
 	"github.com/this-is-alpha-iota/clyde/agent/prompts"
@@ -39,6 +40,9 @@ type Config struct {
 	OllamaBaseURL string
 	// OllamaModel is the Ollama model name (e.g. "qwen3.6:27b").
 	OllamaModel string
+	// OllamaPreflightTimeout is how long Preflight waits for Ollama to start.
+	// 0 uses the default (15 seconds).
+	OllamaPreflightTimeout time.Duration
 	// BraveSearchAPIKey is the optional Brave Search API key for the web_search tool.
 	BraveSearchAPIKey string
 	// MCPPlaywright enables Playwright MCP browser automation when true.
@@ -366,6 +370,27 @@ func (a *Agent) Close() error {
 		return a.mcpServer.Close()
 	}
 	return nil
+}
+
+// RunPreflight performs provider-specific startup checks before creating
+// the agent. For the Ollama provider, this:
+//  1. Checks if the Ollama server is reachable.
+//  2. If not, starts 'ollama serve' automatically and waits for readiness.
+//  3. Verifies the configured model is pulled and available.
+//
+// For the Claude provider (or any non-Ollama provider), this is a no-op.
+//
+// Call this between loadAgentConfig() and New() in the CLI startup path.
+// Returns nil on success, or a descriptive error with actionable instructions.
+func RunPreflight(cfg Config) error {
+	if cfg.Provider != "ollama" {
+		return nil
+	}
+	client := providers.NewOllamaClient(cfg.OllamaBaseURL, cfg.OllamaModel, !cfg.NoThink)
+	if cfg.OllamaPreflightTimeout > 0 {
+		client.WithPreflightTimeout(cfg.OllamaPreflightTimeout)
+	}
+	return client.Preflight()
 }
 
 // SkillsRegistry returns the Agent Skills registry (may be nil if no skills found).

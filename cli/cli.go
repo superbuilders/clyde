@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 
@@ -99,6 +100,19 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 	}
 	ollamaModel := os.Getenv("OLLAMA_MODEL")
 
+	// Parse optional Ollama preflight timeout (default 15s, set by providers)
+	var ollamaPreflightTimeout time.Duration
+	if ptStr := os.Getenv("OLLAMA_PREFLIGHT_TIMEOUT"); ptStr != "" {
+		secs, err := strconv.Atoi(ptStr)
+		if err != nil {
+			return agent.Config{}, fmt.Errorf("OLLAMA_PREFLIGHT_TIMEOUT must be a number (seconds), got %q: %w", ptStr, err)
+		}
+		if secs < 1 {
+			return agent.Config{}, fmt.Errorf("OLLAMA_PREFLIGHT_TIMEOUT must be >= 1 second, got %d", secs)
+		}
+		ollamaPreflightTimeout = time.Duration(secs) * time.Second
+	}
+
 	// Parse optional thinking budget tokens
 	thinkingBudget := 0
 	if budgetStr := os.Getenv("THINKING_BUDGET_TOKENS"); budgetStr != "" {
@@ -167,6 +181,7 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		Provider:          provider,
 		OllamaBaseURL:     ollamaBaseURL,
 		OllamaModel:       ollamaModel,
+		OllamaPreflightTimeout: ollamaPreflightTimeout,
 		BraveSearchAPIKey: os.Getenv("BRAVE_SEARCH_API_KEY"),
 		MCPPlaywright:     os.Getenv("MCP_PLAYWRIGHT") == "true",
 		MCPPlaywrightArgs: os.Getenv("MCP_PLAYWRIGHT_ARGS"),
@@ -221,6 +236,12 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 	configPath := getConfigPath()
 	cfg, err := loadAgentConfig(configPath, noThink)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	// Run provider-specific preflight checks (auto-start Ollama, verify model).
+	if err := agent.RunPreflight(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -373,6 +394,12 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 	cfg, err := loadAgentConfig(configPath, noThink)
 	if err != nil {
 		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	// Run provider-specific preflight checks (auto-start Ollama, verify model).
+	if err := agent.RunPreflight(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
@@ -821,6 +848,12 @@ func runResumeMode(target string, level loglevel.Level, noThink bool) {
 	cfg, err := loadAgentConfig(configPath, noThink)
 	if err != nil {
 		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	// Run provider-specific preflight checks (auto-start Ollama, verify model).
+	if err := agent.RunPreflight(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 

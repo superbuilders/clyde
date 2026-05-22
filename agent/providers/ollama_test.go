@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestConvertToolsToOllama(t *testing.T) {
@@ -1042,6 +1043,383 @@ func TestStreamCall_RequestFormat(t *testing.T) {
 	}
 	if len(capturedReq.Tools) != 1 {
 		t.Errorf("expected 1 tool, got %d", len(capturedReq.Tools))
+	}
+}
+
+// --- Preflight tests ---
+
+func TestPreflight_ServerReachable_ModelFound(t *testing.T) {
+	// Happy path: server is running, model is available.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("Ollama is running"))
+		case "/api/tags":
+			json.NewEncoder(w).Encode(ollamaTagsResponse{
+				Models: []ollamaModelInfo{
+					{Name: "llama3:8b"},
+					{Name: "qwen3.6:27b"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	err := client.Preflight()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestPreflight_ServerReachable_ModelNotFound(t *testing.T) {
+	// Server is running but the configured model is not pulled.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("Ollama is running"))
+		case "/api/tags":
+			json.NewEncoder(w).Encode(ollamaTagsResponse{
+				Models: []ollamaModelInfo{
+					{Name: "llama3:8b"},
+					{Name: "codellama:13b"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	err := client.Preflight()
+	if err == nil {
+		t.Fatal("expected error for model not found")
+	}
+
+	// Error should contain the exact pull command
+	errMsg := err.Error()
+	if !contains(errMsg, "ollama pull qwen3.6:27b") {
+		t.Errorf("expected 'ollama pull qwen3.6:27b' in error, got: %s", errMsg)
+	}
+	// Error should list available models
+	if !contains(errMsg, "llama3:8b") {
+		t.Errorf("expected available model 'llama3:8b' in error, got: %s", errMsg)
+	}
+	if !contains(errMsg, "codellama:13b") {
+		t.Errorf("expected available model 'codellama:13b' in error, got: %s", errMsg)
+	}
+}
+
+func TestPreflight_ServerReachable_NoModels(t *testing.T) {
+	// Server is running but no models are pulled at all.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.WriteHeader(http.StatusOK)
+		case "/api/tags":
+			json.NewEncoder(w).Encode(ollamaTagsResponse{Models: nil})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	err := client.Preflight()
+	if err == nil {
+		t.Fatal("expected error for no models available")
+	}
+	if !contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' in error, got: %s", err.Error())
+	}
+}
+
+func TestPreflight_ServerUnreachable(t *testing.T) {
+	// Server is not running. Auto-start will fail because we're using
+	// a non-standard port. Verifies the error message is helpful.
+	client := NewOllamaClient("http://localhost:1", "test", false)
+	// Use a very short timeout so the test doesn't wait long
+	client.WithPreflightTimeout(100 * time.Millisecond)
+
+	err := client.Preflight()
+	if err == nil {
+		t.Fatal("expected error for unreachable server")
+	}
+	// The error should mention either "not found in PATH" or "not become ready"
+	// or "ollama serve" — it depends on whether the ollama binary exists
+	errMsg := err.Error()
+	if !contains(errMsg, "ollama") {
+		t.Errorf("expected error to mention 'ollama', got: %s", errMsg)
+	}
+}
+
+func TestCheckConnectivity_Reachable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Ollama is running"))
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false)
+	err := client.checkConnectivity()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestCheckConnectivity_Unreachable(t *testing.T) {
+	client := NewOllamaClient("http://localhost:1", "test", false)
+	err := client.checkConnectivity()
+	if err == nil {
+		t.Fatal("expected error for unreachable server")
+	}
+}
+
+func TestCheckConnectivity_NonOKStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false)
+	err := client.checkConnectivity()
+	if err == nil {
+		t.Fatal("expected error for non-OK status")
+	}
+	if !contains(err.Error(), "unexpected status") {
+		t.Errorf("expected 'unexpected status' in error, got: %s", err.Error())
+	}
+}
+
+func TestCheckModel_ExactMatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ollamaTagsResponse{
+			Models: []ollamaModelInfo{
+				{Name: "qwen3.6:27b"},
+				{Name: "llama3:8b"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	err := client.checkModel()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestCheckModel_MatchesLatestTag(t *testing.T) {
+	// When user configures "qwen3.6" (no tag), it should match "qwen3.6:latest".
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ollamaTagsResponse{
+			Models: []ollamaModelInfo{
+				{Name: "qwen3.6:latest"},
+				{Name: "llama3:8b"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "qwen3.6", false)
+	err := client.checkModel()
+	if err != nil {
+		t.Fatalf("expected 'qwen3.6' to match 'qwen3.6:latest', got error: %v", err)
+	}
+}
+
+func TestCheckModel_NoLatestFallbackWhenTagPresent(t *testing.T) {
+	// When user configures "qwen3.6:27b" (has tag), don't try ":latest" fallback.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ollamaTagsResponse{
+			Models: []ollamaModelInfo{
+				{Name: "qwen3.6:latest"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	err := client.checkModel()
+	if err == nil {
+		t.Fatal("expected error — 'qwen3.6:27b' should NOT match 'qwen3.6:latest'")
+	}
+}
+
+func TestCheckModel_NotFound_ShowsAvailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ollamaTagsResponse{
+			Models: []ollamaModelInfo{
+				{Name: "llama3:8b"},
+				{Name: "codellama:13b"},
+				{Name: "mistral:7b"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	err := client.checkModel()
+	if err == nil {
+		t.Fatal("expected error for model not found")
+	}
+
+	errMsg := err.Error()
+	// Should contain the pull command
+	if !contains(errMsg, "ollama pull qwen3.6:27b") {
+		t.Errorf("missing pull command in error: %s", errMsg)
+	}
+	// Should list all available models
+	for _, model := range []string{"llama3:8b", "codellama:13b", "mistral:7b"} {
+		if !contains(errMsg, model) {
+			t.Errorf("missing available model %q in error: %s", model, errMsg)
+		}
+	}
+}
+
+func TestCheckModel_EmptyResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ollamaTagsResponse{Models: nil})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	err := client.checkModel()
+	if err == nil {
+		t.Fatal("expected error for empty model list")
+	}
+	if !contains(err.Error(), "No models are currently pulled") {
+		t.Errorf("expected 'No models are currently pulled' in error, got: %s", err.Error())
+	}
+}
+
+func TestCheckModel_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false)
+	err := client.checkModel()
+	if err == nil {
+		t.Fatal("expected error for server error response")
+	}
+	if !contains(err.Error(), "status 500") {
+		t.Errorf("expected status 500 in error, got: %s", err.Error())
+	}
+}
+
+func TestCheckModel_MalformedJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("not json"))
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false)
+	err := client.checkModel()
+	if err == nil {
+		t.Fatal("expected error for malformed JSON")
+	}
+	if !contains(err.Error(), "failed to parse") {
+		t.Errorf("expected 'failed to parse' in error, got: %s", err.Error())
+	}
+}
+
+func TestWithPreflightTimeout(t *testing.T) {
+	client := NewOllamaClient("http://localhost:11434", "test", false)
+
+	// Default should be 15 seconds
+	if client.preflightTimeout != 15*time.Second {
+		t.Errorf("expected default timeout 15s, got %s", client.preflightTimeout)
+	}
+
+	// WithPreflightTimeout should override
+	client.WithPreflightTimeout(30 * time.Second)
+	if client.preflightTimeout != 30*time.Second {
+		t.Errorf("expected timeout 30s, got %s", client.preflightTimeout)
+	}
+}
+
+func TestPreflight_FastWhenAlreadyRunning(t *testing.T) {
+	// When Ollama is already running, preflight should complete quickly.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.WriteHeader(http.StatusOK)
+		case "/api/tags":
+			json.NewEncoder(w).Encode(ollamaTagsResponse{
+				Models: []ollamaModelInfo{{Name: "qwen3.6:27b"}},
+			})
+		}
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+
+	start := time.Now()
+	err := client.Preflight()
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should complete well under 500ms (typically <10ms with local mock server)
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("preflight took %s, expected <500ms when server is already running", elapsed)
+	}
+}
+
+func TestPreflight_FullIntegration_ToolCallAfterPreflight(t *testing.T) {
+	// Full integration test: preflight succeeds, then a normal API call works.
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.WriteHeader(http.StatusOK)
+		case "/api/tags":
+			json.NewEncoder(w).Encode(ollamaTagsResponse{
+				Models: []ollamaModelInfo{{Name: "qwen3.6:27b"}},
+			})
+		case "/api/chat":
+			callCount++
+			resp := ollamaResponse{
+				Model: "qwen3.6:27b",
+				Message: ollamaRespMsg{
+					Role:    "assistant",
+					Content: "Hello after preflight!",
+				},
+				Done:            true,
+				DoneReason:      "stop",
+				PromptEvalCount: 42,
+				EvalCount:       10,
+			}
+			json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+
+	// Preflight
+	if err := client.Preflight(); err != nil {
+		t.Fatalf("preflight failed: %v", err)
+	}
+
+	// Normal API call
+	resp, err := client.Call("system", []Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("call failed after preflight: %v", err)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "Hello after preflight!" {
+		t.Errorf("unexpected response: %+v", resp.Content)
+	}
+	if callCount != 1 {
+		t.Errorf("expected 1 API call, got %d", callCount)
 	}
 }
 

@@ -40,6 +40,7 @@ pre-configured for Ollama with qwen3.5:35b.
 
 **MVP limitations (documented in design doc):**
 - ~~No streaming (stream: false)~~ → Streaming implemented (Phase 2 US-1)
+- ~~No auto-start / model verification~~ → Preflight implemented (Phase 2 US-2)
 - No image support — `skipImages` flag on Agent silently drops image content
   blocks for non-multimodal providers; Ollama client omits any image blocks
   that slip through rather than inserting confusing placeholder text
@@ -56,6 +57,10 @@ pre-configured for Ollama with qwen3.5:35b.
 - Compile-time Provider and StreamingProvider interface satisfaction checks
 - Streaming: text-only, thinking+text, tool calls, tool-only, nil callbacks,
   empty stream, model fallback, multiple tool calls, request format verification
+- Preflight: connectivity check (reachable, unreachable, non-OK status), model
+  verification (exact match, :latest fallback, no fallback with tag, not found,
+  empty list, server error, malformed JSON), timeout configuration, fast path
+  timing, full integration (preflight → API call)
 
 **What did NOT change:** Tool registry (tool implementations), system prompt,
 session persistence, compaction, MCP/Playwright, Agent Skills, CLI display,
@@ -125,6 +130,74 @@ streaming works in commercial API providers.
 - `TestStreamCall_RequestFormat` — verifies stream=true, model, think, tools
 - `TestStreamingProviderInterfaceSatisfied` — compile-time check
 - `TestClaudeNotStreamingProvider` — Claude does NOT implement streaming
+
+### Ollama Auto-Start & Model Verification — Phase 2 US-2 (2025-07-21)
+
+**What:** Added automatic Ollama server startup and model verification as a
+preflight check. Running `clyde-qwen` from a cold start (Ollama not running)
+now works without manual intervention. Model-not-found errors produce actionable
+messages with the exact `ollama pull` command.
+
+**Architecture:**
+- New `Preflight()` method on `OllamaClient` — three-step check:
+  1. `checkConnectivity()`: GET `baseURL/` to verify server is responding.
+  2. `startOllamaServe()`: If unreachable, `exec.LookPath("ollama")` to find
+     the binary, start `ollama serve` as a detached background process (own
+     process group via `SysProcAttr.Setpgid`, stdout/stderr to `/dev/null`),
+     then poll for readiness at 250ms intervals.
+  3. `checkModel()`: GET `baseURL/api/tags`, search for the configured model.
+     Supports exact match and `:latest` fallback (e.g. `qwen3.6` matches
+     `qwen3.6:latest`). Error lists available models if not found.
+- New `WithPreflightTimeout(d time.Duration)` method for configurable timeout
+  (default 15 seconds).
+- New `RunPreflight(cfg Config) error` exported function in `agent` package —
+  the CLI calls this between `loadAgentConfig()` and `agent.New()`. Creates a
+  temporary `OllamaClient` for the check; no-op for non-Ollama providers.
+- CLI calls `RunPreflight` in all three startup paths: `runCLIMode`,
+  `runREPLMode`, `runResumeMode`.
+
+**Config:**
+- `OllamaPreflightTimeout` field on `agent.Config` (defaults to provider's 15s)
+- `OLLAMA_PREFLIGHT_TIMEOUT` env var in `~/.clyde/config` (integer seconds)
+
+**Key design decisions:**
+- Preflight runs in the CLI layer, not inside `agent.New()`, to avoid changing
+  `New()`'s `*Agent` return signature. The `RunPreflight(cfg)` function keeps
+  the CLI import to just the `agent` package.
+- `ollama serve` is started with `Setpgid: true` so Ctrl+C on the terminal
+  doesn't kill it — Ollama should persist as a server across sessions.
+- Background process reaping via `go cmd.Wait()` prevents zombie processes.
+- Model name matching: exact first, then `name:latest` fallback only when
+  the configured model has no colon (tag). `qwen3.6:27b` will NOT match
+  `qwen3.6:latest`.
+
+**Files changed:**
+- `agent/providers/ollama.go` — added `Preflight()`, `checkConnectivity()`,
+  `startOllamaServe()`, `checkModel()`, `WithPreflightTimeout()`,
+  `preflightTimeout` field, `ollamaTagsResponse`/`ollamaModelInfo` types
+- `agent/agent.go` — added `RunPreflight()` function, `OllamaPreflightTimeout`
+  config field, `time` import
+- `cli/cli.go` — added `RunPreflight` calls in 3 startup paths, added
+  `OLLAMA_PREFLIGHT_TIMEOUT` env var parsing, `time` import
+
+**Tests:** 16 new preflight tests in `agent/providers/ollama_test.go`:
+- `TestPreflight_ServerReachable_ModelFound` — happy path
+- `TestPreflight_ServerReachable_ModelNotFound` — error has pull command + available models
+- `TestPreflight_ServerReachable_NoModels` — empty model list
+- `TestPreflight_ServerUnreachable` — auto-start path (exercises timeout)
+- `TestCheckConnectivity_Reachable` — mock server responds 200
+- `TestCheckConnectivity_Unreachable` — connection refused
+- `TestCheckConnectivity_NonOKStatus` — 500 from server
+- `TestCheckModel_ExactMatch` — direct model name match
+- `TestCheckModel_MatchesLatestTag` — `qwen3.6` matches `qwen3.6:latest`
+- `TestCheckModel_NoLatestFallbackWhenTagPresent` — `qwen3.6:27b` does NOT match `qwen3.6:latest`
+- `TestCheckModel_NotFound_ShowsAvailable` — error lists all available models
+- `TestCheckModel_EmptyResponse` — no models pulled at all
+- `TestCheckModel_ServerError` — /api/tags returns 500
+- `TestCheckModel_MalformedJSON` — /api/tags returns invalid JSON
+- `TestWithPreflightTimeout` — default and overridden timeout values
+- `TestPreflight_FastWhenAlreadyRunning` — <500ms with mock server
+- `TestPreflight_FullIntegration_ToolCallAfterPreflight` — preflight then Call() works
 
 ### Agent Skills Support (2025-07-20)
 
