@@ -629,10 +629,10 @@ default like 4096 tokens prevents runaway generation while allowing substantial
 responses.
 
 **Acceptance criteria:**
-- [ ] Ollama requests include `options.num_predict` set from configuration
-- [ ] Default `num_predict` for Ollama is 4096 (not Claude's 64000)
-- [ ] Configurable via `OLLAMA_NUM_PREDICT` environment variable
-- [ ] Claude provider is unaffected
+- [x] Ollama requests include `options.num_predict` set from configuration
+- [x] Default `num_predict` for Ollama is 4096 (not Claude's 64000)
+- [x] Configurable via `OLLAMA_NUM_PREDICT` environment variable
+- [x] Claude provider is unaffected
 
 **Technical approach:**
 

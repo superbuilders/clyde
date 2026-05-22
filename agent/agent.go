@@ -40,6 +40,9 @@ type Config struct {
 	OllamaBaseURL string
 	// OllamaModel is the Ollama model name (e.g. "qwen3.6:27b").
 	OllamaModel string
+	// OllamaNumPredict is the maximum output tokens for Ollama (options.num_predict).
+	// 0 uses the model default; a sensible value for local models is 4096.
+	OllamaNumPredict int
 	// OllamaPreflightTimeout is how long Preflight waits for Ollama to start.
 	// 0 uses the default (15 seconds).
 	OllamaPreflightTimeout time.Duration
@@ -269,7 +272,7 @@ func New(cfg Config, opts ...AgentOption) *Agent {
 	switch cfg.Provider {
 	case "ollama":
 		think := !cfg.NoThink
-		provider = providers.NewOllamaClient(cfg.OllamaBaseURL, cfg.OllamaModel, think)
+		provider = providers.NewOllamaClient(cfg.OllamaBaseURL, cfg.OllamaModel, think, cfg.OllamaNumPredict)
 	default: // "claude" or ""
 		client := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
 
@@ -386,7 +389,7 @@ func RunPreflight(cfg Config) error {
 	if cfg.Provider != "ollama" {
 		return nil
 	}
-	client := providers.NewOllamaClient(cfg.OllamaBaseURL, cfg.OllamaModel, !cfg.NoThink)
+	client := providers.NewOllamaClient(cfg.OllamaBaseURL, cfg.OllamaModel, !cfg.NoThink, cfg.OllamaNumPredict)
 	if cfg.OllamaPreflightTimeout > 0 {
 		client.WithPreflightTimeout(cfg.OllamaPreflightTimeout)
 	}

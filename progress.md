@@ -44,7 +44,7 @@ pre-configured for Ollama with qwen3.5:35b.
 - No image support — `skipImages` flag on Agent silently drops image content
   blocks for non-multimodal providers; Ollama client omits any image blocks
   that slip through rather than inserting confusing placeholder text
-- No `num_predict` (uses Ollama model defaults)
+- ~~No `num_predict` (uses Ollama model defaults)~~ → num_predict implemented (Phase 2 US-3)
 - Cache stats always zero (Ollama has no prompt caching)
 
 **Tests:** 31 unit tests in `agent/providers/ollama_test.go`:
@@ -198,6 +198,61 @@ messages with the exact `ollama pull` command.
 - `TestWithPreflightTimeout` — default and overridden timeout values
 - `TestPreflight_FastWhenAlreadyRunning` — <500ms with mock server
 - `TestPreflight_FullIntegration_ToolCallAfterPreflight` — preflight then Call() works
+
+### Ollama `num_predict` Output Limit — Phase 2 US-3 (2025-07-21)
+
+**What:** Added `options.num_predict` support to the Ollama provider so the
+configured max output tokens are forwarded to Ollama, preventing runaway
+generation on slow local hardware. Default for `clyde-qwen` is 4096 tokens.
+
+**Architecture:**
+- New `numPredict` field on `OllamaClient`, set via constructor parameter.
+- New `ollamaOptions` struct with `NumPredict` field (JSON: `num_predict`).
+- New `buildOptions()` method returns `*ollamaOptions` if `numPredict > 0`,
+  or `nil` to omit the `options` field entirely from JSON (clean requests
+  when unconfigured).
+- Both `Call()` and `StreamCall()` include `Options: c.buildOptions()` in
+  the request body.
+- `NewOllamaClient` gains a 4th parameter: `numPredict int`.
+
+**Config:**
+- `OllamaNumPredict` field on `agent.Config`
+- `OLLAMA_NUM_PREDICT` env var in `~/.clyde/config` (positive integer)
+- `cmd/clyde-qwen/main.go` sets default `OLLAMA_NUM_PREDICT=4096`
+- Claude provider is completely unaffected (no `options` field in Claude requests)
+
+**Key design decisions:**
+- `numPredict=0` means "omit from request" (use Ollama model default), not
+  "zero tokens." This matches Go's zero-value semantics and keeps backward
+  compatibility.
+- `buildOptions()` returns `nil` (not `&ollamaOptions{}`) when no options are
+  set, leveraging `omitempty` on the JSON tag to keep the request clean.
+- Default of 4096 for `clyde-qwen` is a pragmatic balance: large enough for
+  substantial code generation responses, small enough to prevent the 5-minute
+  runaway-generation problem described in the design doc.
+
+**Files changed:**
+- `agent/providers/ollama.go` — added `numPredict` field, `ollamaOptions` struct,
+  `buildOptions()` method, updated `ollamaRequest` struct, updated `Call()` and
+  `StreamCall()` request building, updated `NewOllamaClient` signature
+- `agent/agent.go` — added `OllamaNumPredict` config field, updated provider
+  construction in `New()` and `RunPreflight()`
+- `cli/cli.go` — added `OLLAMA_NUM_PREDICT` env var parsing with validation
+- `cmd/clyde-qwen/main.go` — added `OLLAMA_NUM_PREDICT=4096` default
+- `agent/providers/ollama_test.go` — updated all 43 existing `NewOllamaClient`
+  calls to 4-arg form, added 10 new US-3 tests
+
+**Tests:** 10 new tests in `agent/providers/ollama_test.go`:
+- `TestBuildOptions_ZeroNumPredict` — returns nil (omit options)
+- `TestBuildOptions_NegativeNumPredict` — returns nil
+- `TestBuildOptions_PositiveNumPredict` — returns populated options
+- `TestNewOllamaClient_NumPredictStored` — constructor stores value
+- `TestCall_NumPredict_IncludedInRequest` — mock server verifies options present
+- `TestCall_NumPredict_OmittedWhenZero` — mock server verifies options absent
+- `TestStreamCall_NumPredict_IncludedInRequest` — streaming includes options
+- `TestStreamCall_NumPredict_OmittedWhenZero` — streaming omits options when 0
+- `TestCall_NumPredict_JSONFormat` — verifies exact `{"options":{"num_predict":N}}`
+- `TestOllamaOptions_JSONOmitEmpty` — verifies omitempty behavior on struct
 
 ### Agent Skills Support (2025-07-20)
 

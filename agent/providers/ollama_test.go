@@ -50,7 +50,7 @@ func TestConvertToolsEmpty(t *testing.T) {
 }
 
 func TestConvertAssistantTextMessage(t *testing.T) {
-	c := NewOllamaClient("http://localhost:11434", "test", false)
+	c := NewOllamaClient("http://localhost:11434", "test", false, 0)
 	msg := Message{Role: "assistant", Content: "hello world"}
 	result := c.convertAssistantMessage(msg)
 
@@ -66,7 +66,7 @@ func TestConvertAssistantTextMessage(t *testing.T) {
 }
 
 func TestConvertAssistantToolUseMessage(t *testing.T) {
-	c := NewOllamaClient("http://localhost:11434", "test", false)
+	c := NewOllamaClient("http://localhost:11434", "test", false, 0)
 	msg := Message{
 		Role: "assistant",
 		Content: []ContentBlock{
@@ -92,7 +92,7 @@ func TestConvertAssistantToolUseMessage(t *testing.T) {
 }
 
 func TestConvertAssistantStripsThinking(t *testing.T) {
-	c := NewOllamaClient("http://localhost:11434", "test", false)
+	c := NewOllamaClient("http://localhost:11434", "test", false, 0)
 	msg := Message{
 		Role: "assistant",
 		Content: []ContentBlock{
@@ -113,7 +113,7 @@ func TestConvertAssistantStripsThinking(t *testing.T) {
 }
 
 func TestConvertUserTextMessage(t *testing.T) {
-	c := NewOllamaClient("http://localhost:11434", "test", false)
+	c := NewOllamaClient("http://localhost:11434", "test", false, 0)
 	msg := Message{Role: "user", Content: "hello"}
 	result := c.convertUserMessage(msg, nil, 0)
 
@@ -129,7 +129,7 @@ func TestConvertUserTextMessage(t *testing.T) {
 }
 
 func TestConvertUserToolResultMessage(t *testing.T) {
-	c := NewOllamaClient("http://localhost:11434", "test", false)
+	c := NewOllamaClient("http://localhost:11434", "test", false, 0)
 
 	// The preceding assistant message with tool_use
 	assistantMsg := Message{
@@ -162,7 +162,7 @@ func TestConvertUserToolResultMessage(t *testing.T) {
 }
 
 func TestConvertMessages_SystemPromptPrepended(t *testing.T) {
-	c := NewOllamaClient("http://localhost:11434", "test", false)
+	c := NewOllamaClient("http://localhost:11434", "test", false, 0)
 	messages := []Message{
 		{Role: "user", Content: "hello"},
 	}
@@ -184,7 +184,7 @@ func TestConvertMessages_SystemPromptPrepended(t *testing.T) {
 }
 
 func TestConvertMessages_EmptySystemPrompt(t *testing.T) {
-	c := NewOllamaClient("http://localhost:11434", "test", false)
+	c := NewOllamaClient("http://localhost:11434", "test", false, 0)
 	messages := []Message{
 		{Role: "user", Content: "hello"},
 	}
@@ -200,7 +200,7 @@ func TestConvertMessages_EmptySystemPrompt(t *testing.T) {
 }
 
 func TestConvertResponse_TextOnly(t *testing.T) {
-	c := NewOllamaClient("http://localhost:11434", "test", false)
+	c := NewOllamaClient("http://localhost:11434", "test", false, 0)
 	resp := &ollamaResponse{
 		Model: "qwen3.6:27b",
 		Message: ollamaRespMsg{
@@ -239,7 +239,7 @@ func TestConvertResponse_TextOnly(t *testing.T) {
 }
 
 func TestConvertResponse_WithThinking(t *testing.T) {
-	c := NewOllamaClient("http://localhost:11434", "test", true)
+	c := NewOllamaClient("http://localhost:11434", "test", true, 0)
 	resp := &ollamaResponse{
 		Model: "qwen3.6:27b",
 		Message: ollamaRespMsg{
@@ -271,7 +271,7 @@ func TestConvertResponse_WithThinking(t *testing.T) {
 }
 
 func TestConvertResponse_WithToolCalls(t *testing.T) {
-	c := NewOllamaClient("http://localhost:11434", "test", false)
+	c := NewOllamaClient("http://localhost:11434", "test", false, 0)
 	resp := &ollamaResponse{
 		Model: "qwen3.6:27b",
 		Message: ollamaRespMsg{
@@ -317,7 +317,7 @@ func TestConvertResponse_WithToolCalls(t *testing.T) {
 func TestSyntheticIDRoundTrip(t *testing.T) {
 	// Verify that synthetic IDs from a tool_use response survive through
 	// tool_result messages and get properly handled on the next call.
-	c := NewOllamaClient("http://localhost:11434", "test", false)
+	c := NewOllamaClient("http://localhost:11434", "test", false, 0)
 
 	// Simulate: Ollama returned a tool call, agent executed it, now building next request.
 	messages := []Message{
@@ -409,7 +409,7 @@ func TestOllamaClient_Call_MockServer(t *testing.T) {
 	defer server.Close()
 
 	// Create client pointing at mock server
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false, 0)
 
 	messages := []Message{
 		{Role: "user", Content: "Hello!"},
@@ -479,7 +479,7 @@ func TestOllamaClient_Call_ToolUseLoop(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false, 0)
 
 	// First call
 	messages := []Message{{Role: "user", Content: "Read main.go"}}
@@ -531,7 +531,7 @@ func TestOllamaClient_Call_ServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "nonexistent", false)
+	client := NewOllamaClient(server.URL, "nonexistent", false, 0)
 	_, err := client.Call("system", []Message{{Role: "user", Content: "hi"}}, nil)
 
 	if err == nil {
@@ -544,7 +544,7 @@ func TestOllamaClient_Call_ServerError(t *testing.T) {
 
 func TestOllamaClient_Call_ConnectionRefused(t *testing.T) {
 	// Point at a port that's not listening
-	client := NewOllamaClient("http://localhost:1", "test", false)
+	client := NewOllamaClient("http://localhost:1", "test", false, 0)
 	_, err := client.Call("system", []Message{{Role: "user", Content: "hi"}}, nil)
 
 	if err == nil {
@@ -609,7 +609,7 @@ func TestStreamCall_TextOnly(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test", false)
+	client := NewOllamaClient(server.URL, "test", false, 0)
 
 	var tokens []string
 	resp, err := client.StreamCall(
@@ -670,7 +670,7 @@ func TestStreamCall_WithThinking(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test", true)
+	client := NewOllamaClient(server.URL, "test", true, 0)
 
 	var thinkTokens []string
 	var textTokens []string
@@ -746,7 +746,7 @@ func TestStreamCall_WithToolCalls(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test", false)
+	client := NewOllamaClient(server.URL, "test", false, 0)
 
 	var textTokens []string
 	resp, err := client.StreamCall(
@@ -814,7 +814,7 @@ func TestStreamCall_ToolCallsOnly(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test", false)
+	client := NewOllamaClient(server.URL, "test", false, 0)
 
 	textCalled := false
 	resp, err := client.StreamCall(
@@ -855,7 +855,7 @@ func TestStreamCall_NilCallbacks(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test", true)
+	client := NewOllamaClient(server.URL, "test", true, 0)
 
 	// Both callbacks nil — should not panic
 	resp, err := client.StreamCall(
@@ -880,7 +880,7 @@ func TestStreamCall_ServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "nonexistent", false)
+	client := NewOllamaClient(server.URL, "nonexistent", false, 0)
 	_, err := client.StreamCall(
 		"system", []Message{{Role: "user", Content: "hi"}}, nil,
 		nil, nil,
@@ -904,7 +904,7 @@ func TestStreamCall_EmptyStream(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test", false)
+	client := NewOllamaClient(server.URL, "test", false, 0)
 
 	textCalled := false
 	resp, err := client.StreamCall(
@@ -938,7 +938,7 @@ func TestStreamCall_ModelFallback(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "my-model", false)
+	client := NewOllamaClient(server.URL, "my-model", false, 0)
 	resp, err := client.StreamCall(
 		"system", []Message{{Role: "user", Content: "hi"}}, nil,
 		nil, nil,
@@ -973,7 +973,7 @@ func TestStreamCall_MultipleToolCalls(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test", false)
+	client := NewOllamaClient(server.URL, "test", false, 0)
 	resp, err := client.StreamCall(
 		"system", []Message{{Role: "user", Content: "read both"}}, nil,
 		nil, nil,
@@ -995,7 +995,7 @@ func TestStreamCall_MultipleToolCalls(t *testing.T) {
 }
 
 func TestStreamCall_ConnectionRefused(t *testing.T) {
-	client := NewOllamaClient("http://localhost:1", "test", false)
+	client := NewOllamaClient("http://localhost:1", "test", false, 0)
 	_, err := client.StreamCall(
 		"system", []Message{{Role: "user", Content: "hi"}}, nil,
 		nil, nil,
@@ -1021,7 +1021,7 @@ func TestStreamCall_RequestFormat(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", true)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", true, 0)
 	client.StreamCall(
 		"You are helpful.",
 		[]Message{{Role: "user", Content: "hello"}},
@@ -1068,7 +1068,7 @@ func TestPreflight_ServerReachable_ModelFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false, 0)
 	err := client.Preflight()
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -1095,7 +1095,7 @@ func TestPreflight_ServerReachable_ModelNotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false, 0)
 	err := client.Preflight()
 	if err == nil {
 		t.Fatal("expected error for model not found")
@@ -1129,7 +1129,7 @@ func TestPreflight_ServerReachable_NoModels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false, 0)
 	err := client.Preflight()
 	if err == nil {
 		t.Fatal("expected error for no models available")
@@ -1142,7 +1142,7 @@ func TestPreflight_ServerReachable_NoModels(t *testing.T) {
 func TestPreflight_ServerUnreachable(t *testing.T) {
 	// Server is not running. Auto-start will fail because we're using
 	// a non-standard port. Verifies the error message is helpful.
-	client := NewOllamaClient("http://localhost:1", "test", false)
+	client := NewOllamaClient("http://localhost:1", "test", false, 0)
 	// Use a very short timeout so the test doesn't wait long
 	client.WithPreflightTimeout(100 * time.Millisecond)
 
@@ -1165,7 +1165,7 @@ func TestCheckConnectivity_Reachable(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test", false)
+	client := NewOllamaClient(server.URL, "test", false, 0)
 	err := client.checkConnectivity()
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -1173,7 +1173,7 @@ func TestCheckConnectivity_Reachable(t *testing.T) {
 }
 
 func TestCheckConnectivity_Unreachable(t *testing.T) {
-	client := NewOllamaClient("http://localhost:1", "test", false)
+	client := NewOllamaClient("http://localhost:1", "test", false, 0)
 	err := client.checkConnectivity()
 	if err == nil {
 		t.Fatal("expected error for unreachable server")
@@ -1186,7 +1186,7 @@ func TestCheckConnectivity_NonOKStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test", false)
+	client := NewOllamaClient(server.URL, "test", false, 0)
 	err := client.checkConnectivity()
 	if err == nil {
 		t.Fatal("expected error for non-OK status")
@@ -1207,7 +1207,7 @@ func TestCheckModel_ExactMatch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false, 0)
 	err := client.checkModel()
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -1226,7 +1226,7 @@ func TestCheckModel_MatchesLatestTag(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6", false)
+	client := NewOllamaClient(server.URL, "qwen3.6", false, 0)
 	err := client.checkModel()
 	if err != nil {
 		t.Fatalf("expected 'qwen3.6' to match 'qwen3.6:latest', got error: %v", err)
@@ -1244,7 +1244,7 @@ func TestCheckModel_NoLatestFallbackWhenTagPresent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false, 0)
 	err := client.checkModel()
 	if err == nil {
 		t.Fatal("expected error — 'qwen3.6:27b' should NOT match 'qwen3.6:latest'")
@@ -1263,7 +1263,7 @@ func TestCheckModel_NotFound_ShowsAvailable(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false, 0)
 	err := client.checkModel()
 	if err == nil {
 		t.Fatal("expected error for model not found")
@@ -1288,7 +1288,7 @@ func TestCheckModel_EmptyResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false, 0)
 	err := client.checkModel()
 	if err == nil {
 		t.Fatal("expected error for empty model list")
@@ -1304,7 +1304,7 @@ func TestCheckModel_ServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test", false)
+	client := NewOllamaClient(server.URL, "test", false, 0)
 	err := client.checkModel()
 	if err == nil {
 		t.Fatal("expected error for server error response")
@@ -1320,7 +1320,7 @@ func TestCheckModel_MalformedJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test", false)
+	client := NewOllamaClient(server.URL, "test", false, 0)
 	err := client.checkModel()
 	if err == nil {
 		t.Fatal("expected error for malformed JSON")
@@ -1331,7 +1331,7 @@ func TestCheckModel_MalformedJSON(t *testing.T) {
 }
 
 func TestWithPreflightTimeout(t *testing.T) {
-	client := NewOllamaClient("http://localhost:11434", "test", false)
+	client := NewOllamaClient("http://localhost:11434", "test", false, 0)
 
 	// Default should be 15 seconds
 	if client.preflightTimeout != 15*time.Second {
@@ -1359,7 +1359,7 @@ func TestPreflight_FastWhenAlreadyRunning(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false, 0)
 
 	start := time.Now()
 	err := client.Preflight()
@@ -1403,7 +1403,7 @@ func TestPreflight_FullIntegration_ToolCallAfterPreflight(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "qwen3.6:27b", false)
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", false, 0)
 
 	// Preflight
 	if err := client.Preflight(); err != nil {
@@ -1420,6 +1420,208 @@ func TestPreflight_FullIntegration_ToolCallAfterPreflight(t *testing.T) {
 	}
 	if callCount != 1 {
 		t.Errorf("expected 1 API call, got %d", callCount)
+	}
+}
+
+// --- num_predict / options tests (US-3) ---
+
+func TestBuildOptions_ZeroNumPredict(t *testing.T) {
+	// When numPredict is 0, buildOptions should return nil (omit options from JSON).
+	client := NewOllamaClient("http://localhost:11434", "test", false, 0)
+	opts := client.buildOptions()
+	if opts != nil {
+		t.Errorf("expected nil options for numPredict=0, got %+v", opts)
+	}
+}
+
+func TestBuildOptions_NegativeNumPredict(t *testing.T) {
+	// Negative values should also return nil (treated as "not set").
+	client := NewOllamaClient("http://localhost:11434", "test", false, -1)
+	opts := client.buildOptions()
+	if opts != nil {
+		t.Errorf("expected nil options for numPredict=-1, got %+v", opts)
+	}
+}
+
+func TestBuildOptions_PositiveNumPredict(t *testing.T) {
+	// When numPredict is positive, buildOptions should return options with num_predict set.
+	client := NewOllamaClient("http://localhost:11434", "test", false, 4096)
+	opts := client.buildOptions()
+	if opts == nil {
+		t.Fatal("expected non-nil options for numPredict=4096")
+	}
+	if opts.NumPredict != 4096 {
+		t.Errorf("expected num_predict=4096, got %d", opts.NumPredict)
+	}
+}
+
+func TestNewOllamaClient_NumPredictStored(t *testing.T) {
+	client := NewOllamaClient("http://localhost:11434", "test", false, 8192)
+	if client.numPredict != 8192 {
+		t.Errorf("expected numPredict=8192, got %d", client.numPredict)
+	}
+}
+
+func TestCall_NumPredict_IncludedInRequest(t *testing.T) {
+	// Verify that when numPredict > 0, the request JSON includes options.num_predict.
+	var capturedReq ollamaRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedReq)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ollamaResponse{
+			Model:   "test",
+			Message: ollamaRespMsg{Role: "assistant", Content: "ok"},
+			Done:    true,
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false, 4096)
+	client.Call("system", []Message{{Role: "user", Content: "hi"}}, nil)
+
+	if capturedReq.Options == nil {
+		t.Fatal("expected options to be set in request when numPredict=4096")
+	}
+	if capturedReq.Options.NumPredict != 4096 {
+		t.Errorf("expected num_predict=4096 in request, got %d", capturedReq.Options.NumPredict)
+	}
+}
+
+func TestCall_NumPredict_OmittedWhenZero(t *testing.T) {
+	// Verify that when numPredict is 0, the request JSON does NOT include options.
+	var capturedBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ollamaResponse{
+			Model:   "test",
+			Message: ollamaRespMsg{Role: "assistant", Content: "ok"},
+			Done:    true,
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false, 0)
+	client.Call("system", []Message{{Role: "user", Content: "hi"}}, nil)
+
+	if _, exists := capturedBody["options"]; exists {
+		t.Errorf("expected options to be omitted when numPredict=0, but found: %v", capturedBody["options"])
+	}
+}
+
+func TestStreamCall_NumPredict_IncludedInRequest(t *testing.T) {
+	// Verify that StreamCall also includes options.num_predict when configured.
+	var capturedReq ollamaRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedReq)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeStreamChunks(w, []ollamaResponse{
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Content: "ok"}, Done: true, DoneReason: "stop"},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false, 2048)
+	client.StreamCall(
+		"system", []Message{{Role: "user", Content: "hi"}}, nil,
+		nil, nil,
+	)
+
+	if capturedReq.Options == nil {
+		t.Fatal("expected options to be set in streaming request when numPredict=2048")
+	}
+	if capturedReq.Options.NumPredict != 2048 {
+		t.Errorf("expected num_predict=2048 in streaming request, got %d", capturedReq.Options.NumPredict)
+	}
+}
+
+func TestStreamCall_NumPredict_OmittedWhenZero(t *testing.T) {
+	// Verify that StreamCall omits options when numPredict is 0.
+	var capturedBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeStreamChunks(w, []ollamaResponse{
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Content: "ok"}, Done: true, DoneReason: "stop"},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false, 0)
+	client.StreamCall(
+		"system", []Message{{Role: "user", Content: "hi"}}, nil,
+		nil, nil,
+	)
+
+	if _, exists := capturedBody["options"]; exists {
+		t.Errorf("expected options to be omitted in streaming request when numPredict=0, but found: %v", capturedBody["options"])
+	}
+}
+
+func TestCall_NumPredict_JSONFormat(t *testing.T) {
+	// Verify the exact JSON structure: {"options": {"num_predict": N}}
+	var rawBody json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&rawBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ollamaResponse{
+			Model:   "test",
+			Message: ollamaRespMsg{Role: "assistant", Content: "ok"},
+			Done:    true,
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false, 4096)
+	client.Call("system", []Message{{Role: "user", Content: "hi"}}, nil)
+
+	// Parse the raw body and check the options structure
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rawBody, &body); err != nil {
+		t.Fatalf("failed to unmarshal request body: %v", err)
+	}
+
+	optionsRaw, ok := body["options"]
+	if !ok {
+		t.Fatal("expected 'options' field in request body")
+	}
+
+	var options map[string]interface{}
+	if err := json.Unmarshal(optionsRaw, &options); err != nil {
+		t.Fatalf("failed to unmarshal options: %v", err)
+	}
+
+	numPredict, ok := options["num_predict"]
+	if !ok {
+		t.Fatal("expected 'num_predict' field in options")
+	}
+	// JSON numbers are float64
+	if numPredict.(float64) != 4096 {
+		t.Errorf("expected num_predict=4096, got %v", numPredict)
+	}
+}
+
+func TestOllamaOptions_JSONOmitEmpty(t *testing.T) {
+	// Verify that ollamaOptions with zero NumPredict produces empty JSON object
+	// (num_predict uses omitempty so zero value is omitted).
+	opts := ollamaOptions{NumPredict: 0}
+	data, err := json.Marshal(opts)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	if string(data) != "{}" {
+		t.Errorf("expected {} for zero-value options, got %s", string(data))
+	}
+
+	// With a value, it should appear
+	opts = ollamaOptions{NumPredict: 4096}
+	data, err = json.Marshal(opts)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	expected := `{"num_predict":4096}`
+	if string(data) != expected {
+		t.Errorf("expected %s, got %s", expected, string(data))
 	}
 }
 

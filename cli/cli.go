@@ -100,6 +100,19 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 	}
 	ollamaModel := os.Getenv("OLLAMA_MODEL")
 
+	// Parse optional Ollama num_predict (max output tokens)
+	ollamaNumPredict := 0
+	if npStr := os.Getenv("OLLAMA_NUM_PREDICT"); npStr != "" {
+		np, err := strconv.Atoi(npStr)
+		if err != nil {
+			return agent.Config{}, fmt.Errorf("OLLAMA_NUM_PREDICT must be a number, got %q: %w", npStr, err)
+		}
+		if np < 1 {
+			return agent.Config{}, fmt.Errorf("OLLAMA_NUM_PREDICT must be >= 1, got %d", np)
+		}
+		ollamaNumPredict = np
+	}
+
 	// Parse optional Ollama preflight timeout (default 15s, set by providers)
 	var ollamaPreflightTimeout time.Duration
 	if ptStr := os.Getenv("OLLAMA_PREFLIGHT_TIMEOUT"); ptStr != "" {
@@ -181,6 +194,7 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		Provider:          provider,
 		OllamaBaseURL:     ollamaBaseURL,
 		OllamaModel:       ollamaModel,
+		OllamaNumPredict:  ollamaNumPredict,
 		OllamaPreflightTimeout: ollamaPreflightTimeout,
 		BraveSearchAPIKey: os.Getenv("BRAVE_SEARCH_API_KEY"),
 		MCPPlaywright:     os.Getenv("MCP_PLAYWRIGHT") == "true",

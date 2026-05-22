@@ -21,15 +21,20 @@ type OllamaClient struct {
 	baseURL          string        // e.g. "http://localhost:11434"
 	modelID          string        // e.g. "qwen3.6:27b"
 	think            bool          // enable thinking mode
+	numPredict       int           // max output tokens (0 = use model default)
 	preflightTimeout time.Duration // timeout for Preflight health checks (default 15s)
 }
 
 // NewOllamaClient creates a new Ollama API client.
-func NewOllamaClient(baseURL, modelID string, think bool) *OllamaClient {
+// numPredict sets the maximum output tokens (options.num_predict in the Ollama
+// request). Use 0 to omit the option and let Ollama use the model's default.
+// A sensible default for local models is 4096.
+func NewOllamaClient(baseURL, modelID string, think bool, numPredict int) *OllamaClient {
 	return &OllamaClient{
 		baseURL:          strings.TrimRight(baseURL, "/"),
 		modelID:          modelID,
 		think:            think,
+		numPredict:       numPredict,
 		preflightTimeout: 15 * time.Second,
 	}
 }
@@ -213,6 +218,13 @@ type ollamaRequest struct {
 	Tools    []ollamaTool     `json:"tools,omitempty"`
 	Stream   bool             `json:"stream"`
 	Think    bool             `json:"think,omitempty"`
+	Options  *ollamaOptions   `json:"options,omitempty"`
+}
+
+// ollamaOptions holds Ollama runtime options passed in the request.
+// See https://github.com/ollama/ollama/blob/main/docs/modelfile.md#valid-parameters-and-values
+type ollamaOptions struct {
+	NumPredict int `json:"num_predict,omitempty"`
 }
 
 type ollamaMessage struct {
@@ -283,6 +295,7 @@ func (c *OllamaClient) Call(
 		Tools:    ollamaTools,
 		Stream:   false,
 		Think:    c.think,
+		Options:  c.buildOptions(),
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -559,6 +572,18 @@ func convertTools(tools []Tool) []ollamaTool {
 	return result
 }
 
+// buildOptions returns an ollamaOptions pointer if any options are configured,
+// or nil if all options are at their zero/default values. Returning nil causes
+// the "options" field to be omitted from the JSON request entirely.
+func (c *OllamaClient) buildOptions() *ollamaOptions {
+	if c.numPredict <= 0 {
+		return nil
+	}
+	return &ollamaOptions{
+		NumPredict: c.numPredict,
+	}
+}
+
 // convertResponse translates an Ollama response to Claude-canonical format.
 func (c *OllamaClient) convertResponse(resp *ollamaResponse) *Response {
 	var content []ContentBlock
@@ -640,6 +665,7 @@ func (c *OllamaClient) StreamCall(
 		Tools:    ollamaTools,
 		Stream:   true,
 		Think:    c.think,
+		Options:  c.buildOptions(),
 	}
 
 	jsonData, err := json.Marshal(reqBody)
