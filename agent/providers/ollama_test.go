@@ -560,6 +560,491 @@ func TestProviderInterfaceSatisfied(t *testing.T) {
 	var _ Provider = (*OllamaClient)(nil)
 }
 
+func TestStreamingProviderInterfaceSatisfied(t *testing.T) {
+	// Compile-time check that OllamaClient satisfies StreamingProvider
+	var _ StreamingProvider = (*OllamaClient)(nil)
+}
+
+func TestClaudeNotStreamingProvider(t *testing.T) {
+	// Claude client should NOT implement StreamingProvider
+	var c Provider = &Client{}
+	_, ok := c.(StreamingProvider)
+	if ok {
+		t.Error("Claude client should not implement StreamingProvider")
+	}
+}
+
+// --- Streaming tests ---
+
+// writeStreamChunks writes NDJSON chunks to a ResponseWriter, flushing between each.
+func writeStreamChunks(w http.ResponseWriter, chunks []ollamaResponse) {
+	flusher, _ := w.(http.Flusher)
+	for _, chunk := range chunks {
+		data, _ := json.Marshal(chunk)
+		w.Write(data)
+		w.Write([]byte("\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+}
+
+func TestStreamCall_TextOnly(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request has stream=true
+		var req ollamaRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		if !req.Stream {
+			t.Errorf("expected stream=true, got stream=false")
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeStreamChunks(w, []ollamaResponse{
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Content: "Hello"}, Done: false},
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Content: " world"}, Done: false},
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Content: "!"}, Done: false},
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Content: ""}, Done: true, DoneReason: "stop", PromptEvalCount: 100, EvalCount: 3},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false)
+
+	var tokens []string
+	resp, err := client.StreamCall(
+		"system", []Message{{Role: "user", Content: "hi"}}, nil,
+		func(text string) { tokens = append(tokens, text) },
+		nil,
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify tokens were emitted incrementally
+	expected := []string{"Hello", " world", "!"}
+	if len(tokens) != len(expected) {
+		t.Fatalf("expected %d text tokens, got %d: %v", len(expected), len(tokens), tokens)
+	}
+	for i, tok := range tokens {
+		if tok != expected[i] {
+			t.Errorf("token %d: expected %q, got %q", i, expected[i], tok)
+		}
+	}
+
+	// Verify assembled response matches what Call() would return
+	if len(resp.Content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(resp.Content))
+	}
+	if resp.Content[0].Type != "text" {
+		t.Errorf("expected type 'text', got %q", resp.Content[0].Type)
+	}
+	if resp.Content[0].Text != "Hello world!" {
+		t.Errorf("expected assembled text 'Hello world!', got %q", resp.Content[0].Text)
+	}
+	if resp.StopReason != "end_turn" {
+		t.Errorf("expected stop_reason 'end_turn', got %q", resp.StopReason)
+	}
+	if resp.Usage.InputTokens != 100 {
+		t.Errorf("expected input tokens 100, got %d", resp.Usage.InputTokens)
+	}
+	if resp.Usage.OutputTokens != 3 {
+		t.Errorf("expected output tokens 3, got %d", resp.Usage.OutputTokens)
+	}
+	if resp.Role != "assistant" {
+		t.Errorf("expected role 'assistant', got %q", resp.Role)
+	}
+}
+
+func TestStreamCall_WithThinking(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeStreamChunks(w, []ollamaResponse{
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Thinking: "Let me"}, Done: false},
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Thinking: " think..."}, Done: false},
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Content: "The answer"}, Done: false},
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Content: " is 42."}, Done: false},
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant"}, Done: true, DoneReason: "stop", PromptEvalCount: 50, EvalCount: 10},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", true)
+
+	var thinkTokens []string
+	var textTokens []string
+	resp, err := client.StreamCall(
+		"system", []Message{{Role: "user", Content: "what is the meaning?"}}, nil,
+		func(text string) { textTokens = append(textTokens, text) },
+		func(thinking string) { thinkTokens = append(thinkTokens, thinking) },
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify thinking tokens
+	if len(thinkTokens) != 2 {
+		t.Fatalf("expected 2 thinking tokens, got %d: %v", len(thinkTokens), thinkTokens)
+	}
+	if thinkTokens[0] != "Let me" || thinkTokens[1] != " think..." {
+		t.Errorf("unexpected thinking tokens: %v", thinkTokens)
+	}
+
+	// Verify text tokens
+	if len(textTokens) != 2 {
+		t.Fatalf("expected 2 text tokens, got %d: %v", len(textTokens), textTokens)
+	}
+	if textTokens[0] != "The answer" || textTokens[1] != " is 42." {
+		t.Errorf("unexpected text tokens: %v", textTokens)
+	}
+
+	// Verify assembled response has both thinking and text blocks
+	if len(resp.Content) != 2 {
+		t.Fatalf("expected 2 content blocks (thinking + text), got %d", len(resp.Content))
+	}
+	if resp.Content[0].Type != "thinking" {
+		t.Errorf("expected first block type 'thinking', got %q", resp.Content[0].Type)
+	}
+	if resp.Content[0].Thinking != "Let me think..." {
+		t.Errorf("expected thinking 'Let me think...', got %q", resp.Content[0].Thinking)
+	}
+	if resp.Content[0].Signature != "" {
+		t.Errorf("expected empty signature, got %q", resp.Content[0].Signature)
+	}
+	if resp.Content[1].Type != "text" {
+		t.Errorf("expected second block type 'text', got %q", resp.Content[1].Type)
+	}
+	if resp.Content[1].Text != "The answer is 42." {
+		t.Errorf("expected text 'The answer is 42.', got %q", resp.Content[1].Text)
+	}
+}
+
+func TestStreamCall_WithToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeStreamChunks(w, []ollamaResponse{
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Content: "Let me read that."}, Done: false},
+			{
+				Model: "test",
+				Message: ollamaRespMsg{
+					Role: "assistant",
+					ToolCalls: []ollamaToolCall{
+						{Function: ollamaFunctionCall{
+							Name:      "read_file",
+							Arguments: map[string]interface{}{"path": "main.go"},
+						}},
+					},
+				},
+				Done:            true,
+				DoneReason:      "stop",
+				PromptEvalCount: 50,
+				EvalCount:       10,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false)
+
+	var textTokens []string
+	resp, err := client.StreamCall(
+		"system", []Message{{Role: "user", Content: "read main.go"}},
+		[]Tool{{Name: "read_file", Description: "Read a file"}},
+		func(text string) { textTokens = append(textTokens, text) },
+		nil,
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify text was streamed
+	if len(textTokens) != 1 || textTokens[0] != "Let me read that." {
+		t.Errorf("expected text token 'Let me read that.', got %v", textTokens)
+	}
+
+	// Verify response has text + tool_use
+	if resp.StopReason != "tool_use" {
+		t.Errorf("expected stop_reason 'tool_use', got %q", resp.StopReason)
+	}
+	if len(resp.Content) != 2 {
+		t.Fatalf("expected 2 content blocks (text + tool_use), got %d", len(resp.Content))
+	}
+	if resp.Content[0].Type != "text" {
+		t.Errorf("expected first block type 'text', got %q", resp.Content[0].Type)
+	}
+	if resp.Content[0].Text != "Let me read that." {
+		t.Errorf("expected text 'Let me read that.', got %q", resp.Content[0].Text)
+	}
+	if resp.Content[1].Type != "tool_use" {
+		t.Errorf("expected second block type 'tool_use', got %q", resp.Content[1].Type)
+	}
+	if resp.Content[1].ID != "ollama_0" {
+		t.Errorf("expected synthetic ID 'ollama_0', got %q", resp.Content[1].ID)
+	}
+	if resp.Content[1].Name != "read_file" {
+		t.Errorf("expected tool name 'read_file', got %q", resp.Content[1].Name)
+	}
+}
+
+func TestStreamCall_ToolCallsOnly(t *testing.T) {
+	// Test: model produces only tool calls, no text content
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeStreamChunks(w, []ollamaResponse{
+			{
+				Model: "test",
+				Message: ollamaRespMsg{
+					Role: "assistant",
+					ToolCalls: []ollamaToolCall{
+						{Function: ollamaFunctionCall{
+							Name:      "list_files",
+							Arguments: map[string]interface{}{"path": "."},
+						}},
+					},
+				},
+				Done:            true,
+				DoneReason:      "stop",
+				PromptEvalCount: 30,
+				EvalCount:       5,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false)
+
+	textCalled := false
+	resp, err := client.StreamCall(
+		"system", []Message{{Role: "user", Content: "list files"}},
+		[]Tool{{Name: "list_files", Description: "List files"}},
+		func(text string) { textCalled = true },
+		nil,
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if textCalled {
+		t.Error("onText should not have been called for tool-only response")
+	}
+
+	if resp.StopReason != "tool_use" {
+		t.Errorf("expected stop_reason 'tool_use', got %q", resp.StopReason)
+	}
+	if len(resp.Content) != 1 {
+		t.Fatalf("expected 1 content block (tool_use), got %d", len(resp.Content))
+	}
+	if resp.Content[0].Type != "tool_use" {
+		t.Errorf("expected type 'tool_use', got %q", resp.Content[0].Type)
+	}
+}
+
+func TestStreamCall_NilCallbacks(t *testing.T) {
+	// Test: nil callbacks don't cause panics
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeStreamChunks(w, []ollamaResponse{
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Thinking: "hmm"}, Done: false},
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Content: "ok"}, Done: false},
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant"}, Done: true, DoneReason: "stop", PromptEvalCount: 10, EvalCount: 2},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", true)
+
+	// Both callbacks nil — should not panic
+	resp, err := client.StreamCall(
+		"system", []Message{{Role: "user", Content: "hi"}}, nil,
+		nil, nil,
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(resp.Content))
+	}
+	if resp.Content[0].Type != "thinking" || resp.Content[1].Type != "text" {
+		t.Errorf("unexpected block types: %q, %q", resp.Content[0].Type, resp.Content[1].Type)
+	}
+}
+
+func TestStreamCall_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error": "model not found"}`, http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "nonexistent", false)
+	_, err := client.StreamCall(
+		"system", []Message{{Role: "user", Content: "hi"}}, nil,
+		nil, nil,
+	)
+
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+	if !contains(err.Error(), "Ollama API error") {
+		t.Errorf("expected 'Ollama API error' in error, got: %q", err.Error())
+	}
+}
+
+func TestStreamCall_EmptyStream(t *testing.T) {
+	// Test: only a done=true chunk with no content
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeStreamChunks(w, []ollamaResponse{
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant"}, Done: true, DoneReason: "stop", PromptEvalCount: 5, EvalCount: 0},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false)
+
+	textCalled := false
+	resp, err := client.StreamCall(
+		"system", []Message{{Role: "user", Content: "hi"}}, nil,
+		func(text string) { textCalled = true },
+		nil,
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if textCalled {
+		t.Error("onText should not have been called for empty response")
+	}
+	if len(resp.Content) != 0 {
+		t.Errorf("expected 0 content blocks, got %d", len(resp.Content))
+	}
+	if resp.StopReason != "end_turn" {
+		t.Errorf("expected stop_reason 'end_turn', got %q", resp.StopReason)
+	}
+}
+
+func TestStreamCall_ModelFallback(t *testing.T) {
+	// Test: if done chunk has no model, falls back to configured modelID
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeStreamChunks(w, []ollamaResponse{
+			{Message: ollamaRespMsg{Role: "assistant", Content: "hi"}, Done: false},
+			{Message: ollamaRespMsg{Role: "assistant"}, Done: true, DoneReason: "stop"},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "my-model", false)
+	resp, err := client.StreamCall(
+		"system", []Message{{Role: "user", Content: "hi"}}, nil,
+		nil, nil,
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Model != "my-model" {
+		t.Errorf("expected model 'my-model', got %q", resp.Model)
+	}
+}
+
+func TestStreamCall_MultipleToolCalls(t *testing.T) {
+	// Test: multiple tool calls in a single response
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeStreamChunks(w, []ollamaResponse{
+			{
+				Model: "test",
+				Message: ollamaRespMsg{
+					Role: "assistant",
+					ToolCalls: []ollamaToolCall{
+						{Function: ollamaFunctionCall{Name: "read_file", Arguments: map[string]interface{}{"path": "a.go"}}},
+						{Function: ollamaFunctionCall{Name: "read_file", Arguments: map[string]interface{}{"path": "b.go"}}},
+					},
+				},
+				Done:       true,
+				DoneReason: "stop",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "test", false)
+	resp, err := client.StreamCall(
+		"system", []Message{{Role: "user", Content: "read both"}}, nil,
+		nil, nil,
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Content) != 2 {
+		t.Fatalf("expected 2 tool_use blocks, got %d", len(resp.Content))
+	}
+	if resp.Content[0].ID != "ollama_0" || resp.Content[1].ID != "ollama_1" {
+		t.Errorf("expected synthetic IDs ollama_0/ollama_1, got %q/%q",
+			resp.Content[0].ID, resp.Content[1].ID)
+	}
+	if resp.Content[0].Name != "read_file" || resp.Content[1].Name != "read_file" {
+		t.Errorf("unexpected tool names")
+	}
+}
+
+func TestStreamCall_ConnectionRefused(t *testing.T) {
+	client := NewOllamaClient("http://localhost:1", "test", false)
+	_, err := client.StreamCall(
+		"system", []Message{{Role: "user", Content: "hi"}}, nil,
+		nil, nil,
+	)
+
+	if err == nil {
+		t.Fatal("expected error for connection refused")
+	}
+	if !contains(err.Error(), "failed to send request to Ollama") {
+		t.Errorf("expected connection error, got: %q", err.Error())
+	}
+}
+
+func TestStreamCall_RequestFormat(t *testing.T) {
+	// Verify the streaming request sends stream=true and correct format
+	var capturedReq ollamaRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedReq)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeStreamChunks(w, []ollamaResponse{
+			{Model: "test", Message: ollamaRespMsg{Role: "assistant", Content: "ok"}, Done: true, DoneReason: "stop"},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOllamaClient(server.URL, "qwen3.6:27b", true)
+	client.StreamCall(
+		"You are helpful.",
+		[]Message{{Role: "user", Content: "hello"}},
+		[]Tool{{Name: "read_file", Description: "Read", InputSchema: map[string]interface{}{"type": "object"}}},
+		nil, nil,
+	)
+
+	if !capturedReq.Stream {
+		t.Error("expected stream=true in request")
+	}
+	if capturedReq.Model != "qwen3.6:27b" {
+		t.Errorf("expected model 'qwen3.6:27b', got %q", capturedReq.Model)
+	}
+	if !capturedReq.Think {
+		t.Error("expected think=true in request")
+	}
+	if len(capturedReq.Messages) != 2 { // system + user
+		t.Errorf("expected 2 messages (system + user), got %d", len(capturedReq.Messages))
+	}
+	if len(capturedReq.Tools) != 1 {
+		t.Errorf("expected 1 tool, got %d", len(capturedReq.Tools))
+	}
+}
+
 // helper
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)

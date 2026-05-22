@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -434,4 +435,137 @@ func (c *OllamaClient) convertResponse(resp *ollamaResponse) *Response {
 			OutputTokens: resp.EvalCount,
 		},
 	}
+}
+
+// StreamCall implements StreamingProvider for the Ollama client.
+// It sends a streaming request (stream: true) and calls onText/onThinking
+// callbacks for each token as it arrives from the NDJSON stream.
+//
+// The returned Response is identical to what Call() would return —
+// all content is assembled into the same Claude-canonical format.
+// Downstream code (history, session persistence, compaction) is unaffected
+// by whether streaming or non-streaming was used.
+func (c *OllamaClient) StreamCall(
+	systemPrompt string,
+	messages []Message,
+	tools []Tool,
+	onText func(text string),
+	onThinking func(text string),
+) (*Response, error) {
+	// 1. Convert messages and tools (same as Call)
+	ollamaMsgs := c.convertMessages(systemPrompt, messages)
+	ollamaTools := convertTools(tools)
+
+	// 2. Build request with stream=true
+	reqBody := ollamaRequest{
+		Model:    c.modelID,
+		Messages: ollamaMsgs,
+		Tools:    ollamaTools,
+		Stream:   true,
+		Think:    c.think,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal Ollama request: %w", err)
+	}
+
+	url := c.baseURL + "/api/chat"
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Ollama request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request to Ollama: %w\n\n"+
+			"Check that Ollama is running:\n"+
+			"  - Run: ollama serve\n"+
+			"  - Or check: curl %s/api/tags", err, c.baseURL)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Ollama API error (status %d): %s\n\n"+
+			"Suggestions:\n"+
+			"  - Ensure the model is pulled: ollama pull %s\n"+
+			"  - Check Ollama logs for details",
+			resp.StatusCode, string(body), c.modelID)
+	}
+
+	// 3. Read NDJSON stream, accumulate content, and fire callbacks
+	var thinkingBuf strings.Builder
+	var contentBuf strings.Builder
+	var toolCalls []ollamaToolCall
+	var lastChunk ollamaResponse
+
+	scanner := bufio.NewScanner(resp.Body)
+	// Set a large buffer for potentially long lines (tool call arguments)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var chunk ollamaResponse
+		if err := json.Unmarshal(line, &chunk); err != nil {
+			return nil, fmt.Errorf("failed to parse streaming chunk: %w\nChunk: %s", err, string(line))
+		}
+
+		// Accumulate and emit thinking tokens
+		if chunk.Message.Thinking != "" {
+			thinkingBuf.WriteString(chunk.Message.Thinking)
+			if onThinking != nil {
+				onThinking(chunk.Message.Thinking)
+			}
+		}
+
+		// Accumulate and emit text tokens
+		if chunk.Message.Content != "" {
+			contentBuf.WriteString(chunk.Message.Content)
+			if onText != nil {
+				onText(chunk.Message.Content)
+			}
+		}
+
+		// Collect tool calls (typically appear in the final chunk)
+		if len(chunk.Message.ToolCalls) > 0 {
+			toolCalls = append(toolCalls, chunk.Message.ToolCalls...)
+		}
+
+		if chunk.Done {
+			lastChunk = chunk
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading Ollama stream: %w", err)
+	}
+
+	// 4. Assemble the final response using the same convertResponse path
+	model := lastChunk.Model
+	if model == "" {
+		model = c.modelID
+	}
+
+	assembledResp := &ollamaResponse{
+		Model: model,
+		Message: ollamaRespMsg{
+			Role:      "assistant",
+			Content:   contentBuf.String(),
+			Thinking:  thinkingBuf.String(),
+			ToolCalls: toolCalls,
+		},
+		Done:            true,
+		DoneReason:      lastChunk.DoneReason,
+		PromptEvalCount: lastChunk.PromptEvalCount,
+		EvalCount:       lastChunk.EvalCount,
+	}
+
+	return c.convertResponse(assembledResp), nil
 }

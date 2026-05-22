@@ -232,9 +232,19 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 		// Continue without session — non-fatal
 	}
 
+	// Track streaming state for avoiding double-printing of streamed responses
+	streamedText := false
+
 	// Create agent — the CLI layer owns all display filtering.
 	// The agent emits everything unconditionally; we filter here.
 	agentInstance := agent.New(cfg,
+		agent.WithStreamTextCallback(func(token string) {
+			streamedText = true
+			fmt.Print(token) // stdout — for piping/redirection
+		}),
+		agent.WithStreamDoneCallback(func() {
+			fmt.Println() // trailing newline after streamed text
+		}),
 		agent.WithProgressCallback(func(msg string, toolUseID string) {
 			// Append tool use ID for display
 			msgWithID := session.FormatToolUseID(msg, toolUseID)
@@ -343,7 +353,10 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 	}
 
 	// Print response to stdout (for piping/redirection)
-	fmt.Println(response)
+	// Skip if already printed via streaming callbacks
+	if !streamedText {
+		fmt.Println(response)
+	}
 
 	// Print session path on exit
 	if sess != nil {
@@ -377,9 +390,30 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 	// can print it as a permanent log line when the spinner stops.
 	var lastProgressMsg string
 
+	// Track streaming state for avoiding double-printing of streamed responses
+	streamedText := false
+
 	// Create agent — the CLI layer owns all display filtering, truncation,
 	// and spinner management. The agent emits everything unconditionally.
 	agentInstance := agent.New(cfg,
+		agent.WithStreamTextCallback(func(token string) {
+			if !streamedText {
+				// First text token — stop spinner and print agent prefix
+				if sp.IsActive() {
+					sp.Stop()
+				}
+				if lastProgressMsg != "" {
+					fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+					lastProgressMsg = ""
+				}
+				fmt.Print("\n" + style.FormatAgentPrefix())
+				streamedText = true
+			}
+			fmt.Print(token)
+		}),
+		agent.WithStreamDoneCallback(func() {
+			fmt.Println() // trailing newline after streamed text
+		}),
 		agent.WithSpinnerCallback(func(start bool, message string) {
 			if level == loglevel.Silent {
 				return
@@ -565,7 +599,7 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 	if err != nil {
 		// Fall back to basic bufio reader if readline fails
 		fmt.Fprintf(os.Stderr, "Warning: Rich input unavailable (%v), using basic input\n", err)
-		runREPLBasicMode(level, agentInstance, sp, cfg.ContextWindowSize, sess)
+		runREPLBasicMode(level, agentInstance, sp, cfg.ContextWindowSize, sess, &streamedText)
 		return
 	}
 	defer reader.Close()
@@ -615,7 +649,12 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 				fmt.Sprintf("❌ Error: %v\n", handleErr))
 		}
 
-		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
+		if streamedText {
+			// Response was already printed via streaming callbacks
+			streamedText = false // Reset for next turn
+		} else {
+			fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
+		}
 
 		// Update context percentage for next prompt
 		usage := agentInstance.LastUsage()
@@ -625,7 +664,7 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 }
 
 // runREPLBasicMode is the fallback REPL when readline is unavailable.
-func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spinner.Spinner, contextWindowSize int, sess *session.Session) {
+func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spinner.Spinner, contextWindowSize int, sess *session.Session, streamedText *bool) {
 	var lastProgressMsg string
 
 	// The agent is already created by the caller. We just need to set up
@@ -673,7 +712,11 @@ func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spin
 				fmt.Sprintf("❌ Error: %v\n", handleErr))
 		}
 
-		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
+		if streamedText != nil && *streamedText {
+			*streamedText = false // Reset for next turn
+		} else {
+			fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
+		}
 
 		usage := agentInstance.LastUsage()
 		totalInput := usage.InputTokens + usage.CacheReadInputTokens
@@ -794,8 +837,29 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 	// lastProgressMsg tracks the most recent tool → progress message
 	var lastProgressMsg string
 
+	// Track streaming state for avoiding double-printing of streamed responses
+	streamedText := false
+
 	// Create agent
 	agentInstance := agent.New(cfg,
+		agent.WithStreamTextCallback(func(token string) {
+			if !streamedText {
+				// First text token — stop spinner and print agent prefix
+				if sp.IsActive() {
+					sp.Stop()
+				}
+				if lastProgressMsg != "" {
+					fmt.Println(StyleMessage(loglevel.Quiet, lastProgressMsg))
+					lastProgressMsg = ""
+				}
+				fmt.Print("\n" + style.FormatAgentPrefix())
+				streamedText = true
+			}
+			fmt.Print(token)
+		}),
+		agent.WithStreamDoneCallback(func() {
+			fmt.Println() // trailing newline after streamed text
+		}),
 		agent.WithSpinnerCallback(func(start bool, message string) {
 			if level == loglevel.Silent {
 				return
@@ -973,7 +1037,7 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Rich input unavailable (%v), using basic input\n", err)
-		runREPLBasicMode(level, agentInstance, sp, cfg.ContextWindowSize, sess)
+		runREPLBasicMode(level, agentInstance, sp, cfg.ContextWindowSize, sess, &streamedText)
 		return
 	}
 	defer reader.Close()
@@ -1020,7 +1084,12 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 				fmt.Sprintf("❌ Error: %v\n", handleErr))
 		}
 
-		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
+		if streamedText {
+			// Response was already printed via streaming callbacks
+			streamedText = false // Reset for next turn
+		} else {
+			fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
+		}
 
 		usage := agentInstance.LastUsage()
 		totalInput := usage.InputTokens + usage.CacheReadInputTokens

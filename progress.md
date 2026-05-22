@@ -39,25 +39,92 @@ pre-configured for Ollama with qwen3.5:35b.
 - Stop reason: presence of tool_calls → "tool_use" vs "end_turn"
 
 **MVP limitations (documented in design doc):**
-- No streaming (stream: false)
+- ~~No streaming (stream: false)~~ → Streaming implemented (Phase 2 US-1)
 - No image support — `skipImages` flag on Agent silently drops image content
   blocks for non-multimodal providers; Ollama client omits any image blocks
   that slip through rather than inserting confusing placeholder text
 - No `num_predict` (uses Ollama model defaults)
 - Cache stats always zero (Ollama has no prompt caching)
 
-**Tests:** 18 unit tests in `agent/providers/ollama_test.go`:
+**Tests:** 31 unit tests in `agent/providers/ollama_test.go`:
 - Tool conversion, message conversion (text, tool_use, tool_result, thinking)
 - System prompt prepending, empty system prompt
 - Response normalization (text, thinking, tool calls, synthetic IDs)
 - Synthetic ID round-trip through tool_use → tool_result cycle
 - Mock HTTP server integration (simple call, tool-use loop)
 - Error handling (server error, connection refused)
-- Compile-time Provider interface satisfaction check
+- Compile-time Provider and StreamingProvider interface satisfaction checks
+- Streaming: text-only, thinking+text, tool calls, tool-only, nil callbacks,
+  empty stream, model fallback, multiple tool calls, request format verification
 
 **What did NOT change:** Tool registry (tool implementations), system prompt,
 session persistence, compaction, MCP/Playwright, Agent Skills, CLI display,
 input editor. All existing tests pass unchanged.
+
+### Ollama Streaming Responses — Phase 2 US-1 (2025-07-21)
+
+**What:** Added token-by-token streaming for the Ollama provider, replacing the
+"frozen spinner for 30-60 seconds" experience with real-time text output. Text
+tokens flow to the terminal as they arrive from the model, identical to how
+streaming works in commercial API providers.
+
+**Architecture:**
+- New `StreamingProvider` interface in `agent/providers/provider.go` — extends
+  `Provider` with `StreamCall(systemPrompt, messages, tools, onText, onThinking)`
+  that returns the same `*Response` as `Call()`.
+- `OllamaClient` implements `StreamingProvider`. Uses Ollama's NDJSON streaming
+  (`stream: true`) — reads chunks via `bufio.Scanner`, fires callbacks per token,
+  accumulates content for the final assembled Response.
+- Agent's `HandleMessage` checks `if sp, ok := a.apiClient.(StreamingProvider)`
+  when `streamTextCallback` is set. Falls back to `Call()` for non-streaming
+  providers (Claude) or when callbacks aren't configured.
+- Two new agent callbacks: `StreamTextCallback` (per text token) and
+  `StreamDoneCallback` (after streaming completes, for trailing newline).
+- CLI wires callbacks in all 3 REPL/CLI modes. Tracks `streamedText` bool to
+  avoid double-printing the response.
+
+**Streaming behavior:**
+- Spinner shows "Thinking..." during thinking token accumulation
+- When first text token arrives: spinner stops, thinking emitted via
+  ThinkingCallback (full text, for session persistence), then text streams
+  token-by-token via StreamTextCallback
+- StreamDoneCallback fires after each streaming API call (prints newline)
+- Tool calls collected from stream, dispatched after stream completes
+- Claude provider is completely unchanged (doesn't implement StreamingProvider)
+- Session persistence captures the full final response (identical to non-streaming)
+- Compaction uses `Call()` directly, never streams
+
+**Key design decisions:**
+- Optional `StreamingProvider` interface (not on base `Provider`) — avoids
+  breaking any non-streaming provider. Agent uses type assertion at runtime.
+- Thinking tokens accumulated silently during streaming, emitted as a single
+  block when text starts. Spinner stays active during thinking (accurate UX).
+- `streamedText` flag in CLI closures prevents double-printing.
+- `StreamDoneCallback` ensures trailing newline before spinner/progress can
+  overwrite the streamed text line.
+- `bufio.Scanner` with 1MB buffer handles long NDJSON lines (tool call args).
+
+**Files changed:**
+- `agent/providers/provider.go` — added `StreamingProvider` interface
+- `agent/providers/ollama.go` — added `StreamCall` method (~100 lines)
+- `agent/agent.go` — added callbacks, streaming path in `HandleMessage`
+- `cli/cli.go` — wired streaming in `runCLIMode`, `runREPLMode`,
+  `runREPLModeWithSession`, updated `runREPLBasicMode` signature
+
+**Tests:** 13 new streaming tests added to `agent/providers/ollama_test.go`:
+- `TestStreamCall_TextOnly` — verifies token callbacks + assembled response
+- `TestStreamCall_WithThinking` — thinking then text, correct ordering
+- `TestStreamCall_WithToolCalls` — text + tool_calls, correct stop reason
+- `TestStreamCall_ToolCallsOnly` — no text tokens emitted
+- `TestStreamCall_NilCallbacks` — nil callbacks don't panic
+- `TestStreamCall_ServerError` — HTTP error handling
+- `TestStreamCall_EmptyStream` — done-only chunk, empty content
+- `TestStreamCall_ModelFallback` — falls back to configured modelID
+- `TestStreamCall_MultipleToolCalls` — synthetic ID generation
+- `TestStreamCall_ConnectionRefused` — network error handling
+- `TestStreamCall_RequestFormat` — verifies stream=true, model, think, tools
+- `TestStreamingProviderInterfaceSatisfied` — compile-time check
+- `TestClaudeNotStreamingProvider` — Claude does NOT implement streaming
 
 ### Agent Skills Support (2025-07-20)
 

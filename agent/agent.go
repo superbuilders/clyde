@@ -100,6 +100,19 @@ type AssistantMessageCallback func(text string)
 // toolUseID is the unique ID, and input is the tool's input parameters.
 type ToolUseCallback func(displayMsg string, toolName string, toolUseID string, input map[string]interface{})
 
+// StreamTextCallback receives incremental text tokens during streaming responses.
+// Called once per token as it arrives from a StreamingProvider. Not called when
+// the provider doesn't support streaming or when the callback is not set.
+// Used by the CLI to display text in real-time without waiting for completion.
+type StreamTextCallback func(token string)
+
+// StreamDoneCallback is called after a streaming API call completes and text
+// tokens were emitted. Used by the CLI to finalize the streamed output
+// (e.g., print a trailing newline after the last streamed text token).
+// Only called when text was actually streamed (not for thinking-only or
+// tool-call-only responses).
+type StreamDoneCallback func()
+
 // Agent handles conversation and tool execution
 type Agent struct {
 	apiClient          providers.Provider
@@ -114,6 +127,8 @@ type Agent struct {
 	userMsgCallback    UserMessageCallback
 	assistantMsgCallback AssistantMessageCallback
 	toolUseCallback      ToolUseCallback
+	streamTextCallback   StreamTextCallback
+	streamDoneCallback   StreamDoneCallback
 	compactionCallback CompactionCallback
 	lastUsage          providers.Usage // Token usage from the most recent API response
 	contextWindowSize  int             // Model context window size in tokens (for diagnostic display)
@@ -195,6 +210,25 @@ func WithAssistantMessageCallback(cb AssistantMessageCallback) AgentOption {
 func WithToolUseCallback(cb ToolUseCallback) AgentOption {
 	return func(a *Agent) {
 		a.toolUseCallback = cb
+	}
+}
+
+// WithStreamTextCallback sets the callback for streaming text tokens.
+// When set and the provider implements StreamingProvider, the agent uses
+// StreamCall instead of Call, and text tokens are emitted via this callback
+// as they arrive. If not set, the agent always uses the non-streaming Call.
+func WithStreamTextCallback(cb StreamTextCallback) AgentOption {
+	return func(a *Agent) {
+		a.streamTextCallback = cb
+	}
+}
+
+// WithStreamDoneCallback sets the callback for end-of-stream signals.
+// Called after each streaming API call where text tokens were emitted.
+// Used by the CLI to print a trailing newline after streamed text.
+func WithStreamDoneCallback(cb StreamDoneCallback) AgentOption {
+	return func(a *Agent) {
+		a.streamDoneCallback = cb
 	}
 }
 
@@ -425,9 +459,75 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			a.spinnerCallback(true, "Thinking...")
 		}
 
-		resp, err := a.apiClient.Call(a.systemPrompt, a.history, allTools)
+		var resp *providers.Response
+		var err error
+		wasStreamed := false
 
-		// Stop spinner once API responds
+		// Use streaming if available and callback is set.
+		// The agent checks for the StreamingProvider interface and uses
+		// StreamCall when the streamTextCallback is configured. This enables
+		// token-by-token display for providers that support it (Ollama),
+		// while Claude and other non-streaming providers fall through to Call().
+		if a.streamTextCallback != nil {
+			if sp, ok := a.apiClient.(providers.StreamingProvider); ok {
+				var thinkingBuf strings.Builder
+				thinkingDone := false
+				spinnerStopped := false
+				textStreamed := false
+
+				resp, err = sp.StreamCall(
+					a.systemPrompt, a.history, allTools,
+					func(text string) {
+						// Stop spinner on first text token
+						if !spinnerStopped {
+							if a.spinnerCallback != nil {
+								a.spinnerCallback(false, "")
+							}
+							spinnerStopped = true
+						}
+						// Emit accumulated thinking before first text token
+						if !thinkingDone && thinkingBuf.Len() > 0 {
+							if a.thinkingCallback != nil {
+								a.thinkingCallback(thinkingBuf.String(), "")
+							}
+							thinkingDone = true
+						}
+						textStreamed = true
+						a.streamTextCallback(text)
+					},
+					func(thinking string) {
+						// Accumulate thinking tokens (spinner keeps running —
+						// "Thinking..." is accurate during this phase)
+						thinkingBuf.WriteString(thinking)
+					},
+				)
+
+				// Emit thinking if it wasn't followed by text tokens
+				// (e.g., model produced thinking + tool_calls, no text)
+				if thinkingBuf.Len() > 0 && !thinkingDone {
+					if !spinnerStopped && a.spinnerCallback != nil {
+						a.spinnerCallback(false, "")
+					}
+					if a.thinkingCallback != nil {
+						a.thinkingCallback(thinkingBuf.String(), "")
+					}
+				}
+
+				// Signal end of streaming text for display finalization
+				if textStreamed && a.streamDoneCallback != nil {
+					a.streamDoneCallback()
+				}
+
+				wasStreamed = true
+			}
+		}
+
+		// Fall back to non-streaming Call (Claude, or when streaming not configured)
+		if !wasStreamed {
+			resp, err = a.apiClient.Call(a.systemPrompt, a.history, allTools)
+		}
+
+		// Stop spinner (safe no-op if already stopped during streaming)
 		if a.spinnerCallback != nil {
 			a.spinnerCallback(false, "")
 		}
@@ -489,8 +589,8 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			case "tool_use":
 				toolUseBlocks = append(toolUseBlocks, block)
 			case "thinking":
-				// Emit full thinking trace unconditionally
-				if block.Thinking != "" && a.thinkingCallback != nil {
+				// Emit full thinking trace (skip if already emitted during streaming)
+				if block.Thinking != "" && a.thinkingCallback != nil && !wasStreamed {
 					a.thinkingCallback(block.Thinking, block.Signature)
 				}
 			case "redacted_thinking":
