@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
-	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
-	"github.com/this-is-alpha-iota/clyde/agent/prompts"
+	"github.com/superbuilders/clyde/agent"
+	"github.com/superbuilders/clyde/agent/providers"
+	"github.com/superbuilders/clyde/cli/loglevel"
+	"github.com/superbuilders/clyde/agent/prompts"
 )
 
 // TestLogLevelDefault verifies that a new agent can be created without log level (ARCH-2).

@@ -8,8 +8,8 @@
 **Reason**: Standardize naming across local and remote repositories. The go.mod declared `claude-repl` while GitHub repo was `go-coding-agent`, causing installation conflicts.
 
 **Changes Made**:
-1. **go.mod**: Updated module path to `github.com/this-is-alpha-iota/clyde`
-2. **All Go files**: Updated imports from `claude-repl/*` to `github.com/this-is-alpha-iota/clyde/*`
+1. **go.mod**: Updated module path to `github.com/superbuilders/clyde`
+2. **All Go files**: Updated imports from `claude-repl/*` to `github.com/superbuilders/clyde/*`
 3. **Binary name**: Changed from `claude-repl` to `clyde`
 4. **Config directory**: Changed from `~/.claude-repl/` to `~/.clyde/`
 5. **README.md**: Updated all references to use "clyde"
@@ -18,7 +18,7 @@
 
 **Installation Now Works**:
 ```bash
-go install github.com/this-is-alpha-iota/clyde@latest
+go install github.com/superbuilders/clyde@latest
 ```
 
 **Config Setup**:
@@ -986,6 +986,36 @@ Created demo showing all error message improvements:
 **Philosophy**:
 Error messages should be **teachers**, not just reporters. Every error is an opportunity to help the user learn and succeed.
 
+## Current Status (2026-05-27)
+
+**Latest Update**: Module Path Migration to `superbuilders/clyde` ✅
+
+### Module Path Migration (2026-05-27)
+
+**Story**: Migrate all Go module paths from `github.com/this-is-alpha-iota/clyde` to `github.com/superbuilders/clyde` to match the new public repository.
+
+**What Changed**:
+- All source files updated: imports, `go.mod` declarations, README, docs
+- Root module: `github.com/superbuilders/clyde`
+- Agent module: `github.com/superbuilders/clyde/agent`
+- Zero remaining references to `this-is-alpha-iota` in source/docs
+
+**Critical Issue — Go Module Proxy Cache Poisoning**:
+The old `agent/v0.1.0` and `v0.1.0` tags were created when the module path was `this-is-alpha-iota/clyde`. The Go module proxy (`proxy.golang.org`) cached these forever. When `go.mod` requires `superbuilders/clyde/agent v0.1.0`, the proxy returns a go.mod declaring the OLD path, causing a module path mismatch error — even in workspace mode.
+
+**Resolution**:
+1. Deleted old tags from the `superbuilders` remote
+2. Bumped version to `v0.2.0` in root `go.mod`
+3. Added `replace github.com/superbuilders/clyde/agent v0.2.0 => ./agent` for local dev
+4. Workspace (`go.work`) still used, but `replace` is the mechanism that resolves the local agent
+
+**Lesson Learned**: Go module proxy is immutable. Once a version is cached with a particular module path, it cannot be changed. If you rename a module, you MUST bump the version. The `go.work` `use` directive does NOT override proxy validation for required dependencies.
+
+**Next Steps**:
+1. Tag `agent/v0.2.0` + `v0.2.0`
+2. Push tags to both `superbuilders` and `private` remotes
+3. Verify `go install github.com/superbuilders/clyde@v0.2.0` works
+
 ## Current Status (2026-04-30)
 
 **Latest Update**: MONO-5: Release Tagging Convention & First Tagged Release ✅
@@ -1042,17 +1072,17 @@ Convenience targets for common operations:
 **go.mod changes**:
 ```
 # Before:
-require github.com/this-is-alpha-iota/clyde/agent v0.0.0
-replace github.com/this-is-alpha-iota/clyde/agent => ./agent
+require github.com/superbuilders/clyde/agent v0.0.0
+replace github.com/superbuilders/clyde/agent => ./agent
 
 # After:
-require github.com/this-is-alpha-iota/clyde/agent v0.1.0
+require github.com/superbuilders/clyde/agent v0.1.0
 # (no replace — go.work handles local dev)
 ```
 
 **Verification results**:
-- ✅ `go install github.com/this-is-alpha-iota/clyde@v0.1.0` — succeeds (9.8 MB binary)
-- ✅ `go get github.com/this-is-alpha-iota/clyde/agent@v0.1.0` — succeeds
+- ✅ `go install github.com/superbuilders/clyde@v0.1.0` — succeeds (9.8 MB binary)
+- ✅ `go get github.com/superbuilders/clyde/agent@v0.1.0` — succeeds
 - ✅ `GOPROXY=https://proxy.golang.org go list -m …/agent@v0.1.0` — indexed
 - ✅ `GOPROXY=https://proxy.golang.org go list -m …/clyde@v0.1.0` — indexed
 - ✅ `./scripts/test-external-consume.sh v0.1.0` — all checks pass
@@ -1072,7 +1102,7 @@ require github.com/this-is-alpha-iota/clyde/agent v0.1.0
 
 ### MONO-4: Verify External Consumability (Completed 2026-04-30)
 
-**Story**: Confirm that `go get github.com/this-is-alpha-iota/clyde/agent` works correctly, pulls only agent dependencies, and document the consumer experience.
+**Story**: Confirm that `go get github.com/superbuilders/clyde/agent` works correctly, pulls only agent dependencies, and document the consumer experience.
 
 **Depends on**: MONO-3 (workspace development working end-to-end)
 
@@ -1177,7 +1207,7 @@ NOT present: readline, bubbletea, liner, x/sys as direct dep
 
 | File | Change |
 |------|--------|
-| `agent/go.mod` | **New** — `module github.com/this-is-alpha-iota/clyde/agent` with `html-to-markdown` + `godotenv` |
+| `agent/go.mod` | **New** — `module github.com/superbuilders/clyde/agent` with `html-to-markdown` + `godotenv` |
 | `agent/go.sum` | **New** — transitive dep checksums (goquery, cascadia, x/net) |
 | `go.mod` | Added `require …/clyde/agent v0.0.0` + `replace => ./agent`; `html-to-markdown` demoted to indirect |
 | `go.sum` | Updated (fewer direct entries, agent owns its own) |
@@ -1236,16 +1266,16 @@ type Usage = providers.Usage
 ```go
 // Before:
 import (
-    "github.com/this-is-alpha-iota/clyde/agent"
-    "github.com/this-is-alpha-iota/clyde/agent/providers"
-    "github.com/this-is-alpha-iota/clyde/agent/session"
+    "github.com/superbuilders/clyde/agent"
+    "github.com/superbuilders/clyde/agent/providers"
+    "github.com/superbuilders/clyde/agent/session"
 )
 func runREPLModeWithSession(..., history []providers.Message) {
 
 // After:
 import (
-    "github.com/this-is-alpha-iota/clyde/agent"
-    "github.com/this-is-alpha-iota/clyde/agent/session"
+    "github.com/superbuilders/clyde/agent"
+    "github.com/superbuilders/clyde/agent/session"
 )
 func runREPLModeWithSession(..., history []agent.Message) {
 ```
@@ -3935,7 +3965,7 @@ Created comprehensive test suite in `tests/cli_mode_test.go` with 8 tests:
     --- PASS: TestCLIMode_ExitCodes/success_exit_code_0 (13.64s)
     --- PASS: TestCLIMode_ExitCodes/error_exit_code_1 (0.02s)
 PASS
-ok  	github.com/this-is-alpha-iota/clyde/tests	28.561s
+ok  	github.com/superbuilders/clyde/tests	28.561s
 ```
 
 All 8 CLI mode tests pass!

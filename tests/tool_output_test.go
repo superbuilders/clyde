@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
-	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
-	"github.com/this-is-alpha-iota/clyde/agent/prompts"
-	"github.com/this-is-alpha-iota/clyde/cli/style"
-	"github.com/this-is-alpha-iota/clyde/cli/truncate"
+	"github.com/superbuilders/clyde/agent"
+	"github.com/superbuilders/clyde/agent/providers"
+	"github.com/superbuilders/clyde/cli/loglevel"
+	"github.com/superbuilders/clyde/agent/prompts"
+	"github.com/superbuilders/clyde/cli/style"
+	"github.com/superbuilders/clyde/cli/truncate"
 )
 
 // --- Unit Tests: Tool Output Truncation ---

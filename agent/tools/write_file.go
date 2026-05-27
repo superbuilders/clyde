@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
+	"github.com/superbuilders/clyde/agent/providers"
 )
 
 func init() {

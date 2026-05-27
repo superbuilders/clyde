@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
-	"github.com/this-is-alpha-iota/clyde/agent/mcp"
-	"github.com/this-is-alpha-iota/clyde/agent/prompts"
-	"github.com/this-is-alpha-iota/clyde/agent/tools"
+	"github.com/superbuilders/clyde/agent"
+	"github.com/superbuilders/clyde/agent/providers"
+	"github.com/superbuilders/clyde/agent/mcp"
+	"github.com/superbuilders/clyde/agent/prompts"
+	"github.com/superbuilders/clyde/agent/tools"
 )
 
 // --- Story 4: Registration Tests (unit, no MCP server needed) ---

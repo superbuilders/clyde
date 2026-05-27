@@ -5,7 +5,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
+	"github.com/superbuilders/clyde/agent/providers"
 )
 
 // DefaultReserveTokens is the default number of tokens to reserve for the

@@ -17,7 +17,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/this-is-alpha-iota/clyde/cli/style"
+	"github.com/superbuilders/clyde/cli/style"
 )
 
 // GitInfo holds the current git repository state.

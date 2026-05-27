@@ -95,7 +95,7 @@ Goodbye!
 
 ### Option 1: Install globally (recommended for regular use)
 ```bash
-go install github.com/this-is-alpha-iota/clyde@latest
+go install github.com/superbuilders/clyde@latest
 ```
 
 After installation, create a config file in your home directory:
@@ -113,7 +113,7 @@ Get your API keys:
 
 ### Option 2: Build from source (for development)
 ```bash
-git clone https://github.com/this-is-alpha-iota/clyde
+git clone https://github.com/superbuilders/clyde
 cd clyde
 go build -o clyde
 ./clyde
@@ -464,7 +464,7 @@ Clyde's agent is a separate Go module that can be embedded in your own applicati
 
 ```bash
 # Install just the agent library (no CLI deps)
-go get github.com/this-is-alpha-iota/clyde/agent@latest
+go get github.com/superbuilders/clyde/agent@latest
 ```
 
 ### Quick Example
@@ -472,7 +472,7 @@ go get github.com/this-is-alpha-iota/clyde/agent@latest
 ```go
 import (
     "fmt"
-    "github.com/this-is-alpha-iota/clyde/agent"
+    "github.com/superbuilders/clyde/agent"
 )
 
 func main() {

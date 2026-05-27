@@ -6,12 +6,12 @@ Clyde uses a **multi-module monorepo** with two Go modules that are versioned in
 
 | Module | Tag prefix | Example | Install command |
 |--------|-----------|---------|-----------------|
-| CLI binary (root) | `v` | `v0.1.0` | `go install github.com/this-is-alpha-iota/clyde@v0.1.0` |
-| Agent library | `agent/v` | `agent/v0.1.0` | `go get github.com/this-is-alpha-iota/clyde/agent@v0.1.0` |
+| CLI binary (root) | `v` | `v0.1.0` | `go install github.com/superbuilders/clyde@v0.1.0` |
+| Agent library | `agent/v` | `agent/v0.1.0` | `go get github.com/superbuilders/clyde/agent@v0.1.0` |
 
 ### Lockstep releases
 
-Both tags are created on the **same commit** for lockstep releases. The root `go.mod` pins `require agent@vX.Y.Z` (with no `replace` directive — `go.work` handles local development).
+Both tags are created on the **same commit** for lockstep releases. The root `go.mod` pins `require agent@vX.Y.Z` with a `replace` directive pointing to `./agent` for local development. The release script removes the `replace` before tagging.
 
 ### Semantic versioning
 
@@ -65,8 +65,8 @@ go build ./...
 cd tests && go test ./... -short -count=1; cd ..
 
 # 3. Update go.mod
-sed -i '' "s|github.com/this-is-alpha-iota/clyde/agent v.*|github.com/this-is-alpha-iota/clyde/agent v${VERSION}|" go.mod
-sed -i '' '/^replace github.com\/this-is-alpha-iota\/clyde\/agent/d' go.mod
+sed -i '' "s|github.com/superbuilders/clyde/agent v.*|github.com/superbuilders/clyde/agent v${VERSION}|" go.mod
+sed -i '' '/^replace github.com\/superbuilders\/clyde\/agent/d' go.mod
 go mod tidy
 
 # 4. Commit
@@ -81,8 +81,8 @@ git tag "v${VERSION}"
 git push origin master "agent/v${VERSION}" "v${VERSION}"
 
 # 7. Trigger proxy indexing
-GOPROXY=https://proxy.golang.org go list -m "github.com/this-is-alpha-iota/clyde/agent@v${VERSION}"
-GOPROXY=https://proxy.golang.org go list -m "github.com/this-is-alpha-iota/clyde@v${VERSION}"
+GOPROXY=https://proxy.golang.org go list -m "github.com/superbuilders/clyde/agent@v${VERSION}"
+GOPROXY=https://proxy.golang.org go list -m "github.com/superbuilders/clyde@v${VERSION}"
 ```
 
 ## Post-Release Verification
@@ -91,17 +91,17 @@ After a release, verify with:
 
 ```bash
 # Verify proxy has indexed both modules
-GOPROXY=https://proxy.golang.org go list -m github.com/this-is-alpha-iota/clyde/agent@v0.1.0
-GOPROXY=https://proxy.golang.org go list -m github.com/this-is-alpha-iota/clyde@v0.1.0
+GOPROXY=https://proxy.golang.org go list -m github.com/superbuilders/clyde/agent@v0.1.0
+GOPROXY=https://proxy.golang.org go list -m github.com/superbuilders/clyde@v0.1.0
 
 # Verify external consumer smoke test
 ./scripts/test-external-consume.sh v0.1.0
 
 # Verify CLI installation
-go install github.com/this-is-alpha-iota/clyde@v0.1.0
+go install github.com/superbuilders/clyde@v0.1.0
 
 # Verify agent library
-go get github.com/this-is-alpha-iota/clyde/agent@v0.1.0
+go get github.com/superbuilders/clyde/agent@v0.1.0
 ```
 
 ## Post-Release Development

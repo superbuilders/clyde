@@ -5,7 +5,7 @@ The `agent` package provides a self-contained AI coding agent that can be embedd
 ## Installation
 
 ```bash
-go get github.com/this-is-alpha-iota/clyde/agent@latest
+go get github.com/superbuilders/clyde/agent@latest
 ```
 
 This pulls **only** the agent and its minimal dependencies. It does **not** pull the CLI, TUI, readline, or terminal libraries.
@@ -17,7 +17,7 @@ package main
 
 import (
     "fmt"
-    "github.com/this-is-alpha-iota/clyde/agent"
+    "github.com/superbuilders/clyde/agent"
 )
 
 func main() {
@@ -133,7 +133,7 @@ agentInstance.Close()
 The agent provides `agent/session` as a supported public subpackage for session management:
 
 ```go
-import "github.com/this-is-alpha-iota/clyde/agent/session"
+import "github.com/superbuilders/clyde/agent/session"
 
 // Create a session
 sess, err := session.New()
@@ -243,8 +243,8 @@ This project uses a multi-module monorepo:
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| `github.com/this-is-alpha-iota/clyde/agent` | `agent/` | Agent library (this package) |
-| `github.com/this-is-alpha-iota/clyde` | root | CLI binary (`go install …/clyde@latest`) |
+| `github.com/superbuilders/clyde/agent` | `agent/` | Agent library (this package) |
+| `github.com/superbuilders/clyde` | root | CLI binary (`go install …/clyde@latest`) |
 
 The two modules have independent dependency trees. Installing the CLI binary pulls `x/sys` and readline; importing the agent library does not.
 

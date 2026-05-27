@@ -8,8 +8,8 @@
 **Reason**: Standardize naming across local and remote repositories. The go.mod declared `claude-repl` while GitHub repo was `go-coding-agent`, causing installation conflicts.
 
 **Changes Made**:
-1. **go.mod**: Updated module path to `github.com/this-is-alpha-iota/clyde`
-2. **All Go files**: Updated imports from `claude-repl/*` to `github.com/this-is-alpha-iota/clyde/*`
+1. **go.mod**: Updated module path to `github.com/superbuilders/clyde`
+2. **All Go files**: Updated imports from `claude-repl/*` to `github.com/superbuilders/clyde/*`
 3. **Binary name**: Changed from `claude-repl` to `clyde`
 4. **Config directory**: Changed from `~/.claude-repl/` to `~/.clyde/`
 5. **README.md**: Updated all references to use "clyde"
@@ -18,7 +18,7 @@
 
 **Installation Now Works**:
 ```bash
-go install github.com/this-is-alpha-iota/clyde@latest
+go install github.com/superbuilders/clyde@latest
 ```
 
 **Config Setup**:
@@ -1482,7 +1482,7 @@ The agent constructor internally:
 - [x] `agent.New(cfg agent.Config, ...Option)` is the sole public constructor; it handles client creation, tool registration, MCP setup, and prompt loading internally.
 - [x] The blank import `_ "clyde/tools"` is eliminated — tool registration is internal to the agent.
 - [x] `agent.Config` contains all agent-relevant fields; the CLI maps from its own config to `agent.Config`.
-- [x] The agent package is importable and usable by external consumers: `go get github.com/this-is-alpha-iota/clyde/agent`.
+- [x] The agent package is importable and usable by external consumers: `go get github.com/superbuilders/clyde/agent`.
 - [x] `go build .` succeeds, `go vet ./...` clean, all tests pass.
 - [x] No circular imports.
 - [x] No behavioral change from the user's perspective.
@@ -1600,11 +1600,11 @@ Stories are dependency-ordered:
 
 > **Goal**: Split the project from a single Go module into a multi-module monorepo so that (a) other teams can `go get` the agent library without pulling CLI/TUI dependencies, (b) the CLI remains installable via `go install`, and (c) a separate private repo can consume the public agent module cleanly.
 >
-> **Current state (post-ARCH-3)**: Single `go.mod` at root (`module github.com/this-is-alpha-iota/clyde`). The agent is architecturally self-contained under `agent/` with subpackages (`config/`, `mcp/`, `prompts/`, `providers/`, `session/`, `tools/`). The CLI is under `cli/` with its own subpackages. `main.go` is a 3-line wrapper calling `cli.Run()`. Tests are flat under `tests/` importing from both agent and cli.
+> **Current state (post-ARCH-3)**: Single `go.mod` at root (`module github.com/superbuilders/clyde`). The agent is architecturally self-contained under `agent/` with subpackages (`config/`, `mcp/`, `prompts/`, `providers/`, `session/`, `tools/`). The CLI is under `cli/` with its own subpackages. `main.go` is a 3-line wrapper calling `cli.Run()`. Tests are flat under `tests/` importing from both agent and cli.
 >
-> **Target state**: The `agent/` subtree becomes its own Go module (`github.com/this-is-alpha-iota/clyde/agent`) with its own `go.mod`. The root module remains the CLI binary. A `go.work` file at the root enables seamless local development. External consumers import only the agent module and get minimal dependencies (no TUI, no `x/sys`).
+> **Target state**: The `agent/` subtree becomes its own Go module (`github.com/superbuilders/clyde/agent`) with its own `go.mod`. The root module remains the CLI binary. A `go.work` file at the root enables seamless local development. External consumers import only the agent module and get minimal dependencies (no TUI, no `x/sys`).
 >
-> **Design decision — root module is the CLI**: The root module (`github.com/this-is-alpha-iota/clyde`) stays as the CLI binary. This preserves `go install github.com/this-is-alpha-iota/clyde@latest` for the binary while `go get github.com/this-is-alpha-iota/clyde/agent@latest` fetches only the agent's `go.mod` with its minimal deps. No need for a third `cli/` module — the root IS the CLI module. The `tests/` directory stays in the root module and can import from both agent (via `go.work` locally, via published version in CI) and cli (same module).
+> **Design decision — root module is the CLI**: The root module (`github.com/superbuilders/clyde`) stays as the CLI binary. This preserves `go install github.com/superbuilders/clyde@latest` for the binary while `go get github.com/superbuilders/clyde/agent@latest` fetches only the agent's `go.mod` with its minimal deps. No need for a third `cli/` module — the root IS the CLI module. The `tests/` directory stays in the root module and can import from both agent (via `go.work` locally, via published version in CI) and cli (same module).
 >
 > **Design decision — session stays as an agent subpackage**: `agent/session` is heavily used by the CLI for writing session files. In the multi-module world, it remains a public subpackage of the agent module. External consumers who import `agent/session` get a clean, focused dependency. Moving session to a third module would add complexity without clear benefit.
 
@@ -1668,7 +1668,7 @@ Additionally, `agent/config` is dead code within the agent — nothing under `ag
 
 **As a** developer splitting the monorepo,
 **I want** `agent/` to have its own `go.mod` declaring only its own dependencies,
-**so that** `go get github.com/this-is-alpha-iota/clyde/agent` pulls only agent-relevant code and deps — not the CLI, TUI, or `x/sys`.
+**so that** `go get github.com/superbuilders/clyde/agent` pulls only agent-relevant code and deps — not the CLI, TUI, or `x/sys`.
 
 **Depends on**: MONO-1 (clean API surface — minimizes cross-module import churn)
 
@@ -1689,7 +1689,7 @@ After the split:
 1. `git add -A && git commit -m "checkpoint before module split"` (safety net)
 2. Create `agent/go.mod`:
    ```
-   module github.com/this-is-alpha-iota/clyde/agent
+   module github.com/superbuilders/clyde/agent
    go 1.24
    require (
        github.com/JohannesKaufmann/html-to-markdown v1.6.0
@@ -1698,15 +1698,15 @@ After the split:
    ```
 3. Run `cd agent && go mod tidy` to generate `agent/go.sum` and resolve transitives.
 4. Verify: `cd agent && go build ./...` succeeds (the agent module compiles standalone).
-5. Update root `go.mod`: add `require github.com/this-is-alpha-iota/clyde/agent v0.0.0` (pseudo-version, resolved by `go.work`).
+5. Update root `go.mod`: add `require github.com/superbuilders/clyde/agent v0.0.0` (pseudo-version, resolved by `go.work`).
 6. Update root `go.mod`: `html-to-markdown`, `goquery`, `cascadia`, `x/net` can be removed (they're agent's deps now); keep `godotenv` and `x/sys`.
 7. Run `go mod tidy` at root.
-8. Rewrite all import paths in root-module files (`cli/`, `tests/`, `main.go`): `"github.com/this-is-alpha-iota/clyde/agent"` stays the same (Go resolves it to the nested module); `"github.com/this-is-alpha-iota/clyde/agent/providers"` etc. also stay the same.
+8. Rewrite all import paths in root-module files (`cli/`, `tests/`, `main.go`): `"github.com/superbuilders/clyde/agent"` stays the same (Go resolves it to the nested module); `"github.com/superbuilders/clyde/agent/providers"` etc. also stay the same.
 9. Verify: `go build ./...` at root may fail until `go.work` is added (next story) — that's expected. At minimum, `cd agent && go build ./...` must pass.
 10. Commit.
 
 **Acceptance Criteria**:
-- [x] `agent/go.mod` exists with module path `github.com/this-is-alpha-iota/clyde/agent`.
+- [x] `agent/go.mod` exists with module path `github.com/superbuilders/clyde/agent`.
 - [x] `agent/go.sum` exists and is committed.
 - [x] `cd agent && go build ./...` succeeds with zero errors (agent compiles standalone).
 - [x] `cd agent && go vet ./...` is clean.
@@ -1757,7 +1757,7 @@ Without `go.work`, the root module would resolve the agent dependency from the G
 ### MONO-4: Verify External Consumability
 
 **As an** engineer on another team who wants to use Clyde's agent as a library,
-**I want** to confirm that `go get github.com/this-is-alpha-iota/clyde/agent@<version>` works correctly and pulls only agent dependencies,
+**I want** to confirm that `go get github.com/superbuilders/clyde/agent@<version>` works correctly and pulls only agent dependencies,
 **so that** I can integrate the agent into my own service without inheriting CLI/TUI baggage.
 
 **Depends on**: MONO-3 (workspace development working end-to-end)
@@ -1772,8 +1772,8 @@ This story is a verification/documentation story, not a code change. It confirms
 - [x] A test script (checked in as `scripts/test-external-consume.sh` or similar) does the following:
   1. Creates a temp directory outside the repo.
   2. `go mod init testconsumer`
-  3. `go get github.com/this-is-alpha-iota/clyde/agent@<latest-tag-or-commit>`
-  4. Writes a minimal `main.go` that imports `"github.com/this-is-alpha-iota/clyde/agent"`, creates an `agent.Config{}`, and calls `agent.New(cfg)`.
+  3. `go get github.com/superbuilders/clyde/agent@<latest-tag-or-commit>`
+  4. Writes a minimal `main.go` that imports `"github.com/superbuilders/clyde/agent"`, creates an `agent.Config{}`, and calls `agent.New(cfg)`.
   5. `go build .` succeeds.
   6. Inspects `go.sum` and confirms `golang.org/x/sys` is NOT present (proves CLI deps weren't pulled).
   7. Cleans up the temp directory.
@@ -1791,9 +1791,9 @@ This story is a verification/documentation story, not a code change. It confirms
 
 *Consumer documentation:*
 - [x] `agent/README.md` (or a section in root `README.md`) documents:
-  - How to install the agent library: `go get github.com/this-is-alpha-iota/clyde/agent@latest`
+  - How to install the agent library: `go get github.com/superbuilders/clyde/agent@latest`
   - Minimal usage example (create config, create agent, handle message).
-  - How to install the CLI binary: `go install github.com/this-is-alpha-iota/clyde@latest`
+  - How to install the CLI binary: `go install github.com/superbuilders/clyde@latest`
   - That these are separate modules with independent dependency trees.
 
 *Tests:*
@@ -1830,9 +1830,9 @@ Both modules can share version numbers (tag `v0.1.0` and `agent/v0.1.0` on the s
 
 *First tagged release:*
 - [x] Tags `v0.1.0` and `agent/v0.1.0` are created on a clean, passing commit.
-- [x] `go install github.com/this-is-alpha-iota/clyde@v0.1.0` succeeds from a clean machine.
-- [x] `go get github.com/this-is-alpha-iota/clyde/agent@v0.1.0` succeeds from a clean machine.
-- [x] The Go module proxy (proxy.golang.org) has indexed both modules (may take a few minutes; verified via `GOPROXY=https://proxy.golang.org go list -m github.com/this-is-alpha-iota/clyde/agent@v0.1.0`).
+- [x] `go install github.com/superbuilders/clyde@v0.1.0` succeeds from a clean machine.
+- [x] `go get github.com/superbuilders/clyde/agent@v0.1.0` succeeds from a clean machine.
+- [x] The Go module proxy (proxy.golang.org) has indexed both modules (may take a few minutes; verified via `GOPROXY=https://proxy.golang.org go list -m github.com/superbuilders/clyde/agent@v0.1.0`).
 
 *Release script/Makefile target:*
 - [x] A `make release VERSION=0.1.0` target (or equivalent script) automates:
@@ -1869,10 +1869,10 @@ The audit code uses the **pre-ARCH-3 construction pattern**, reaching into agent
 ```go
 // audit/pipeline/runner.go — current
 import (
-    "github.com/this-is-alpha-iota/clyde/agent"
-    "github.com/this-is-alpha-iota/clyde/agent/prompts"
-    "github.com/this-is-alpha-iota/clyde/agent/providers"
-    _ "github.com/this-is-alpha-iota/clyde/agent/tools"
+    "github.com/superbuilders/clyde/agent"
+    "github.com/superbuilders/clyde/agent/prompts"
+    "github.com/superbuilders/clyde/agent/providers"
+    _ "github.com/superbuilders/clyde/agent/tools"
 )
 
 apiClient := providers.NewClient(r.apiKey, r.apiURL, r.modelID, r.maxTokens)
@@ -1881,7 +1881,7 @@ return agent.NewAgent(apiClient, prompts.SystemPrompt, opts...)
 
 ```go
 // audit/main.go — current
-import "github.com/this-is-alpha-iota/clyde/agent/config"
+import "github.com/superbuilders/clyde/agent/config"
 
 cfg, err := config.LoadFromFile(configPath)
 ```
@@ -1899,7 +1899,7 @@ The branch is also ~20 commits behind `master` (missing the input editor rewrite
 
 ```go
 // audit/pipeline/runner.go — after migration
-import "github.com/this-is-alpha-iota/clyde/agent"
+import "github.com/superbuilders/clyde/agent"
 
 agentInstance := agent.New(agent.Config{
     APIKey:    r.apiKey,
@@ -1946,7 +1946,7 @@ No more imports of `agent/providers`, `agent/prompts`, `agent/tools`, or `agent/
 - [ ] `go.mod` / `go.sum` are consistent after merge (no stale deps, `go mod tidy` is clean).
 
 *Audit code migrated to sealed API:*
-- [ ] `audit/pipeline/runner.go` imports only `"github.com/this-is-alpha-iota/clyde/agent"` (no `agent/providers`, `agent/prompts`, `agent/tools`).
+- [ ] `audit/pipeline/runner.go` imports only `"github.com/superbuilders/clyde/agent"` (no `agent/providers`, `agent/prompts`, `agent/tools`).
 - [ ] `audit/main.go` does not import `agent/config` — config loading is self-contained.
 - [ ] `agent.New(agent.Config{...})` is the sole agent construction path in audit code.
 - [ ] No blank import `_ "clyde/agent/tools"` anywhere in `audit/`.

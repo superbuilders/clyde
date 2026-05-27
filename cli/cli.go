@@ -22,14 +22,14 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/agent/session"
-	"github.com/this-is-alpha-iota/clyde/cli/input"
-	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
-	"github.com/this-is-alpha-iota/clyde/cli/prompt"
-	"github.com/this-is-alpha-iota/clyde/cli/spinner"
-	"github.com/this-is-alpha-iota/clyde/cli/style"
-	"github.com/this-is-alpha-iota/clyde/cli/truncate"
+	"github.com/superbuilders/clyde/agent"
+	"github.com/superbuilders/clyde/agent/session"
+	"github.com/superbuilders/clyde/cli/input"
+	"github.com/superbuilders/clyde/cli/loglevel"
+	"github.com/superbuilders/clyde/cli/prompt"
+	"github.com/superbuilders/clyde/cli/spinner"
+	"github.com/superbuilders/clyde/cli/style"
+	"github.com/superbuilders/clyde/cli/truncate"
 )
 
 // Run is the main entrypoint for the Clyde CLI application.

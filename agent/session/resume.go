@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
+	"github.com/superbuilders/clyde/agent/providers"
 )
 
 // SessionInfo holds metadata about a session for listing purposes.

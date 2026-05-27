@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/this-is-alpha-iota/clyde/agent/session"
+	"github.com/superbuilders/clyde/agent/session"
 )
 
 // --- Unit Tests ---

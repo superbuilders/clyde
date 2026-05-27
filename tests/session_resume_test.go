@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
-	"github.com/this-is-alpha-iota/clyde/agent/session"
-	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
+	"github.com/superbuilders/clyde/agent"
+	"github.com/superbuilders/clyde/agent/providers"
+	"github.com/superbuilders/clyde/agent/session"
+	"github.com/superbuilders/clyde/cli/loglevel"
 )
 
 // --- Unit Tests: Reconstruction ---

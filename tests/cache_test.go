@@ -4,9 +4,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
-	"github.com/this-is-alpha-iota/clyde/agent/prompts"
+	"github.com/superbuilders/clyde/agent"
+	"github.com/superbuilders/clyde/agent/providers"
+	"github.com/superbuilders/clyde/agent/prompts"
 )
 
 // TestCacheControlEnabled verifies cache_control is set in requests
