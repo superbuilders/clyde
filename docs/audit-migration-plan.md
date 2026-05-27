@@ -2,8 +2,15 @@
 
 **Decisions locked in:**
 - Binary name: `clyde-audit`
-- Repo: Create `Super-OAR/clyde-audit` fresh (don't repurpose `clyde-private`)
+- Repo: Create `Super-OAR/clyde-audit` fresh (archive `clyde-private` afterward)
 - Install: Self-installing via `clyde-audit install-skill` subcommand (no Makefile)
+- Agent dependency: `github.com/superbuilders/clyde/agent@v0.2.0` (v0.1.0 is poisoned on Go proxy)
+
+**Current state (as of 2026-05-27):**
+- `superbuilders/clyde` (public) — master has vanilla clyde, module paths migrated
+- `Super-OAR/clyde-private` — master holds full clyde repo copy with `audit/` directory, module paths migrated
+- Old `security-auditer` and `security-auditer-v2` branches already deleted from private remote (still exist locally)
+- Module paths already migrated from `this-is-alpha-iota/clyde` to `superbuilders/clyde` on both remotes
 
 ---
 
@@ -18,7 +25,7 @@ gh repo create Super-OAR/clyde-audit --private --description "AI-powered securit
 ### Step 1.2 — Clone it locally
 
 ```bash
-cd ~/Projects  # or wherever
+cd ~/code/go  # alongside clyde
 git clone https://github.com/Super-OAR/clyde-audit.git
 cd clyde-audit
 ```
@@ -27,16 +34,25 @@ cd clyde-audit
 
 ## Phase 2: Extract Audit Code
 
-### Step 2.1 — Copy audit files from the branch
+### Step 2.1 — Copy audit files from `clyde-private`
 
-From the `clyde` repo, extract the `audit/` subtree from `security-auditer-v2`:
+The audit source currently lives at `audit/` inside the full clyde repo on `Super-OAR/clyde-private` master:
 
 ```bash
-# From the clyde repo
-cd ~/Projects/clyde  # adjust path
+# From the clyde repo (which has the private remote configured)
+cd ~/code/go/clyde  # adjust path
 
-# Export audit directory as an archive and extract into clyde-audit
-git archive security-auditer-v2 -- audit/ | tar -x -C ~/Projects/clyde-audit --strip-components=1
+# Export audit directory from private/master and extract into clyde-audit
+git archive private/master -- audit/ | tar -x -C ~/code/go/clyde-audit --strip-components=1
+```
+
+Alternatively, clone `clyde-private` and copy directly:
+
+```bash
+cd /tmp
+git clone https://github.com/Super-OAR/clyde-private.git
+cp -r clyde-private/audit/* ~/code/go/clyde-audit/
+rm -rf /tmp/clyde-private
 ```
 
 This gives `clyde-audit/` the following structure:
@@ -71,7 +87,7 @@ clyde-audit/
 ### Step 2.2 — Create `go.mod`
 
 ```bash
-cd ~/Projects/clyde-audit
+cd ~/code/go/clyde-audit
 go mod init github.com/Super-OAR/clyde-audit
 ```
 
@@ -84,7 +100,7 @@ go 1.24.0
 
 ### Step 2.3 — Rewrite import paths
 
-Every internal import needs to change from `github.com/superbuilders/clyde/audit/...` to `github.com/Super-OAR/clyde-audit/...`.
+Every internal import needs to change from `github.com/superbuilders/clyde/audit/...` to `github.com/Super-OAR/clyde-audit/...`. The `clyde/agent` imports stay as-is (they're an external dependency on the public repo).
 
 **Files and their import changes:**
 
@@ -124,9 +140,11 @@ go mod tidy
 ```
 
 This will:
-- Add `github.com/superbuilders/clyde/agent v0.1.0` as a dependency
+- Add `github.com/superbuilders/clyde/agent v0.2.0` as a dependency
 - Add `github.com/joho/godotenv` (used directly in main.go)
 - Pull in transitive deps from agent (html-to-markdown, etc.)
+
+**Note:** `v0.1.0` of the agent is permanently poisoned on the Go module proxy (it was cached with the old `this-is-alpha-iota` module path). Always use `v0.2.0` or later.
 
 ### Step 2.5 — Update `flag.Usage` binary name
 
@@ -363,7 +381,7 @@ go build -o clyde-audit .
 ./clyde-audit install-skill
 
 # Verify clyde sees it
-cd ~/Projects/some-repo
+cd ~/code/go/some-repo
 clyde
 # > "Run a security audit on this repo"
 # Should load the skill and invoke clyde-audit
@@ -381,25 +399,21 @@ clyde-audit --repo /path/to/test-repo --dry-run
 
 ## Phase 6: Cleanup
 
-### Step 6.1 — Delete old branches from clyde repo
+### Step 6.1 — Delete old local branches from clyde repo
+
+The old branches have already been deleted from the private remote. Clean up local copies:
 
 ```bash
-cd ~/Projects/clyde
+cd ~/code/go/clyde
 
-# Delete remote branches
-git push origin --delete security-auditer 2>/dev/null
-git push origin --delete security-auditer-v2 2>/dev/null
-git push private --delete security-auditer 2>/dev/null
-git push private --delete security-auditer-v2 2>/dev/null
-
-# Delete local branches
+# Delete local branches (remote branches already deleted)
 git branch -D security-auditer
 git branch -D security-auditer-v2
 ```
 
 ### Step 6.2 — Archive `Super-OAR/clyde-private`
 
-The private mirror is no longer needed. Archive it:
+Once audit extraction is verified, the private mirror is no longer needed:
 
 ```bash
 gh repo archive Super-OAR/clyde-private --yes
@@ -408,7 +422,7 @@ gh repo archive Super-OAR/clyde-private --yes
 And remove the remote from clyde:
 
 ```bash
-cd ~/Projects/clyde
+cd ~/code/go/clyde
 git remote remove private
 ```
 
@@ -416,7 +430,18 @@ git remote remove private
 
 The current `go.work` references `.` and `./agent`. No audit reference exists on master, so nothing to change.
 
-### Step 6.4 — Update clyde README
+### Step 6.4 — Clean up `design/ollama-support` branch on superbuilders
+
+This branch also has the module migration but contains unmerged ollama work. Decide whether to keep or delete:
+
+```bash
+# If ollama support is abandoned:
+git push superbuilders --delete design/ollama-support
+
+# If keeping for future work, no action needed
+```
+
+### Step 6.5 — Update clyde README
 
 Remove any references to audit branches or `clyde-private`. Add a note in the "Using Clyde as a Library" section mentioning `clyde-audit` as an example external consumer.
 
@@ -437,10 +462,11 @@ Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 ──► Phase 5 
 
 | Risk | Mitigation |
 |------|-----------|
-| `clyde/agent` API changes break audit | Pin to tagged version (`v0.1.0`). Update deliberately. |
+| `clyde/agent` API changes break audit | Pin to tagged version (`v0.2.0`). Update deliberately. |
 | Team forgets `install-skill` after `go install` | Print reminder: "Run `clyde-audit install-skill` to enable the clyde integration" |
 | Import path typo breaks builds | `go mod tidy` + `go test ./...` in Phase 2 catches this immediately |
-| Old branches linger and confuse | Phase 6 cleans them up; can be done same day |
+| Old branches linger and confuse | Already deleted from private remote; Phase 6 cleans up local copies |
+| Go module proxy caches old versions | Always use `v0.2.0`+; `v0.1.0` is permanently poisoned with old module path |
 
 ## Estimated Effort
 

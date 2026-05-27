@@ -2,19 +2,19 @@
 
 ## Problem
 
-The audit package currently lives on a branch (`security-auditer-v2`) inside the clyde monorepo. We need:
+The audit package currently lives inside `Super-OAR/clyde-private` (on master, as a full copy of the clyde monorepo with an `audit/` directory added). We need:
 
 1. **Public contributors** see only vanilla clyde — no audit code visible
 2. **Internal team** sees both clyde and audit, contributes to both
 3. **Internal team's local clyde** accesses the audit binary via a skill
 
-The monorepo approach fails here because you can't selectively hide directories from public viewers — if it's in the repo, everyone sees it.
+The current setup (a private fork of the full clyde repo with audit bolted on) is fragile — it requires keeping `clyde-private` in sync with the public repo, and the audit code isn't structured as an independent project.
 
 ## Proposed Architecture: Two Repos + Skill Bridge
 
 ```
 ┌─────────────────────────────────┐     ┌──────────────────────────────────┐
-│  superbuilders/clyde       │     │  Super-OAR/clyde-audit           │
+│  superbuilders/clyde            │     │  Super-OAR/clyde-audit           │
 │  (PUBLIC)                       │     │  (PRIVATE)                       │
 │                                 │     │                                  │
 │  main.go                        │     │  main.go          ← audit CLI   │
@@ -25,7 +25,7 @@ The monorepo approach fails here because you can't selectively hide directories 
 │    prompts/                     │     │  go.mod  ← imports clyde/agent   │
 │  tests/                         │     │  skill/                          │
 │  go.mod                         │     │    SKILL.md  ← skill definition  │
-│  go.work                        │     │  Makefile     ← install targets  │
+│  go.work                        │     │                                  │
 │                                 │     │                                  │
 └─────────────────────────────────┘     └──────────────────────────────────┘
                                               │
@@ -43,15 +43,15 @@ The monorepo approach fails here because you can't selectively hide directories 
 - The skills discovery system (already built)
 - Zero audit code
 
-**`Super-OAR/clyde-audit`** (private, new):
-- The audit CLI binary (what's currently in `audit/` on the branch)
+**`Super-OAR/clyde-audit`** (private, new — replaces `Super-OAR/clyde-private`):
+- The audit CLI binary (currently in `audit/` on `Super-OAR/clyde-private` master)
 - Its own `go.mod` importing `github.com/superbuilders/clyde/agent`
 - A `skill/SKILL.md` that teaches clyde how to invoke the audit binary
-- A `Makefile` with `install` target that puts both the binary and skill in place
+- Self-installing via `clyde-audit install-skill` subcommand
 
 ### What `Super-OAR/clyde-private` becomes
 
-**It goes away.** It was a private mirror of clyde to hold audit code. With audit in its own repo, there's no need for a private clyde fork. Internal team members contribute to:
+**It gets archived or deleted.** It currently holds a full copy of the clyde repo with audit code bolted on. Once the audit code is extracted into `Super-OAR/clyde-audit` as a standalone project, `clyde-private` has no purpose. The `private` git remote gets removed from the local clyde repo. Internal team members contribute to:
 - `superbuilders/clyde` (public) for clyde features
 - `Super-OAR/clyde-audit` (private) for audit features
 
@@ -212,24 +212,25 @@ After this, any clyde session automatically sees the security-audit skill in its
 
 1. **Create `Super-OAR/clyde-audit` repo** (private)
 
-2. **Extract audit code from `security-auditer-v2` branch**:
-   - Move `audit/` contents to repo root
+2. **Extract audit code from `Super-OAR/clyde-private` master**:
+   - The audit source currently lives at `audit/` inside the full clyde repo on `clyde-private` master
+   - Move `audit/` contents to the new repo root
    - Create proper `go.mod` with module path `github.com/Super-OAR/clyde-audit`
-   - Add dependency on `github.com/superbuilders/clyde/agent`
+   - Add dependency on `github.com/superbuilders/clyde/agent@v0.2.0`
    - Rename binary from `audit` to `clyde-audit`
    - Update internal import paths (`clyde/audit/...` → `clyde-audit/...`)
 
 3. **Create the skill**: Write `skill/SKILL.md` with frontmatter and usage docs
 
-4. **Create the Makefile**: Build + install targets
+4. **Add `install-skill` subcommand**: Embed SKILL.md via `//go:embed`, add self-install logic
 
-5. **Update clyde's module path** (if needed): The agent module is currently
-   `github.com/superbuilders/clyde/agent` — this stays as-is since it's public
+5. **Module path is already correct**: The agent module is
+   `github.com/superbuilders/clyde/agent` — no changes needed on the public repo
 
 6. **Clean up**:
-   - Delete `security-auditer-v2` branch from both remotes
-   - Archive or delete `Super-OAR/clyde-private` (no longer needed)
-   - Remove audit references from clyde's go.work
+   - Delete local `security-auditer` and `security-auditer-v2` branches (already deleted from private remote)
+   - Archive `Super-OAR/clyde-private` (no longer needed once audit is extracted)
+   - Remove the `private` git remote from local clyde repo
 
 ## Why Not a Monorepo?
 
@@ -254,7 +255,7 @@ This one-way dependency is what makes the whole thing work. The public `agent` m
 
 ## Open Questions
 
-1. **Binary name**: `clyde-audit` vs `audit` — recommend `clyde-audit` to avoid PATH collisions
-2. **`go install` vs `make install`**: `go install` can't install the SKILL.md, so `make install` is preferred for the full experience. Could also ship a `clyde-audit install-skill` subcommand that self-installs the SKILL.md.
-3. **Versioning**: Should clyde-audit pin to a specific agent version, or track latest? Recommend pinning to tagged releases of `clyde/agent`.
-4. **clyde-private repo**: Archive it? Delete it? Transfer it to become clyde-audit? Recommend: transfer/rename `Super-OAR/clyde-private` → `Super-OAR/clyde-audit` and replace its contents.
+1. **Binary name**: `clyde-audit` vs `audit` — recommend `clyde-audit` to avoid PATH collisions *(decided: `clyde-audit`)*
+2. **`go install` vs `make install`**: `go install` can't install the SKILL.md, so the binary ships a `clyde-audit install-skill` subcommand that self-installs the SKILL.md via `//go:embed`. *(decided: self-installing, no Makefile)*
+3. **Versioning**: Should clyde-audit pin to a specific agent version, or track latest? Recommend pinning to tagged releases of `clyde/agent` (currently `v0.2.0` — note: `v0.1.0` is permanently poisoned on the Go module proxy with the old `this-is-alpha-iota` module path).
+4. **clyde-private repo**: Create a fresh `Super-OAR/clyde-audit` repo and archive `Super-OAR/clyde-private` once extraction is complete. *(decided: fresh repo, archive old)*
