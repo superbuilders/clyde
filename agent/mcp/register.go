@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
-	"github.com/this-is-alpha-iota/clyde/agent/tools"
+	"github.com/superbuilders/clyde/agent/providers"
+	"github.com/superbuilders/clyde/agent/tools"
 )
 
 // RegisterPlaywrightTools registers the 21 Playwright MCP tools into clyde's

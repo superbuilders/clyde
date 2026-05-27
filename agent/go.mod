@@ -1,4 +1,4 @@
-module github.com/this-is-alpha-iota/clyde/agent
+module github.com/superbuilders/clyde/agent
 
 go 1.24.0
 

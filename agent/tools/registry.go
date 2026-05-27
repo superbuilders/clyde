@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
+	"github.com/superbuilders/clyde/agent/providers"
 	"fmt"
 )
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/agent/tools"
+	"github.com/superbuilders/clyde/agent/tools"
 )
 
 // TestExecuteIncludeFile tests the include_file tool execution

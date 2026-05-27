@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/cli/input"
+	"github.com/superbuilders/clyde/cli/input"
 )
 
 // mockReadCloser wraps a strings.Reader as an io.ReadCloser for testing.

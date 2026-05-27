@@ -5,15 +5,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/this-is-alpha-iota/clyde/agent/mcp"
-	"github.com/this-is-alpha-iota/clyde/agent/prompts"
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
-	"github.com/this-is-alpha-iota/clyde/agent/skills"
-	"github.com/this-is-alpha-iota/clyde/agent/tools"
+	"github.com/superbuilders/clyde/agent/mcp"
+	"github.com/superbuilders/clyde/agent/prompts"
+	"github.com/superbuilders/clyde/agent/providers"
+	"github.com/superbuilders/clyde/agent/skills"
+	"github.com/superbuilders/clyde/agent/tools"
 	// Blank-import all tool packages so their init() functions register tools
 	// into the global registry. This is the ONLY place this import exists —
 	// external consumers never need to do it.
-	_ "github.com/this-is-alpha-iota/clyde/agent/tools"
+	_ "github.com/superbuilders/clyde/agent/tools"
 )
 
 // Config holds the agent-relevant configuration fields.

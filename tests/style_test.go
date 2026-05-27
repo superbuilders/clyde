@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/cli"
-	"github.com/this-is-alpha-iota/clyde/cli/loglevel"
-	"github.com/this-is-alpha-iota/clyde/cli/style"
+	"github.com/superbuilders/clyde/cli"
+	"github.com/superbuilders/clyde/cli/loglevel"
+	"github.com/superbuilders/clyde/cli/style"
 )
 
 // --- styleMessage integration tests ---

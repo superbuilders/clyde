@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/agent"
-	"github.com/this-is-alpha-iota/clyde/agent/config"
-	"github.com/this-is-alpha-iota/clyde/agent/providers"
-	"github.com/this-is-alpha-iota/clyde/agent/session"
+	"github.com/superbuilders/clyde/agent"
+	"github.com/superbuilders/clyde/agent/config"
+	"github.com/superbuilders/clyde/agent/providers"
+	"github.com/superbuilders/clyde/agent/session"
 )
 
 // --- CMP-1: Conversation Token Counting & Automatic Compaction Trigger ---

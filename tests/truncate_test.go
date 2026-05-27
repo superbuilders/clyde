@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/cli/truncate"
+	"github.com/superbuilders/clyde/cli/truncate"
 )
 
 // --- Lines ---

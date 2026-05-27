@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/agent/prompts"
+	"github.com/superbuilders/clyde/agent/prompts"
 )
 
 func TestSystemPromptLoading(t *testing.T) {

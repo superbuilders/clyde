@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/this-is-alpha-iota/clyde/cli/prompt"
-	"github.com/this-is-alpha-iota/clyde/cli/style"
+	"github.com/superbuilders/clyde/cli/prompt"
+	"github.com/superbuilders/clyde/cli/style"
 )
 
 // TestGetGitInfo tests the live git info retrieval.
