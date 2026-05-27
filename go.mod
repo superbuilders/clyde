@@ -16,3 +16,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
+
+replace github.com/superbuilders/clyde/agent v0.2.0 => ./agent
