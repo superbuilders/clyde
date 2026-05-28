@@ -39,3 +39,7 @@ test_read_*.txt
 
 # Clyde session history
 .clyde/sessions/
+
+# Experimental builds
+clyde-qwen
+cmd/
