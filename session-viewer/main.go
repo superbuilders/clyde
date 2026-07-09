@@ -22,7 +22,6 @@ import (
 //go:embed static/*
 var staticFiles embed.FS
 
-// RunningProcess represents a running clyde process
 type RunningProcess struct {
 	PID       int    `json:"pid"`
 	TTY       string `json:"tty"`
@@ -31,7 +30,6 @@ type RunningProcess struct {
 	CWD       string `json:"cwd"`
 }
 
-// SessionInfo represents a session directory
 type SessionInfo struct {
 	ID           string `json:"id"`
 	User         string `json:"user"`
@@ -42,9 +40,9 @@ type SessionInfo struct {
 	Project      string `json:"project"`
 	Running      bool   `json:"running"`
 	PID          int    `json:"pid,omitempty"`
+	Preview      string `json:"preview"`
 }
 
-// MessageFile represents a single message file in a session
 type MessageFile struct {
 	Filename  string `json:"filename"`
 	Timestamp string `json:"timestamp"`
@@ -57,7 +55,6 @@ func main() {
 	e.Use(middleware.Logger())
 	e.Use(middleware.CORS())
 
-	// API routes
 	api := e.Group("/api")
 	api.GET("/sessions", getSessions)
 	api.GET("/sessions/:id/messages", getSessionMessages)
@@ -70,11 +67,9 @@ func main() {
 	e.Logger.Fatal(e.Start(":8787"))
 }
 
-// getRunningProcesses finds all running clyde processes and their CWDs
 func getRunningProcesses() []RunningProcess {
 	var processes []RunningProcess
 
-	// Get PIDs of running clyde processes
 	out, err := exec.Command("pgrep", "-x", "clyde").Output()
 	if err != nil {
 		return processes
@@ -90,23 +85,19 @@ func getRunningProcesses() []RunningProcess {
 
 		proc := RunningProcess{PID: pid}
 
-		// Get process info from ps
 		psOut, err := exec.Command("ps", "-o", "tty=,lstart=,args=", "-p", pidStr).Output()
 		if err != nil {
 			continue
 		}
 
-		// Parse ps output: tty  start_time  args
 		line := strings.TrimSpace(string(psOut))
 		fields := strings.Fields(line)
 		if len(fields) >= 6 {
 			proc.TTY = fields[0]
-			// lstart is 5 fields: "Thu Jul  9 14:09:37 2026"
 			proc.StartTime = strings.Join(fields[1:6], " ")
 			proc.Args = strings.Join(fields[6:], " ")
 		}
 
-		// Get CWD via lsof
 		lsofOut, err := exec.Command("lsof", "-p", pidStr, "-Fn").Output()
 		if err == nil {
 			scanner := bufio.NewScanner(strings.NewReader(string(lsofOut)))
@@ -130,28 +121,22 @@ func getRunningProcesses() []RunningProcess {
 	return processes
 }
 
-// parseSessionTimestamp parses a session dir name timestamp to time.Time
 func parseSessionTimestamp(sessionID string) (time.Time, error) {
-	// Session IDs look like: 2026-07-09T14-09-37_thisistheaj
 	parts := strings.SplitN(sessionID, "_", 2)
 	if len(parts) < 1 {
 		return time.Time{}, fmt.Errorf("invalid session ID")
 	}
 	tsStr := parts[0]
-	// Convert "2026-07-09T14-09-37" to parseable format
 	tsStr = strings.Replace(tsStr, "T", " ", 1)
-	// Replace only the time separators (after the T/space)
 	spaceParts := strings.SplitN(tsStr, " ", 2)
 	if len(spaceParts) == 2 {
-		timePart := strings.Replace(spaceParts[1], "-", ":", 2) // only first 2 dashes in time
+		timePart := strings.Replace(spaceParts[1], "-", ":", 2)
 		tsStr = spaceParts[0] + " " + timePart
 	}
 	return time.Parse("2006-01-02 15:04:05", tsStr)
 }
 
-// matchProcessToSession tries to match a process to a session by timestamp
 func matchProcessToSession(proc RunningProcess, sessionID string) bool {
-	// Check -r flag first (explicit session resume)
 	if strings.Contains(proc.Args, "-r ") {
 		parts := strings.SplitN(proc.Args, "-r ", 2)
 		if len(parts) == 2 {
@@ -160,7 +145,6 @@ func matchProcessToSession(proc RunningProcess, sessionID string) bool {
 		}
 	}
 
-	// Try timestamp matching: parse process start time and session timestamp
 	procTime, err := time.Parse("Mon Jan _2 15:04:05 2006", strings.TrimSpace(proc.StartTime))
 	if err != nil {
 		return false
@@ -171,7 +155,6 @@ func matchProcessToSession(proc RunningProcess, sessionID string) bool {
 		return false
 	}
 
-	// Match if within 60 seconds of each other
 	diff := procTime.Sub(sessTime)
 	if diff < 0 {
 		diff = -diff
@@ -179,17 +162,56 @@ func matchProcessToSession(proc RunningProcess, sessionID string) bool {
 	return diff < 60*time.Second
 }
 
+// getSessionPreview reads the first user message and returns a short preview
+func getSessionPreview(sessionPath string) string {
+	entries, err := os.ReadDir(sessionPath)
+	if err != nil {
+		return ""
+	}
+
+	// Sort by name (chronological)
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), "_user.md") {
+			data, err := readFileCapped(filepath.Join(sessionPath, entry.Name()), 1024)
+			if err != nil {
+				return ""
+			}
+			// Strip the "**You:**\n" prefix
+			content := strings.TrimSpace(data)
+			content = strings.TrimPrefix(content, "**You:**")
+			content = strings.TrimPrefix(content, "**You:**\n")
+			content = strings.TrimSpace(content)
+			// Collapse whitespace and truncate
+			content = strings.Join(strings.Fields(content), " ")
+			if len(content) > 140 {
+				content = content[:140] + "…"
+			}
+			return content
+		}
+	}
+	return ""
+}
+
+// cleanThinkingContent strips signature blocks from thinking messages
+func cleanThinkingContent(content string) string {
+	lines := strings.Split(content, "\n")
+	var cleaned []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "signature:") {
+			continue
+		}
+		cleaned = append(cleaned, line)
+	}
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
+}
+
 func getSessions(c echo.Context) error {
 	processes := getRunningProcesses()
 
-	// Build a map of CWD -> session dirs
-	type cwdSessions struct {
-		cwd      string
-		project  string
-		sessions []os.DirEntry
-	}
-
-	// Collect unique CWDs from running processes, plus the home dir .clyde
 	cwdSet := make(map[string]bool)
 	for _, p := range processes {
 		if p.CWD != "" {
@@ -197,15 +219,12 @@ func getSessions(c echo.Context) error {
 		}
 	}
 
-	// Also check common locations
 	homeDir, _ := os.UserHomeDir()
 	cwdSet[homeDir] = true
 
-	// Current working directory too
 	cwd, _ := os.Getwd()
 	cwdSet[cwd] = true
 
-	// Discover all .clyde directories under ~/code and ~/Downloads (up to depth 4)
 	discoverDirs := []string{
 		filepath.Join(homeDir, "code"),
 		filepath.Join(homeDir, "Downloads"),
@@ -218,7 +237,6 @@ func getSessions(c echo.Context) error {
 				if line == "" {
 					continue
 				}
-				// .clyde dir found - parent is the project dir
 				projectDir := filepath.Dir(line)
 				cwdSet[projectDir] = true
 			}
@@ -247,22 +265,18 @@ func getSessions(c echo.Context) error {
 			sessionID := entry.Name()
 			sessionPath := filepath.Join(sessDir, sessionID)
 
-			// Parse user from session ID
 			user := ""
 			parts := strings.SplitN(sessionID, "_", 2)
 			if len(parts) == 2 {
 				user = parts[1]
-				// Handle "from_" resumed sessions
 				if idx := strings.Index(user, "_from_"); idx >= 0 {
 					user = user[:idx]
 				}
 			}
 
-			// Count messages
 			msgEntries, _ := os.ReadDir(sessionPath)
 			msgCount := len(msgEntries)
 
-			// Get last modified time
 			var lastMod time.Time
 			for _, me := range msgEntries {
 				info, err := me.Info()
@@ -276,7 +290,6 @@ func getSessions(c echo.Context) error {
 				lastModStr = lastMod.Format(time.RFC3339)
 			}
 
-			// Check if running
 			running := false
 			runPID := 0
 			for _, proc := range processes {
@@ -286,6 +299,8 @@ func getSessions(c echo.Context) error {
 					break
 				}
 			}
+
+			preview := getSessionPreview(sessionPath)
 
 			sess := SessionInfo{
 				ID:           sessionID,
@@ -297,12 +312,12 @@ func getSessions(c echo.Context) error {
 				Project:      project,
 				Running:      running,
 				PID:          runPID,
+				Preview:      preview,
 			}
 			allSessions = append(allSessions, sess)
 		}
 	}
 
-	// Sort by last modified descending
 	sort.Slice(allSessions, func(i, j int) bool {
 		return allSessions[i].LastModified > allSessions[j].LastModified
 	})
@@ -322,7 +337,6 @@ func getSessionMessages(c echo.Context) error {
 
 	sessionPath := filepath.Join(cwdParam, ".clyde", "sessions", sessionID)
 
-	// Check directory exists
 	if _, err := os.Stat(sessionPath); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 	}
@@ -332,12 +346,10 @@ func getSessionMessages(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
-	// Sort entries by name (chronological)
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Name() < entries[j].Name()
 	})
 
-	// Filter to only user, assistant, thinking types and cap content size
 	var messages []MessageFile
 	typesFilter := c.QueryParam("types")
 	allowedTypes := map[string]bool{
@@ -368,14 +380,17 @@ func getSessionMessages(c echo.Context) error {
 			continue
 		}
 
-		// Parse timestamp from filename
 		tsStr := strings.TrimSuffix(name, "_"+msgType+".md")
 
-		// Read content with size cap (50KB per message)
 		filePath := filepath.Join(sessionPath, name)
 		content, err := readFileCapped(filePath, 50*1024)
 		if err != nil {
 			continue
+		}
+
+		// Strip signature blocks from thinking messages
+		if msgType == "thinking" {
+			content = cleanThinkingContent(content)
 		}
 
 		messages = append(messages, MessageFile{
@@ -409,11 +424,10 @@ func readFileCapped(path string, maxBytes int64) (string, error) {
 		return string(data), nil
 	}
 
-	// Read only first maxBytes
 	buf := make([]byte, maxBytes)
 	n, err := f.Read(buf)
 	if err != nil {
 		return "", err
 	}
-	return string(buf[:n]) + "\n\n... [truncated, " + fmt.Sprintf("%d", info.Size()) + " bytes total]", nil
+	return string(buf[:n]) + "\n\n… [truncated, " + fmt.Sprintf("%d", info.Size()) + " bytes total]", nil
 }
