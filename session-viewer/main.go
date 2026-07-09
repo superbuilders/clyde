@@ -38,9 +38,12 @@ type SessionInfo struct {
 	LastModified string `json:"last_modified"`
 	CWD          string `json:"cwd"`
 	Project      string `json:"project"`
+	Branch       string `json:"branch"`
 	Running      bool   `json:"running"`
 	PID          int    `json:"pid,omitempty"`
 	Preview      string `json:"preview"`
+	LastMsgType  string `json:"last_msg_type"`
+	NeedsReply   bool   `json:"needs_reply"`
 }
 
 type MessageFile struct {
@@ -48,6 +51,12 @@ type MessageFile struct {
 	Timestamp string `json:"timestamp"`
 	Type      string `json:"type"`
 	Content   string `json:"content"`
+}
+
+type ProjectInfo struct {
+	Path    string `json:"path"`
+	Name    string `json:"name"`
+	Branch  string `json:"branch"`
 }
 
 func main() {
@@ -58,6 +67,9 @@ func main() {
 	api := e.Group("/api")
 	api.GET("/sessions", getSessions)
 	api.GET("/sessions/:id/messages", getSessionMessages)
+	api.POST("/sessions/:id/messages", postSessionMessage)
+	api.GET("/projects", getProjects)
+	api.POST("/sessions/new", createSession)
 
 	// Serve static files
 	staticFS, _ := fs.Sub(staticFiles, "static")
@@ -67,6 +79,8 @@ func main() {
 	e.Logger.Fatal(e.Start(":8787"))
 }
 
+// ── process discovery ──
+
 func getRunningProcesses() []RunningProcess {
 	var processes []RunningProcess
 
@@ -75,14 +89,11 @@ func getRunningProcesses() []RunningProcess {
 		return processes
 	}
 
-	pids := strings.Fields(strings.TrimSpace(string(out)))
-
-	for _, pidStr := range pids {
-		pid, err := strconv.Atoi(pidStr)
-		if err != nil {
+	for _, pidStr := range strings.Fields(strings.TrimSpace(string(out))) {
+		pid, _ := strconv.Atoi(pidStr)
+		if pid == 0 {
 			continue
 		}
-
 		proc := RunningProcess{PID: pid}
 
 		psOut, err := exec.Command("ps", "-o", "tty=,lstart=,args=", "-p", pidStr).Output()
@@ -90,8 +101,7 @@ func getRunningProcesses() []RunningProcess {
 			continue
 		}
 
-		line := strings.TrimSpace(string(psOut))
-		fields := strings.Fields(line)
+		fields := strings.Fields(strings.TrimSpace(string(psOut)))
 		if len(fields) >= 6 {
 			proc.TTY = fields[0]
 			proc.StartTime = strings.Join(fields[1:6], " ")
@@ -114,24 +124,22 @@ func getRunningProcesses() []RunningProcess {
 				}
 			}
 		}
-
 		processes = append(processes, proc)
 	}
-
 	return processes
 }
+
+// ── helpers ──
 
 func parseSessionTimestamp(sessionID string) (time.Time, error) {
 	parts := strings.SplitN(sessionID, "_", 2)
 	if len(parts) < 1 {
 		return time.Time{}, fmt.Errorf("invalid session ID")
 	}
-	tsStr := parts[0]
-	tsStr = strings.Replace(tsStr, "T", " ", 1)
+	tsStr := strings.Replace(parts[0], "T", " ", 1)
 	spaceParts := strings.SplitN(tsStr, " ", 2)
 	if len(spaceParts) == 2 {
-		timePart := strings.Replace(spaceParts[1], "-", ":", 2)
-		tsStr = spaceParts[0] + " " + timePart
+		tsStr = spaceParts[0] + " " + strings.Replace(spaceParts[1], "-", ":", 2)
 	}
 	return time.Parse("2006-01-02 15:04:05", tsStr)
 }
@@ -144,17 +152,14 @@ func matchProcessToSession(proc RunningProcess, sessionID string) bool {
 			return strings.HasPrefix(sessionID, resumeID) || sessionID == resumeID
 		}
 	}
-
 	procTime, err := time.Parse("Mon Jan _2 15:04:05 2006", strings.TrimSpace(proc.StartTime))
 	if err != nil {
 		return false
 	}
-
 	sessTime, err := parseSessionTimestamp(sessionID)
 	if err != nil {
 		return false
 	}
-
 	diff := procTime.Sub(sessTime)
 	if diff < 0 {
 		diff = -diff
@@ -162,17 +167,12 @@ func matchProcessToSession(proc RunningProcess, sessionID string) bool {
 	return diff < 60*time.Second
 }
 
-// getSessionPreview reads the first user message and returns a short preview
 func getSessionPreview(sessionPath string) string {
 	entries, err := os.ReadDir(sessionPath)
 	if err != nil {
 		return ""
 	}
-
-	// Sort by name (chronological)
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
-	})
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 
 	for _, entry := range entries {
 		if strings.HasSuffix(entry.Name(), "_user.md") {
@@ -180,12 +180,10 @@ func getSessionPreview(sessionPath string) string {
 			if err != nil {
 				return ""
 			}
-			// Strip the "**You:**\n" prefix
 			content := strings.TrimSpace(data)
 			content = strings.TrimPrefix(content, "**You:**")
 			content = strings.TrimPrefix(content, "**You:**\n")
 			content = strings.TrimSpace(content)
-			// Collapse whitespace and truncate
 			content = strings.Join(strings.Fields(content), " ")
 			if len(content) > 140 {
 				content = content[:140] + "…"
@@ -196,7 +194,6 @@ func getSessionPreview(sessionPath string) string {
 	return ""
 }
 
-// cleanThinkingContent strips signature blocks from thinking messages
 func cleanThinkingContent(content string) string {
 	lines := strings.Split(content, "\n")
 	var cleaned []string
@@ -209,15 +206,45 @@ func cleanThinkingContent(content string) string {
 	return strings.TrimSpace(strings.Join(cleaned, "\n"))
 }
 
-func getSessions(c echo.Context) error {
-	processes := getRunningProcesses()
+// getBranch returns the current git branch for a directory. Cached per request via the map.
+func getBranch(dir string, cache map[string]string) string {
+	if b, ok := cache[dir]; ok {
+		return b
+	}
+	out, err := exec.Command("git", "-C", dir, "branch", "--show-current").Output()
+	b := ""
+	if err == nil {
+		b = strings.TrimSpace(string(out))
+	}
+	cache[dir] = b
+	return b
+}
 
-	cwdSet := make(map[string]bool)
-	for _, p := range processes {
-		if p.CWD != "" {
-			cwdSet[p.CWD] = true
+// getLastMessageType returns the type of the last message file in a session
+// For needs_reply detection, we also return the last "meaningful" type (ignoring diagnostic)
+func getLastMessageType(entries []os.DirEntry) (lastType string, lastMeaningfulType string) {
+	for i := len(entries) - 1; i >= 0; i-- {
+		name := entries[i].Name()
+		matches := messageTypeRe.FindStringSubmatch(name)
+		if len(matches) >= 2 {
+			t := matches[1]
+			if lastType == "" {
+				lastType = t
+			}
+			if lastMeaningfulType == "" && t != "diagnostic" {
+				lastMeaningfulType = t
+			}
+			if lastType != "" && lastMeaningfulType != "" {
+				break
+			}
 		}
 	}
+	return
+}
+
+// discoverProjectDirs finds all directories containing .clyde/sessions
+func discoverProjectDirs() map[string]bool {
+	cwdSet := make(map[string]bool)
 
 	homeDir, _ := os.UserHomeDir()
 	cwdSet[homeDir] = true
@@ -234,14 +261,29 @@ func getSessions(c echo.Context) error {
 		if err == nil {
 			for _, line := range strings.Split(strings.TrimSpace(string(findOut)), "\n") {
 				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
+				if line != "" {
+					cwdSet[filepath.Dir(line)] = true
 				}
-				projectDir := filepath.Dir(line)
-				cwdSet[projectDir] = true
 			}
 		}
 	}
+	return cwdSet
+}
+
+// ── API handlers ──
+
+func getSessions(c echo.Context) error {
+	processes := getRunningProcesses()
+
+	cwdSet := discoverProjectDirs()
+	for _, p := range processes {
+		if p.CWD != "" {
+			cwdSet[p.CWD] = true
+		}
+	}
+
+	homeDir, _ := os.UserHomeDir()
+	branchCache := make(map[string]string)
 
 	var allSessions []SessionInfo
 
@@ -256,6 +298,7 @@ func getSessions(c echo.Context) error {
 		if dir == homeDir {
 			project = "~"
 		}
+		branch := getBranch(dir, branchCache)
 
 		for _, entry := range entries {
 			if !entry.IsDir() {
@@ -277,6 +320,11 @@ func getSessions(c echo.Context) error {
 			msgEntries, _ := os.ReadDir(sessionPath)
 			msgCount := len(msgEntries)
 
+			// Sort for last-message detection
+			sort.Slice(msgEntries, func(i, j int) bool {
+				return msgEntries[i].Name() < msgEntries[j].Name()
+			})
+
 			var lastMod time.Time
 			for _, me := range msgEntries {
 				info, err := me.Info()
@@ -284,7 +332,6 @@ func getSessions(c echo.Context) error {
 					lastMod = info.ModTime()
 				}
 			}
-
 			lastModStr := ""
 			if !lastMod.IsZero() {
 				lastModStr = lastMod.Format(time.RFC3339)
@@ -300,7 +347,9 @@ func getSessions(c echo.Context) error {
 				}
 			}
 
-			preview := getSessionPreview(sessionPath)
+			lastMsgType, lastMeaningful := getLastMessageType(msgEntries)
+			// "needs_reply" = the agent finished its turn and the ball is in the human's court
+			needsReply := !running && lastMeaningful == "assistant"
 
 			sess := SessionInfo{
 				ID:           sessionID,
@@ -310,9 +359,12 @@ func getSessions(c echo.Context) error {
 				LastModified: lastModStr,
 				CWD:          dir,
 				Project:      project,
+				Branch:       branch,
 				Running:      running,
 				PID:          runPID,
-				Preview:      preview,
+				Preview:      getSessionPreview(sessionPath),
+				LastMsgType:  lastMsgType,
+				NeedsReply:   needsReply,
 			}
 			allSessions = append(allSessions, sess)
 		}
@@ -330,13 +382,11 @@ var messageTypeRe = regexp.MustCompile(`_([a-z-]+)\.md$`)
 func getSessionMessages(c echo.Context) error {
 	sessionID := c.Param("id")
 	cwdParam := c.QueryParam("cwd")
-
 	if cwdParam == "" || sessionID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd and session id required"})
 	}
 
 	sessionPath := filepath.Join(cwdParam, ".clyde", "sessions", sessionID)
-
 	if _, err := os.Stat(sessionPath); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 	}
@@ -345,18 +395,10 @@ func getSessionMessages(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
-	})
-
-	var messages []MessageFile
 	typesFilter := c.QueryParam("types")
-	allowedTypes := map[string]bool{
-		"user":      true,
-		"assistant": true,
-		"thinking":  true,
-	}
+	allowedTypes := map[string]bool{"user": true, "assistant": true, "thinking": true}
 	if typesFilter != "" {
 		allowedTypes = make(map[string]bool)
 		for _, t := range strings.Split(typesFilter, ",") {
@@ -364,31 +406,26 @@ func getSessionMessages(c echo.Context) error {
 		}
 	}
 
+	var messages []MessageFile
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-
 		name := entry.Name()
 		matches := messageTypeRe.FindStringSubmatch(name)
 		if len(matches) < 2 {
 			continue
 		}
 		msgType := matches[1]
-
 		if !allowedTypes[msgType] {
 			continue
 		}
 
 		tsStr := strings.TrimSuffix(name, "_"+msgType+".md")
-
-		filePath := filepath.Join(sessionPath, name)
-		content, err := readFileCapped(filePath, 50*1024)
+		content, err := readFileCapped(filepath.Join(sessionPath, name), 50*1024)
 		if err != nil {
 			continue
 		}
-
-		// Strip signature blocks from thinking messages
 		if msgType == "thinking" {
 			content = cleanThinkingContent(content)
 		}
@@ -400,8 +437,114 @@ func getSessionMessages(c echo.Context) error {
 			Content:   content,
 		})
 	}
-
 	return c.JSON(http.StatusOK, messages)
+}
+
+// postSessionMessage writes a new user message file into a session directory
+func postSessionMessage(c echo.Context) error {
+	sessionID := c.Param("id")
+
+	var body struct {
+		CWD     string `json:"cwd"`
+		Content string `json:"content"`
+	}
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
+	if body.CWD == "" || body.Content == "" || sessionID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd, content, and session id required"})
+	}
+
+	sessionPath := filepath.Join(body.CWD, ".clyde", "sessions", sessionID)
+	if _, err := os.Stat(sessionPath); os.IsNotExist(err) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+	}
+
+	// Generate timestamp matching clyde's format: 2026-07-09T14-11-29.681
+	now := time.Now()
+	ts := now.Format("2006-01-02T15-04-05") + fmt.Sprintf(".%03d", now.Nanosecond()/1e6)
+
+	filename := ts + "_user.md"
+	filePath := filepath.Join(sessionPath, filename)
+
+	// Write in clyde's format
+	fileContent := "**You:**\n\n" + body.Content + "\n"
+	if err := os.WriteFile(filePath, []byte(fileContent), 0644); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"status":   "ok",
+		"filename": filename,
+	})
+}
+
+// getProjects returns all known project directories that have .clyde
+func getProjects(c echo.Context) error {
+	cwdSet := discoverProjectDirs()
+	homeDir, _ := os.UserHomeDir()
+	branchCache := make(map[string]string)
+
+	var projects []ProjectInfo
+	for dir := range cwdSet {
+		// Only include dirs that actually have .clyde/sessions
+		sessDir := filepath.Join(dir, ".clyde", "sessions")
+		if _, err := os.Stat(sessDir); os.IsNotExist(err) {
+			continue
+		}
+		name := filepath.Base(dir)
+		if dir == homeDir {
+			name = "~"
+		}
+		projects = append(projects, ProjectInfo{
+			Path:   dir,
+			Name:   name,
+			Branch: getBranch(dir, branchCache),
+		})
+	}
+
+	sort.Slice(projects, func(i, j int) bool {
+		return projects[i].Name < projects[j].Name
+	})
+
+	return c.JSON(http.StatusOK, projects)
+}
+
+// createSession opens a new terminal tab running clyde in the given directory
+func createSession(c echo.Context) error {
+	var body struct {
+		CWD string `json:"cwd"`
+	}
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
+	if body.CWD == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd required"})
+	}
+
+	// Verify the directory exists
+	if _, err := os.Stat(body.CWD); os.IsNotExist(err) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "directory not found"})
+	}
+
+	// Use osascript to open a new Terminal.app tab with clyde
+	script := fmt.Sprintf(`
+		tell application "Terminal"
+			activate
+			do script "cd %s && clyde"
+		end tell
+	`, shellQuote(body.CWD))
+
+	cmd := exec.Command("osascript", "-e", script)
+	if err := cmd.Run(); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to open terminal: " + err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"status": "ok", "cwd": body.CWD})
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func readFileCapped(path string, maxBytes int64) (string, error) {
@@ -415,19 +558,12 @@ func readFileCapped(path string, maxBytes int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	if info.Size() <= maxBytes {
 		data, err := os.ReadFile(path)
-		if err != nil {
-			return "", err
-		}
-		return string(data), nil
+		return string(data), err
 	}
 
 	buf := make([]byte, maxBytes)
-	n, err := f.Read(buf)
-	if err != nil {
-		return "", err
-	}
+	n, _ := f.Read(buf)
 	return string(buf[:n]) + "\n\n… [truncated, " + fmt.Sprintf("%d", info.Size()) + " bytes total]", nil
 }
