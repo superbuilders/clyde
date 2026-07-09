@@ -25,22 +25,18 @@
     .msg-content blockquote { border-left: 3px solid rgba(255,255,255,.25); padding-left: 1rem; margin: .5em 0; opacity: .85; }
     .msg-content a { color: oklch(.72 .16 250); text-decoration: underline; }
     .msg-content hr { border-color: rgba(255,255,255,.1); margin: .75em 0; }
-
     .nice-scroll::-webkit-scrollbar { width: 5px; }
     .nice-scroll::-webkit-scrollbar-track { background: transparent; }
     .nice-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 3px; }
-
     .sess-item { transition: all .15s ease; border-left: 3px solid transparent; }
     .sess-item:hover { background: rgba(255,255,255,.04); }
     .sess-item.active { background: rgba(99,102,241,.12); border-left-color: oklch(.65 .25 265); }
-
     @keyframes ping-slow { 75%,100% { transform: scale(1.8); opacity: 0; } }
     .dot-running { position: relative; }
     .dot-running::after {
       content: ''; position: absolute; inset: -2px; border-radius: 50%;
       background: oklch(.7 .2 150); animation: ping-slow 2s cubic-bezier(0,.2,.4,1) infinite;
     }
-
     .msg-card { border-radius: .75rem; }
   </style>
 </head>
@@ -50,7 +46,6 @@
 
   <!-- ════ Navbar ════ -->
   <div class="bg-base-100 border-b border-base-content/10 px-4 py-2 shrink-0">
-    <!-- Row 1: brand + counts + search -->
     <div class="flex items-center gap-3 mb-1.5">
       <div class="flex items-center gap-2 shrink-0">
         <span class="text-lg">🔍</span>
@@ -62,71 +57,47 @@
           <span class="w-1.5 h-1.5 rounded-full bg-success-content animate-pulse"></span>
           <span x-text="runningCount + ' live'"></span>
         </span>
-        <span x-show="needsReplyCount > 0" class="badge badge-sm gap-1"
-          style="background:#f59e0b; color:#1a1a1a">
+        <span x-show="needsReplyCount > 0" class="badge badge-sm gap-1" style="background:#f59e0b;color:#1a1a1a">
           <span x-text="needsReplyCount + ' awaiting'"></span>
         </span>
       </div>
-
       <div class="flex-1"></div>
-
-      <input type="text" placeholder="Search…"
-        class="input input-sm input-bordered w-44 bg-base-200/50"
-        x-model="filter" />
+      <input type="text" placeholder="Search…" class="input input-sm input-bordered w-44 bg-base-200/50" x-model="filter" />
       <button class="btn btn-sm btn-ghost btn-square" @click="loadSessions()" title="Refresh">↻</button>
     </div>
-
-    <!-- Row 2: filters + sort + new session -->
     <div class="flex items-center gap-2">
-      <!-- Project -->
       <select class="select select-xs select-bordered bg-base-200/50" x-model="projectFilter">
         <option value="">All projects</option>
-        <template x-for="p in projects" :key="p">
-          <option :value="p" x-text="p"></option>
-        </template>
+        <template x-for="p in projects" :key="p"><option :value="p" x-text="p"></option></template>
       </select>
-
-      <!-- Branch -->
       <select class="select select-xs select-bordered bg-base-200/50" x-model="branchFilter">
         <option value="">All branches</option>
-        <template x-for="b in branches" :key="b">
-          <option :value="b" x-text="b"></option>
-        </template>
+        <template x-for="b in branches" :key="b"><option :value="b" x-text="b"></option></template>
       </select>
-
-      <!-- Status tabs -->
       <div class="flex items-center border border-base-content/15 rounded-lg overflow-hidden">
         <template x-for="s in ['all','active','past','awaiting']" :key="s">
           <button class="px-3 py-1 text-[11px] font-medium transition-all cursor-pointer whitespace-nowrap"
-            :style="statusFilter === s
-              ? 'background:' + statusColor(s) + '; color: #fff'
-              : 'background: transparent; color: rgba(255,255,255,.45)'"
-            @click="statusFilter = s"
-            x-text="s"></button>
+            :style="statusFilter === s ? 'background:' + statusColor(s) + ';color:#fff' : 'background:transparent;color:rgba(255,255,255,.45)'"
+            @click="statusFilter = s" x-text="s"></button>
         </template>
       </div>
-
-      <!-- Sort -->
       <select class="select select-xs select-bordered bg-base-200/50" x-model="sortBy">
         <option value="recent">Recent</option>
         <option value="project">Project</option>
         <option value="messages">Messages</option>
       </select>
-
       <div class="flex-1"></div>
-
-      <!-- New session -->
       <div class="relative" x-data="{ open: false }">
         <button class="btn btn-xs btn-primary gap-1" @click="open = !open" title="New session">
           <span class="text-base leading-none">+</span> New
         </button>
         <div x-show="open" @click.away="open = false" x-transition
           class="absolute right-0 top-8 z-50 bg-base-100 border border-base-content/15 rounded-xl shadow-2xl w-72 p-3">
-          <p class="text-xs font-semibold text-base-content/60 mb-2">Open clyde in…</p>
+          <p class="text-xs font-semibold text-base-content/60 mb-2">Create session in…</p>
           <div class="max-h-64 overflow-y-auto nice-scroll space-y-1">
             <template x-for="proj in projectList" :key="proj.path">
               <button class="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-base-200 transition flex items-center gap-2"
-                @click="openNewSession(proj.path); open = false">
+                @click="createNewSession(proj.path); open = false">
                 <span class="font-medium" x-text="proj.name"></span>
                 <span class="text-[10px] text-base-content/30 font-mono" x-text="proj.branch" x-show="proj.branch"></span>
               </button>
@@ -147,45 +118,33 @@
       </div>
       <div class="nice-scroll overflow-y-auto flex-1" x-ref="sessionList">
         <template x-for="(s, idx) in filteredSessions" :key="s.id + s.cwd">
-          <div
-            class="sess-item px-3 py-2.5 border-b border-base-content/6 cursor-pointer relative"
-            :class="{ 'active': isSelected(s) }"
-            @click="selectSession(s)"
-          >
-            <!-- Needs-reply dot (top-right) -->
+          <div class="sess-item px-3 py-2.5 border-b border-base-content/6 cursor-pointer relative"
+            :class="{ 'active': isSelected(s) }" @click="selectSession(s)">
             <template x-if="s.needs_reply">
-              <span class="absolute top-2 right-2 w-2.5 h-2.5 rounded-full" style="background:#f59e0b; box-shadow: 0 0 6px #f59e0b88"
-                title="Awaiting your reply"></span>
+              <span class="absolute top-2 right-2 w-2.5 h-2.5 rounded-full" style="background:#f59e0b;box-shadow:0 0 6px #f59e0b88" title="Awaiting reply"></span>
             </template>
-
-            <!-- row 1: status + badges + msg count -->
+            <template x-if="s.agent_busy">
+              <span class="absolute top-2 right-7 w-2.5 h-2.5 rounded-full animate-pulse" style="background:#8b5cf6;box-shadow:0 0 6px #8b5cf688" title="Agent working"></span>
+            </template>
             <div class="flex items-center gap-1.5 mb-1">
               <template x-if="s.running">
                 <span class="dot-running inline-block w-2 h-2 rounded-full bg-success shrink-0"></span>
               </template>
-              <span class="badge badge-xs font-semibold"
-                :class="s.running ? 'badge-success' : 'badge-outline opacity-70'"
-                x-text="s.project"></span>
-              <span x-show="s.branch" class="text-[9px] font-mono text-base-content/25 truncate max-w-[80px]"
-                x-text="s.branch"></span>
+              <span class="badge badge-xs font-semibold" :class="s.running ? 'badge-success' : 'badge-outline opacity-70'" x-text="s.project"></span>
+              <span x-show="s.branch" class="text-[9px] font-mono text-base-content/25 truncate max-w-[80px]" x-text="s.branch"></span>
               <span class="text-[10px] text-base-content/40" x-text="s.user"></span>
               <span class="ml-auto text-[10px] text-base-content/35 font-mono tabular-nums" x-text="s.message_count + ' msgs'"></span>
             </div>
-            <!-- row 2: preview -->
             <div class="text-xs text-base-content/65 leading-snug line-clamp-2 mb-1"
-              x-text="s.preview || '(empty session)'"
-              :class="{ 'italic opacity-40': !s.preview }"></div>
-            <!-- row 3: timestamp + age -->
+              x-text="s.preview || '(new session)'" :class="{ 'italic opacity-40': !s.preview }"></div>
             <div class="flex items-center gap-2 text-[10px] text-base-content/30 font-mono">
               <span x-text="formatTimestamp(s.timestamp)"></span>
               <span class="ml-auto" x-text="timeAgo(s.last_modified)"></span>
             </div>
           </div>
         </template>
-
         <div x-show="filteredSessions.length === 0" class="p-10 text-center text-base-content/25">
-          <p class="text-4xl mb-3">🔇</p>
-          <p class="text-sm">No matching sessions</p>
+          <p class="text-4xl mb-3">🔇</p><p class="text-sm">No matching sessions</p>
         </div>
       </div>
     </div>
@@ -197,35 +156,34 @@
       <template x-if="selected">
         <div class="bg-base-100 border-b border-base-content/8 px-5 py-2.5 shrink-0">
           <div class="flex items-center gap-3 mb-2">
-            <!-- Running badge -->
             <template x-if="selected.running">
               <span class="badge badge-sm badge-success gap-1">
                 <span class="w-1.5 h-1.5 rounded-full bg-success-content animate-pulse"></span>
                 PID <span x-text="selected.pid"></span>
               </span>
             </template>
-            <!-- Needs-reply badge -->
-            <template x-if="selected.needs_reply">
-              <span class="badge badge-sm gap-1" style="background:#f59e0b; color:#1a1a1a">
-                ⏳ awaiting reply
+            <template x-if="agentBusy">
+              <span class="badge badge-sm gap-1" style="background:#8b5cf6;color:#fff">
+                <span class="loading loading-spinner loading-xs"></span> agent working
               </span>
+            </template>
+            <template x-if="selected.needs_reply && !agentBusy">
+              <span class="badge badge-sm gap-1" style="background:#f59e0b;color:#1a1a1a">⏳ awaiting reply</span>
             </template>
             <span class="font-mono text-sm text-base-content/80" x-text="selected.id"></span>
             <span class="badge badge-xs badge-outline" x-text="selected.project"></span>
             <span x-show="selected.branch" class="badge badge-xs badge-ghost font-mono" x-text="selected.branch"></span>
             <span class="text-[11px] text-base-content/30 ml-auto font-mono" x-text="selected.cwd"></span>
           </div>
-          <!-- Type filter pills -->
           <div class="flex items-center gap-1.5 flex-wrap">
             <span class="text-[10px] text-base-content/30 mr-0.5 uppercase tracking-wider font-semibold">Show</span>
             <template x-for="t in availableTypes" :key="t">
               <button class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium transition-all cursor-pointer border"
                 :style="visibleTypes.includes(t)
-                  ? 'background:' + typeStyle(t).bg + '; color:' + typeStyle(t).fg + '; border-color:' + typeStyle(t).bg
-                  : 'background:transparent; color: rgba(255,255,255,.3); border-color: rgba(255,255,255,.08)'"
+                  ? 'background:'+typeStyle(t).bg+';color:'+typeStyle(t).fg+';border-color:'+typeStyle(t).bg
+                  : 'background:transparent;color:rgba(255,255,255,.3);border-color:rgba(255,255,255,.08)'"
                 @click="toggleType(t)">
-                <span class="w-1.5 h-1.5 rounded-full"
-                  :style="visibleTypes.includes(t) ? 'background: rgba(255,255,255,.4)' : 'background: rgba(255,255,255,.15)'"></span>
+                <span class="w-1.5 h-1.5 rounded-full" :style="visibleTypes.includes(t)?'background:rgba(255,255,255,.4)':'background:rgba(255,255,255,.15)'"></span>
                 <span x-text="t"></span>
               </button>
             </template>
@@ -235,7 +193,6 @@
 
       <!-- Messages -->
       <div class="nice-scroll flex-1 overflow-y-auto bg-base-200/50" x-ref="msgArea">
-        <!-- Empty state -->
         <template x-if="!selected && !loadingMessages">
           <div class="flex items-center justify-center h-full text-base-content/20">
             <div class="text-center">
@@ -245,88 +202,64 @@
             </div>
           </div>
         </template>
-
-        <!-- Loading -->
         <template x-if="loadingMessages">
           <div class="flex items-center justify-center h-full">
             <span class="loading loading-dots loading-lg text-primary"></span>
           </div>
         </template>
-
-        <!-- Messages list -->
         <template x-if="selected && !loadingMessages">
           <div class="max-w-4xl mx-auto px-5 py-4 space-y-4">
             <template x-for="msg in displayedMessages" :key="msg.filename">
               <div>
-                <template x-if="msg.type === 'user'">
-                  <div class="flex justify-end">
-                    <div class="max-w-[85%]">
-                      <div class="text-[10px] text-base-content/30 text-right mb-1 font-mono" x-text="formatMsgTimestamp(msg.timestamp)"></div>
-                      <div class="msg-card bg-primary text-primary-content px-4 py-3 text-sm shadow-md">
-                        <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
-                      </div>
+                <template x-if="msg.type==='user'">
+                  <div class="flex justify-end"><div class="max-w-[85%]">
+                    <div class="text-[10px] text-base-content/30 text-right mb-1 font-mono" x-text="formatMsgTimestamp(msg.timestamp)"></div>
+                    <div class="msg-card bg-primary text-primary-content px-4 py-3 text-sm shadow-md">
+                      <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
                     </div>
-                  </div>
+                  </div></div>
                 </template>
-                <template x-if="msg.type === 'assistant'">
-                  <div class="flex justify-start">
-                    <div class="max-w-[85%]">
-                      <div class="flex items-center gap-2 mb-1">
-                        <span class="text-sm">🤖</span>
-                        <span class="text-[10px] text-base-content/30 font-mono" x-text="formatMsgTimestamp(msg.timestamp)"></span>
-                      </div>
-                      <div class="msg-card bg-base-100 text-base-content px-4 py-3 text-sm shadow-sm border border-base-content/6">
-                        <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
-                      </div>
+                <template x-if="msg.type==='assistant'">
+                  <div class="flex justify-start"><div class="max-w-[85%]">
+                    <div class="flex items-center gap-2 mb-1">
+                      <span class="text-sm">🤖</span>
+                      <span class="text-[10px] text-base-content/30 font-mono" x-text="formatMsgTimestamp(msg.timestamp)"></span>
                     </div>
-                  </div>
-                </template>
-                <template x-if="msg.type === 'thinking'">
-                  <div class="flex justify-start">
-                    <div class="max-w-[80%]">
-                      <div class="flex items-center gap-2 mb-1">
-                        <span class="text-sm">💭</span>
-                        <span class="text-[10px] text-base-content/30 font-mono" x-text="formatMsgTimestamp(msg.timestamp)"></span>
-                      </div>
-                      <div class="msg-card bg-warning/10 text-base-content/70 px-4 py-3 text-sm border border-warning/20 italic">
-                        <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
-                      </div>
+                    <div class="msg-card bg-base-100 text-base-content px-4 py-3 text-sm shadow-sm border border-base-content/6">
+                      <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
                     </div>
-                  </div>
+                  </div></div>
                 </template>
-                <template x-if="msg.type === 'tool-use'">
-                  <div class="flex justify-start">
-                    <div class="max-w-[80%]">
-                      <div class="flex items-center gap-2 mb-1">
-                        <span class="text-sm">🔧</span>
-                        <span class="text-[10px] text-base-content/30 font-mono" x-text="formatMsgTimestamp(msg.timestamp)"></span>
-                      </div>
-                      <div class="msg-card bg-info/10 text-base-content/70 px-4 py-2.5 text-xs font-mono border border-info/20">
-                        <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
-                      </div>
+                <template x-if="msg.type==='thinking'">
+                  <div class="flex justify-start"><div class="max-w-[80%]">
+                    <div class="flex items-center gap-2 mb-1"><span class="text-sm">💭</span><span class="text-[10px] text-base-content/30 font-mono" x-text="formatMsgTimestamp(msg.timestamp)"></span></div>
+                    <div class="msg-card bg-warning/10 text-base-content/70 px-4 py-3 text-sm border border-warning/20 italic">
+                      <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
                     </div>
-                  </div>
+                  </div></div>
                 </template>
-                <template x-if="msg.type === 'tool-result'">
-                  <div class="flex justify-start">
-                    <div class="max-w-[80%]">
-                      <div class="flex items-center gap-2 mb-1">
-                        <span class="text-sm">📤</span>
-                        <span class="text-[10px] text-base-content/30 font-mono" x-text="formatMsgTimestamp(msg.timestamp)"></span>
-                      </div>
-                      <div class="msg-card bg-success/8 text-base-content/60 px-4 py-2.5 text-xs font-mono border border-success/15">
-                        <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
-                      </div>
+                <template x-if="msg.type==='tool-use'">
+                  <div class="flex justify-start"><div class="max-w-[80%]">
+                    <div class="flex items-center gap-2 mb-1"><span class="text-sm">🔧</span><span class="text-[10px] text-base-content/30 font-mono" x-text="formatMsgTimestamp(msg.timestamp)"></span></div>
+                    <div class="msg-card bg-info/10 text-base-content/70 px-4 py-2.5 text-xs font-mono border border-info/20">
+                      <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
                     </div>
-                  </div>
+                  </div></div>
                 </template>
-                <template x-if="msg.type === 'diagnostic'">
+                <template x-if="msg.type==='tool-result'">
+                  <div class="flex justify-start"><div class="max-w-[80%]">
+                    <div class="flex items-center gap-2 mb-1"><span class="text-sm">📤</span><span class="text-[10px] text-base-content/30 font-mono" x-text="formatMsgTimestamp(msg.timestamp)"></span></div>
+                    <div class="msg-card bg-success/8 text-base-content/60 px-4 py-2.5 text-xs font-mono border border-success/15">
+                      <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
+                    </div>
+                  </div></div>
+                </template>
+                <template x-if="msg.type==='diagnostic'">
                   <div class="flex justify-center">
-                    <div class="text-[10px] font-mono text-base-content/25 bg-base-300/50 rounded-full px-3 py-0.5"
-                      x-text="msg.content.replace(/\n/g, ' ').substring(0, 120)"></div>
+                    <div class="text-[10px] font-mono text-base-content/25 bg-base-300/50 rounded-full px-3 py-0.5" x-text="msg.content.replace(/\n/g,' ').substring(0,120)"></div>
                   </div>
                 </template>
-                <template x-if="msg.type === 'compaction'">
+                <template x-if="msg.type==='compaction'">
                   <div class="flex justify-center">
                     <div class="text-xs text-base-content/30 bg-base-300/50 rounded-lg px-4 py-2 border border-base-content/8 max-w-[80%]">
                       <span class="font-semibold">📦 Compaction</span>
@@ -336,10 +269,16 @@
                 </template>
               </div>
             </template>
-
             <template x-if="displayedMessages.length === 0">
-              <div class="flex items-center justify-center py-20 text-base-content/25">
-                <p class="text-sm">No messages of the selected types</p>
+              <div class="flex items-center justify-center py-20 text-base-content/25"><p class="text-sm">No messages of the selected types</p></div>
+            </template>
+            <!-- Agent working indicator at bottom -->
+            <template x-if="agentBusy">
+              <div class="flex justify-start">
+                <div class="flex items-center gap-2 px-4 py-3 rounded-xl bg-base-100/50 border border-base-content/6">
+                  <span class="loading loading-dots loading-sm" style="color:#8b5cf6"></span>
+                  <span class="text-sm text-base-content/50">Agent is working…</span>
+                </div>
               </div>
             </template>
             <div class="h-4"></div>
@@ -347,30 +286,22 @@
         </template>
       </div>
 
-      <!-- ── Reply box (only for inactive sessions) ── -->
-      <template x-if="selected && !selected.running">
+      <!-- ── Reply box (always shown when session selected) ── -->
+      <template x-if="selected">
         <div class="bg-base-100 border-t border-base-content/10 px-5 py-3 shrink-0">
           <div class="flex items-end gap-3">
-            <div class="flex-1 relative">
-              <textarea
-                x-ref="replyBox"
-                x-model="replyText"
-                @keydown.meta.enter="sendReply()"
-                @keydown.ctrl.enter="sendReply()"
-                placeholder="Send a message to this session… (⌘+Enter to send)"
+            <div class="flex-1">
+              <textarea x-ref="replyBox" x-model="replyText"
+                @keydown.meta.enter="sendReply()" @keydown.ctrl.enter="sendReply()"
+                :placeholder="agentBusy ? 'Agent is processing… wait for it to finish' : 'Send a message… (⌘+Enter)'"
+                :disabled="agentBusy"
                 class="textarea textarea-bordered w-full bg-base-200/50 text-sm min-h-[2.5rem] max-h-40 resize-y"
-                rows="2"
-              ></textarea>
+                rows="2"></textarea>
             </div>
             <button class="btn btn-primary btn-sm shrink-0"
-              :disabled="!replyText.trim() || sending"
-              @click="sendReply()">
-              <template x-if="!sending">
-                <span>Send</span>
-              </template>
-              <template x-if="sending">
-                <span class="loading loading-spinner loading-xs"></span>
-              </template>
+              :disabled="!replyText.trim() || sending || agentBusy" @click="sendReply()">
+              <template x-if="!sending"><span>Send</span></template>
+              <template x-if="sending"><span class="loading loading-spinner loading-xs"></span></template>
             </button>
           </div>
           <div x-show="replyStatus" class="mt-1.5 text-xs" :class="replyError ? 'text-error' : 'text-success'" x-text="replyStatus"></div>
@@ -383,165 +314,177 @@
 <script>
 function app() {
   return {
-    sessions: [],
-    selected: null,
-    messages: [],
-    loadingMessages: false,
-    filter: '',
-    projectFilter: '',
-    branchFilter: '',
-    statusFilter: 'all',
-    sortBy: 'recent',
+    sessions: [], selected: null, messages: [], loadingMessages: false,
+    filter: '', projectFilter: '', branchFilter: '', statusFilter: 'all', sortBy: 'recent',
     visibleTypes: ['user', 'assistant'],
     availableTypes: ['user', 'assistant', 'thinking', 'tool-use', 'tool-result', 'diagnostic', 'compaction'],
     focusIdx: -1,
-    replyText: '',
-    sending: false,
-    replyStatus: '',
-    replyError: false,
+    replyText: '', sending: false, replyStatus: '', replyError: false,
     projectList: [],
+    pollTimer: null, agentBusy: false, lastFilename: '',
 
     get runningCount() { return this.sessions.filter(s => s.running).length; },
     get needsReplyCount() { return this.sessions.filter(s => s.needs_reply).length; },
-
-    get projects() {
-      return [...new Set(this.sessions.map(s => s.project))].sort();
-    },
-    get branches() {
-      return [...new Set(this.sessions.map(s => s.branch).filter(Boolean))].sort();
-    },
+    get projects() { return [...new Set(this.sessions.map(s => s.project))].sort(); },
+    get branches() { return [...new Set(this.sessions.map(s => s.branch).filter(Boolean))].sort(); },
 
     get filteredSessions() {
       let list = this.sessions.filter(s => {
-        // status
-        if (this.statusFilter === 'active' && !s.running) return false;
-        if (this.statusFilter === 'past' && s.running) return false;
+        if (this.statusFilter === 'active' && !s.running && !s.agent_busy) return false;
+        if (this.statusFilter === 'past' && (s.running || s.agent_busy)) return false;
         if (this.statusFilter === 'awaiting' && !s.needs_reply) return false;
-        // dropdowns
         if (this.projectFilter && s.project !== this.projectFilter) return false;
         if (this.branchFilter && s.branch !== this.branchFilter) return false;
-        // text search
         if (this.filter) {
           const f = this.filter.toLowerCase();
-          return s.id.toLowerCase().includes(f) ||
-                 s.user.toLowerCase().includes(f) ||
-                 s.project.toLowerCase().includes(f) ||
-                 (s.branch || '').toLowerCase().includes(f) ||
-                 (s.preview || '').toLowerCase().includes(f);
+          return s.id.toLowerCase().includes(f) || s.user.toLowerCase().includes(f) ||
+            s.project.toLowerCase().includes(f) || (s.branch||'').toLowerCase().includes(f) ||
+            (s.preview||'').toLowerCase().includes(f);
         }
         return true;
       });
-
-      // Sort
-      if (this.sortBy === 'project') {
-        list.sort((a, b) => a.project.localeCompare(b.project) || b.last_modified.localeCompare(a.last_modified));
-      } else if (this.sortBy === 'messages') {
-        list.sort((a, b) => b.message_count - a.message_count);
-      }
-      // 'recent' = default server sort, no re-sort needed
-
+      if (this.sortBy === 'project') list.sort((a,b) => a.project.localeCompare(b.project) || b.last_modified.localeCompare(a.last_modified));
+      else if (this.sortBy === 'messages') list.sort((a,b) => b.message_count - a.message_count);
       return list;
     },
 
-    get displayedMessages() {
-      return this.messages.filter(m => this.visibleTypes.includes(m.type));
-    },
-
-    isSelected(s) {
-      return this.selected?.id === s.id && this.selected?.cwd === s.cwd;
-    },
+    get displayedMessages() { return this.messages.filter(m => this.visibleTypes.includes(m.type)); },
+    isSelected(s) { return this.selected?.id === s.id && this.selected?.cwd === s.cwd; },
 
     async init() {
       await Promise.all([this.loadSessions(), this.loadProjects()]);
     },
 
     async loadSessions() {
-      try {
-        const r = await fetch('/api/sessions');
-        this.sessions = await r.json() || [];
-      } catch (e) { console.error('Failed to load sessions:', e); }
+      try { this.sessions = await (await fetch('/api/sessions')).json() || []; }
+      catch(e) { console.error(e); }
     },
 
     async loadProjects() {
-      try {
-        const r = await fetch('/api/projects');
-        this.projectList = await r.json() || [];
-      } catch (e) { console.error('Failed to load projects:', e); }
+      try { this.projectList = await (await fetch('/api/projects')).json() || []; }
+      catch(e) { console.error(e); }
     },
 
     async selectSession(session) {
       if (this.isSelected(session) && this.messages.length) return;
+      this.stopPolling();
       this.selected = session;
       this.loadingMessages = true;
       this.messages = [];
       this.replyText = '';
       this.replyStatus = '';
+      this.lastFilename = '';
+      this.agentBusy = session.agent_busy || false;
       try {
         const types = this.availableTypes.join(',');
-        const r = await fetch(`/api/sessions/${encodeURIComponent(session.id)}/messages?cwd=${encodeURIComponent(session.cwd)}&types=${types}`);
-        this.messages = await r.json() || [];
-      } catch (e) { console.error('Failed to load messages:', e); }
+        this.messages = await (await fetch(`/api/sessions/${enc(session.id)}/messages?cwd=${enc(session.cwd)}&types=${types}`)).json() || [];
+        if (this.messages.length) this.lastFilename = this.messages[this.messages.length - 1].filename;
+      } catch(e) { console.error(e); }
       finally {
         this.loadingMessages = false;
-        this.$nextTick(() => {
-          if (this.$refs.msgArea) this.$refs.msgArea.scrollTop = this.$refs.msgArea.scrollHeight;
-        });
+        this.scrollToBottom();
+        this.startPolling();
       }
     },
 
+    // ── Polling for live updates ──
+    startPolling() {
+      this.stopPolling();
+      this.pollTimer = setInterval(() => this.pollForUpdates(), 1500);
+    },
+    stopPolling() {
+      if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    },
+    async pollForUpdates() {
+      if (!this.selected) return;
+      try {
+        // Check agent status
+        const statusResp = await fetch(`/api/sessions/${enc(this.selected.id)}/status?cwd=${enc(this.selected.cwd)}`);
+        const status = await statusResp.json();
+        this.agentBusy = status.busy;
+
+        // Fetch new messages since last known
+        const types = this.availableTypes.join(',');
+        let url = `/api/sessions/${enc(this.selected.id)}/messages?cwd=${enc(this.selected.cwd)}&types=${types}`;
+        if (this.lastFilename) url += `&after=${enc(this.lastFilename)}`;
+        const newMsgs = await (await fetch(url)).json() || [];
+        if (newMsgs.length > 0) {
+          this.messages.push(...newMsgs);
+          this.lastFilename = newMsgs[newMsgs.length - 1].filename;
+          // Update selected session's message count
+          this.selected.message_count += newMsgs.length;
+          // Auto-scroll if near bottom
+          this.$nextTick(() => this.scrollToBottomIfNear());
+        }
+      } catch(e) { /* ignore poll errors */ }
+    },
+
+    scrollToBottom() {
+      this.$nextTick(() => {
+        const el = this.$refs.msgArea;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+    scrollToBottomIfNear() {
+      const el = this.$refs.msgArea;
+      if (!el) return;
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
+      if (nearBottom) el.scrollTop = el.scrollHeight;
+    },
+
+    // ── Send message + trigger agent ──
     async sendReply() {
       const text = this.replyText.trim();
-      if (!text || !this.selected || this.sending) return;
+      if (!text || !this.selected || this.sending || this.agentBusy) return;
       this.sending = true;
       this.replyStatus = '';
       this.replyError = false;
       try {
-        const r = await fetch(`/api/sessions/${encodeURIComponent(this.selected.id)}/messages`, {
+        const r = await fetch(`/api/sessions/${enc(this.selected.id)}/messages`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ cwd: this.selected.cwd, content: text })
         });
         const data = await r.json();
-        if (r.ok) {
-          this.replyStatus = '✓ Message written: ' + data.filename;
+        if (r.ok || r.status === 202) {
+          this.replyStatus = '✓ Sent — agent is processing';
           this.replyText = '';
-          // Reload messages to show the new one
-          const types = this.availableTypes.join(',');
-          const mr = await fetch(`/api/sessions/${encodeURIComponent(this.selected.id)}/messages?cwd=${encodeURIComponent(this.selected.cwd)}&types=${types}`);
-          this.messages = await mr.json() || [];
-          this.$nextTick(() => {
-            if (this.$refs.msgArea) this.$refs.msgArea.scrollTop = this.$refs.msgArea.scrollHeight;
-          });
-          // Update session list counts
-          this.loadSessions();
+          this.agentBusy = true;
+          // Poll will pick up the new messages automatically
         } else {
           this.replyStatus = '✗ ' + (data.error || 'Failed');
           this.replyError = true;
         }
-      } catch (e) {
+      } catch(e) {
         this.replyStatus = '✗ Network error';
         this.replyError = true;
-      } finally {
-        this.sending = false;
-      }
+      } finally { this.sending = false; }
     },
 
-    async openNewSession(cwd) {
+    // ── Create new session ──
+    async createNewSession(cwd) {
       try {
         const r = await fetch('/api/sessions/new', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ cwd })
         });
+        const data = await r.json();
         if (r.ok) {
-          // Give Terminal time to open, then refresh
-          setTimeout(() => this.loadSessions(), 3000);
+          // Reload sessions and select the new one
+          await this.loadSessions();
+          const newSess = this.sessions.find(s => s.id === data.session_id && s.cwd === data.cwd);
+          if (newSess) {
+            this.selectSession(newSess);
+            // Focus the reply box
+            this.$nextTick(() => { if (this.$refs.replyBox) this.$refs.replyBox.focus(); });
+          }
         }
-      } catch (e) { console.error('Failed to create session:', e); }
+      } catch(e) { console.error(e); }
     },
 
     handleKey(e) {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+      if (['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)) return;
       const list = this.filteredSessions;
       if (!list.length) return;
       if (e.key === 'ArrowDown' || e.key === 'j') {
@@ -555,56 +498,26 @@ function app() {
       }
     },
 
-    toggleType(type) {
-      if (this.visibleTypes.includes(type)) {
-        this.visibleTypes = this.visibleTypes.filter(t => t !== type);
-      } else { this.visibleTypes.push(type); }
+    toggleType(t) {
+      this.visibleTypes.includes(t) ? this.visibleTypes = this.visibleTypes.filter(x => x !== t) : this.visibleTypes.push(t);
     },
-
-    typeStyle(type) {
-      const s = {
-        user:          { bg: '#6366f1', fg: '#fff' },
-        assistant:     { bg: '#0ea5e9', fg: '#fff' },
-        thinking:      { bg: '#eab308', fg: '#1a1a1a' },
-        'tool-use':    { bg: '#8b5cf6', fg: '#fff' },
-        'tool-result': { bg: '#22c55e', fg: '#1a1a1a' },
-        diagnostic:    { bg: '#525252', fg: '#ccc' },
-        compaction:    { bg: '#ec4899', fg: '#fff' },
-      };
-      return s[type] || { bg: '#444', fg: '#ccc' };
+    typeStyle(t) {
+      return {user:{bg:'#6366f1',fg:'#fff'},assistant:{bg:'#0ea5e9',fg:'#fff'},thinking:{bg:'#eab308',fg:'#1a1a1a'},
+        'tool-use':{bg:'#8b5cf6',fg:'#fff'},'tool-result':{bg:'#22c55e',fg:'#1a1a1a'},diagnostic:{bg:'#525252',fg:'#ccc'},
+        compaction:{bg:'#ec4899',fg:'#fff'}}[t]||{bg:'#444',fg:'#ccc'};
     },
-
-    statusColor(s) {
-      return { all: '#6366f1', active: '#22c55e', past: '#525252', awaiting: '#f59e0b' }[s] || '#444';
-    },
-
-    formatTimestamp(ts) {
-      if (!ts) return '';
-      return ts.replace('T', '  ').replace(/-/g, (m, off) => off > 10 ? ':' : '-');
-    },
-    formatMsgTimestamp(ts) {
-      const m = ts.match(/T(\d+)-(\d+)-(\d+)/);
-      return m ? `${m[1]}:${m[2]}:${m[3]}` : ts;
-    },
-    timeAgo(isoStr) {
-      if (!isoStr) return '';
-      const d = (Date.now() - new Date(isoStr)) / 1000;
-      if (d < 60) return 'just now';
-      if (d < 3600) return Math.floor(d / 60) + 'm ago';
-      if (d < 86400) return Math.floor(d / 3600) + 'h ago';
-      return Math.floor(d / 86400) + 'd ago';
-    },
-    renderMarkdown(content) {
-      if (!content) return '';
-      let c = content
-        .replace(/^\*\*You:\*\*\s*/m, '')
-        .replace(/^\*\*Claude:\*\*\s*/m, '')
-        .replace(/^💭\s*/m, '');
-      try { return marked.parse(c); }
-      catch { return '<pre>' + c.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre>'; }
+    statusColor(s) { return {all:'#6366f1',active:'#22c55e',past:'#525252',awaiting:'#f59e0b'}[s]||'#444'; },
+    formatTimestamp(ts) { return ts ? ts.replace('T','  ').replace(/-/g,(m,o)=>o>10?':':'-') : ''; },
+    formatMsgTimestamp(ts) { const m=ts.match(/T(\d+)-(\d+)-(\d+)/); return m?`${m[1]}:${m[2]}:${m[3]}`:ts; },
+    timeAgo(iso) { if(!iso)return''; const d=(Date.now()-new Date(iso))/1000; return d<60?'just now':d<3600?Math.floor(d/60)+'m ago':d<86400?Math.floor(d/3600)+'h ago':Math.floor(d/86400)+'d ago'; },
+    renderMarkdown(c) {
+      if(!c)return'';
+      c=c.replace(/^\*\*You:\*\*\s*/m,'').replace(/^\*\*Claude:\*\*\s*/m,'').replace(/^💭\s*/m,'');
+      try{return marked.parse(c)}catch{return'<pre>'+c.replace(/</g,'&lt;')+'</pre>'}
     }
   };
 }
+function enc(s) { return encodeURIComponent(s); }
 </script>
 </body>
 </html>
