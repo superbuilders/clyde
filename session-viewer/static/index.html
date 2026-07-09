@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clyde Session Viewer</title>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css" />
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5/full.css" rel="stylesheet" type="text/css" />
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <!-- markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    .msg-content pre {
+      background: oklch(0.2 0.01 260);
+      padding: 1rem;
+      border-radius: 0.5rem;
+      overflow-x: auto;
+      margin: 0.5rem 0;
+    }
+    .msg-content code {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 0.85em;
+    }
+    .msg-content p { margin: 0.5em 0; }
+    .msg-content h1, .msg-content h2, .msg-content h3 { margin: 0.75em 0 0.25em; font-weight: 700; }
+    .msg-content h1 { font-size: 1.5em; }
+    .msg-content h2 { font-size: 1.25em; }
+    .msg-content h3 { font-size: 1.1em; }
+    .msg-content ul, .msg-content ol { padding-left: 1.5rem; margin: 0.5em 0; }
+    .msg-content li { margin: 0.25em 0; }
+    .msg-content table { border-collapse: collapse; margin: 0.5rem 0; width: 100%; }
+    .msg-content th, .msg-content td { border: 1px solid oklch(0.4 0.01 260); padding: 0.35rem 0.75rem; text-align: left; }
+    .msg-content th { background: oklch(0.25 0.01 260); font-weight: 600; }
+    .msg-content blockquote { border-left: 3px solid oklch(0.5 0.15 260); padding-left: 1rem; margin: 0.5em 0; opacity: 0.9; }
+    .msg-content a { color: oklch(0.7 0.15 250); text-decoration: underline; }
+    .session-list::-webkit-scrollbar { width: 6px; }
+    .session-list::-webkit-scrollbar-thumb { background: oklch(0.4 0.01 260); border-radius: 3px; }
+    .msg-scroll::-webkit-scrollbar { width: 6px; }
+    .msg-scroll::-webkit-scrollbar-thumb { background: oklch(0.4 0.01 260); border-radius: 3px; }
+  </style>
+</head>
+<body class="h-screen overflow-hidden bg-base-300">
+
+<div x-data="sessionViewer()" x-init="init()" class="flex flex-col h-screen">
+
+  <!-- Top bar -->
+  <div class="navbar bg-base-100 shadow-sm px-4 shrink-0">
+    <div class="flex-1 gap-2">
+      <span class="text-xl font-bold">🔍</span>
+      <span class="text-lg font-semibold">Clyde Session Viewer</span>
+      <span class="badge badge-ghost" x-text="sessions.length + ' sessions'"></span>
+      <span class="badge badge-success gap-1" x-show="runningCount > 0">
+        <span class="inline-block w-2 h-2 rounded-full bg-success animate-pulse"></span>
+        <span x-text="runningCount + ' running'"></span>
+      </span>
+    </div>
+    <div class="flex-none gap-2">
+      <input type="text" placeholder="Filter sessions…"
+        class="input input-sm input-bordered w-60"
+        x-model="filter"
+      />
+      <select class="select select-sm select-bordered" x-model="projectFilter">
+        <option value="">All projects</option>
+        <template x-for="p in projects" :key="p">
+          <option :value="p" x-text="p"></option>
+        </template>
+      </select>
+      <label class="label cursor-pointer gap-2">
+        <span class="label-text text-xs">Running only</span>
+        <input type="checkbox" class="toggle toggle-sm toggle-success" x-model="showRunningOnly" />
+      </label>
+      <button class="btn btn-sm btn-ghost" @click="loadSessions()" title="Refresh">
+        ↻
+      </button>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div class="flex flex-1 overflow-hidden">
+
+    <!-- Session list sidebar -->
+    <div class="w-96 shrink-0 bg-base-100 border-r border-base-300 flex flex-col">
+      <div class="p-2 border-b border-base-300 text-xs text-base-content/60 font-mono">
+        <span x-text="filteredSessions.length + ' / ' + sessions.length + ' sessions'"></span>
+      </div>
+      <div class="session-list overflow-y-auto flex-1">
+        <template x-for="s in filteredSessions" :key="s.id + s.cwd">
+          <div
+            class="p-3 border-b border-base-300 cursor-pointer hover:bg-base-200 transition-colors"
+            :class="{ 'bg-primary/10 border-l-4 border-l-primary': selected?.id === s.id && selected?.cwd === s.cwd }"
+            @click="selectSession(s)"
+          >
+            <div class="flex items-center gap-2 mb-1">
+              <span x-show="s.running" class="inline-block w-2 h-2 rounded-full bg-success animate-pulse" title="Running"></span>
+              <span class="badge badge-sm badge-outline" x-text="s.project"></span>
+              <span class="badge badge-sm badge-ghost" x-text="s.user"></span>
+              <span class="text-xs text-base-content/50 ml-auto" x-text="s.message_count + ' msgs'"></span>
+            </div>
+            <div class="text-xs font-mono text-base-content/70 truncate" x-text="formatTimestamp(s.timestamp)"></div>
+            <div class="text-xs text-base-content/40 truncate mt-0.5" x-text="timeAgo(s.last_modified)"></div>
+          </div>
+        </template>
+
+        <div x-show="filteredSessions.length === 0" class="p-8 text-center text-base-content/40">
+          <p class="text-4xl mb-2">🔇</p>
+          <p>No sessions match your filters</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Message area -->
+    <div class="flex-1 flex flex-col overflow-hidden bg-base-200">
+
+      <!-- Session header -->
+      <template x-if="selected">
+        <div class="bg-base-100 border-b border-base-300 px-4 py-2 shrink-0 flex items-center gap-3">
+          <span x-show="selected.running" class="badge badge-success gap-1">
+            <span class="inline-block w-2 h-2 rounded-full bg-success animate-pulse"></span>
+            PID <span x-text="selected.pid"></span>
+          </span>
+          <span class="font-mono text-sm" x-text="selected.id"></span>
+          <span class="badge badge-outline badge-sm" x-text="selected.project"></span>
+          <span class="text-xs text-base-content/50 ml-auto" x-text="selected.cwd"></span>
+          <div class="flex gap-1 ml-2">
+            <template x-for="t in availableTypes" :key="t">
+              <label class="label cursor-pointer gap-1">
+                <input type="checkbox" class="checkbox checkbox-xs"
+                  :checked="visibleTypes.includes(t)"
+                  @change="toggleType(t)"
+                />
+                <span class="label-text text-xs" x-text="t"></span>
+              </label>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <!-- Messages -->
+      <div class="msg-scroll flex-1 overflow-y-auto p-4 space-y-3" x-ref="msgArea">
+        <template x-if="!selected">
+          <div class="flex items-center justify-center h-full text-base-content/30">
+            <div class="text-center">
+              <p class="text-6xl mb-4">💬</p>
+              <p class="text-xl">Select a session to view</p>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="loadingMessages">
+          <div class="flex items-center justify-center h-full">
+            <span class="loading loading-spinner loading-lg text-primary"></span>
+          </div>
+        </template>
+
+        <template x-for="msg in displayedMessages" :key="msg.filename">
+          <div class="chat" :class="msgAlignment(msg.type)">
+            <div class="chat-header text-xs opacity-60 flex items-center gap-2 mb-1">
+              <span class="badge badge-xs" :class="msgBadgeClass(msg.type)" x-text="msg.type"></span>
+              <span x-text="formatMsgTimestamp(msg.timestamp)"></span>
+            </div>
+            <div class="chat-bubble max-w-4xl text-sm" :class="msgBubbleClass(msg.type)">
+              <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="selected && !loadingMessages && displayedMessages.length === 0">
+          <div class="flex items-center justify-center h-full text-base-content/30">
+            <p>No messages of the selected types</p>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function sessionViewer() {
+  return {
+    sessions: [],
+    selected: null,
+    messages: [],
+    loadingMessages: false,
+    filter: '',
+    projectFilter: '',
+    showRunningOnly: false,
+    visibleTypes: ['user', 'assistant'],
+    availableTypes: ['user', 'assistant', 'thinking', 'tool-use', 'tool-result', 'diagnostic', 'compaction'],
+
+    get runningCount() {
+      return this.sessions.filter(s => s.running).length;
+    },
+
+    get projects() {
+      return [...new Set(this.sessions.map(s => s.project))].sort();
+    },
+
+    get filteredSessions() {
+      return this.sessions.filter(s => {
+        if (this.showRunningOnly && !s.running) return false;
+        if (this.projectFilter && s.project !== this.projectFilter) return false;
+        if (this.filter) {
+          const f = this.filter.toLowerCase();
+          return s.id.toLowerCase().includes(f) ||
+                 s.user.toLowerCase().includes(f) ||
+                 s.project.toLowerCase().includes(f) ||
+                 s.cwd.toLowerCase().includes(f);
+        }
+        return true;
+      });
+    },
+
+    get displayedMessages() {
+      return this.messages.filter(m => this.visibleTypes.includes(m.type));
+    },
+
+    async init() {
+      await this.loadSessions();
+    },
+
+    async loadSessions() {
+      try {
+        const resp = await fetch('/api/sessions');
+        this.sessions = await resp.json();
+      } catch (e) {
+        console.error('Failed to load sessions:', e);
+      }
+    },
+
+    async selectSession(session) {
+      this.selected = session;
+      this.loadingMessages = true;
+      this.messages = [];
+      try {
+        const types = this.availableTypes.join(',');
+        const resp = await fetch(`/api/sessions/${encodeURIComponent(session.id)}/messages?cwd=${encodeURIComponent(session.cwd)}&types=${types}`);
+        this.messages = await resp.json();
+        this.$nextTick(() => {
+          if (this.$refs.msgArea) {
+            this.$refs.msgArea.scrollTop = 0;
+          }
+        });
+      } catch (e) {
+        console.error('Failed to load messages:', e);
+      } finally {
+        this.loadingMessages = false;
+      }
+    },
+
+    toggleType(type) {
+      if (this.visibleTypes.includes(type)) {
+        this.visibleTypes = this.visibleTypes.filter(t => t !== type);
+      } else {
+        this.visibleTypes.push(type);
+      }
+    },
+
+    formatTimestamp(ts) {
+      // "2026-07-09T14-09-37" -> "2026-07-09 14:09:37"
+      return ts.replace('T', ' ').replace(/-/g, (m, offset) => offset > 10 ? ':' : '-');
+    },
+
+    formatMsgTimestamp(ts) {
+      // "2026-07-09T14-11-29.681" -> "14:11:29"
+      const match = ts.match(/T(\d+)-(\d+)-(\d+)/);
+      if (match) return `${match[1]}:${match[2]}:${match[3]}`;
+      return ts;
+    },
+
+    timeAgo(isoStr) {
+      if (!isoStr) return '';
+      const d = new Date(isoStr);
+      const now = new Date();
+      const diff = (now - d) / 1000;
+      if (diff < 60) return 'just now';
+      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+      return Math.floor(diff / 86400) + 'd ago';
+    },
+
+    msgAlignment(type) {
+      if (type === 'user') return 'chat-end';
+      return 'chat-start';
+    },
+
+    msgBubbleClass(type) {
+      switch (type) {
+        case 'user': return 'chat-bubble-primary';
+        case 'assistant': return 'chat-bubble-accent';
+        case 'thinking': return 'chat-bubble-warning opacity-70';
+        case 'tool-use': return 'chat-bubble-info opacity-80';
+        case 'tool-result': return 'chat-bubble-success opacity-80';
+        case 'diagnostic': return 'chat-bubble-neutral opacity-60';
+        default: return '';
+      }
+    },
+
+    msgBadgeClass(type) {
+      switch (type) {
+        case 'user': return 'badge-primary';
+        case 'assistant': return 'badge-accent';
+        case 'thinking': return 'badge-warning';
+        case 'tool-use': return 'badge-info';
+        case 'tool-result': return 'badge-success';
+        case 'diagnostic': return 'badge-neutral';
+        default: return 'badge-ghost';
+      }
+    },
+
+    renderMarkdown(content) {
+      if (!content) return '';
+      try {
+        return marked.parse(content);
+      } catch (e) {
+        // Fallback: escape HTML and preserve whitespace
+        return '<pre>' + content.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>';
+      }
+    }
+  };
+}
+</script>
+
+</body>
+</html>
