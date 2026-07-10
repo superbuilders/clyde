@@ -28,9 +28,6 @@
     .nice-scroll::-webkit-scrollbar { width: 5px; }
     .nice-scroll::-webkit-scrollbar-track { background: transparent; }
     .nice-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 3px; }
-    /* Tool-use collapsible */
-    .tool-summary { cursor: pointer; user-select: none; }
-    .tool-summary:hover { opacity: .85; }
   </style>
 </head>
 <body class="min-h-screen bg-base-300">
@@ -163,40 +160,43 @@
             <span class="loading loading-spinner loading-md"></span>
           </div>
           <template x-for="msg in messages" :key="msg.filename">
-            <div :class="msgClass(msg.type)">
-              <!-- Tool-use: collapsible -->
+            <div>
+              <!-- Tool-use / Tool-result: collapsible -->
               <template x-if="msg.type === 'tool-use' || msg.type === 'tool-result'">
-                <details class="collapse collapse-arrow bg-base-300/30 rounded-lg">
-                  <summary class="collapse-title py-2 px-3 min-h-0 text-xs font-mono tool-summary">
+                <details class="bg-base-300/30 rounded-lg my-1 group">
+                  <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                    <span class="transition-transform group-open:rotate-90">▶</span>
                     <span :class="msg.type === 'tool-use' ? 'text-warning' : 'text-info'"
                           x-text="msg.type === 'tool-use' ? '🔧 Tool Call' : '📋 Tool Result'"></span>
-                    <span class="opacity-50 ml-2" x-text="toolPreview(msg.content)"></span>
+                    <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
                   </summary>
-                  <div class="collapse-content px-3 pb-2">
-                    <div class="msg-content text-xs" x-html="renderMarkdown(msg.content)"></div>
+                  <div class="px-3 pb-2 border-t border-base-300/50">
+                    <div class="msg-content text-xs mt-2" x-html="renderMarkdown(msg.content)"></div>
                   </div>
                 </details>
               </template>
               <!-- Thinking: collapsible -->
               <template x-if="msg.type === 'thinking'">
-                <details class="collapse collapse-arrow bg-base-300/30 rounded-lg">
-                  <summary class="collapse-title py-2 px-3 min-h-0 text-xs tool-summary">
+                <details class="bg-base-300/30 rounded-lg my-1 group">
+                  <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                    <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-secondary">💭 Thinking</span>
-                    <span class="opacity-50 ml-2" x-text="msg.content.substring(0, 80) + '…'"></span>
+                    <span class="opacity-50 truncate" x-text="msg.content.substring(0, 80) + '…'"></span>
                   </summary>
-                  <div class="collapse-content px-3 pb-2">
-                    <div class="msg-content text-sm opacity-80" x-html="renderMarkdown(msg.content)"></div>
+                  <div class="px-3 pb-2 border-t border-base-300/50">
+                    <div class="msg-content text-sm opacity-80 mt-2" x-html="renderMarkdown(msg.content)"></div>
                   </div>
                 </details>
               </template>
-              <!-- Compaction -->
+              <!-- Compaction: collapsible -->
               <template x-if="msg.type === 'compaction'">
-                <details class="collapse collapse-arrow bg-base-300/30 rounded-lg">
-                  <summary class="collapse-title py-2 px-3 min-h-0 text-xs tool-summary">
+                <details class="bg-base-300/30 rounded-lg my-1 group">
+                  <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                    <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-accent">📦 Compaction Summary</span>
                   </summary>
-                  <div class="collapse-content px-3 pb-2">
-                    <div class="msg-content text-sm" x-html="renderMarkdown(msg.content)"></div>
+                  <div class="px-3 pb-2 border-t border-base-300/50">
+                    <div class="msg-content text-sm mt-2" x-html="renderMarkdown(msg.content)"></div>
                   </div>
                 </details>
               </template>
@@ -463,11 +463,6 @@ function sessionViewer() {
       if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
       if (diff < 604800000) return Math.floor(diff/86400000) + 'd ago';
       return d.toLocaleDateString();
-    },
-
-    msgClass(type) {
-      const base = 'animate-in';
-      return base;
     },
 
     toolPreview(content) {
