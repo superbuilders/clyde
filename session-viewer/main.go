@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -14,15 +13,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-
-	"github.com/superbuilders/clyde/agent"
-	"github.com/superbuilders/clyde/agent/session"
 )
 
 //go:embed static/*
@@ -52,6 +46,7 @@ type SessionInfo struct {
 	Preview      string `json:"preview"`
 	LastMsgType  string `json:"last_msg_type"`
 	NeedsReply   bool   `json:"needs_reply"`
+	ViewerAgent  bool   `json:"viewer_agent"`
 	AgentBusy    bool   `json:"agent_busy"`
 }
 
@@ -68,54 +63,109 @@ type ProjectInfo struct {
 	Branch string `json:"branch"`
 }
 
-// ── Agent runner state ──
+// ── Tmux management ──
 
-type agentRun struct {
-	mu      sync.Mutex
-	busy    bool
-	ag      *agent.Agent
-	sess    *session.Session
-	history bool // true if history was loaded
+// tmuxName returns a deterministic tmux session name for a viewer-managed agent.
+func tmuxName(sessionID string) string {
+	// Sanitize for tmux: replace dots/colons with dashes
+	safe := strings.NewReplacer(".", "-", ":", "-").Replace(sessionID)
+	return "sv_" + safe
 }
 
-var (
-	agentRuns   = make(map[string]*agentRun) // key: cwd + "|" + sessionID
-	agentRunsMu sync.RWMutex
-)
+// isTmuxRunning checks if a tmux session exists.
+func isTmuxRunning(name string) bool {
+	err := exec.Command("tmux", "has-session", "-t", name).Run()
+	return err == nil
+}
 
-func agentKey(cwd, sessionID string) string { return cwd + "|" + sessionID }
-
-func getOrCreateRun(cwd, sessionID string) *agentRun {
-	key := agentKey(cwd, sessionID)
-	agentRunsMu.Lock()
-	defer agentRunsMu.Unlock()
-	if r, ok := agentRuns[key]; ok {
-		return r
+// startClyde starts a clyde process in a tmux session with the correct CWD.
+// For sessions with existing messages, uses -r to resume.
+// For empty sessions, starts a fresh clyde REPL.
+func startClyde(cwd, sessionID string) error {
+	name := tmuxName(sessionID)
+	if isTmuxRunning(name) {
+		return nil // already running
 	}
-	r := &agentRun{}
-	agentRuns[key] = r
-	return r
+
+	// Check if session has existing messages (needs -r flag)
+	sessDir := filepath.Join(cwd, ".clyde", "sessions", sessionID)
+	entries, _ := os.ReadDir(sessDir)
+	hasMessages := len(entries) > 0
+
+	var cmd string
+	if hasMessages {
+		cmd = fmt.Sprintf("cd %s && clyde -r %s", shellQuote(cwd), shellQuote(sessionID))
+	} else {
+		cmd = fmt.Sprintf("cd %s && clyde", shellQuote(cwd))
+	}
+
+	return exec.Command("tmux", "new-session", "-d", "-s", name, "-x", "200", "-y", "50", cmd).Run()
 }
 
-func isAgentBusy(cwd, sessionID string) bool {
-	key := agentKey(cwd, sessionID)
-	agentRunsMu.RLock()
-	r, ok := agentRuns[key]
-	agentRunsMu.RUnlock()
-	if !ok {
+// sendToClyde sends a user message to the clyde REPL via tmux.
+func sendToClyde(sessionID, message string) error {
+	name := tmuxName(sessionID)
+	if !isTmuxRunning(name) {
+		return fmt.Errorf("tmux session %s not running", name)
+	}
+
+	// Use send-keys with -l (literal) to avoid interpretation of special chars.
+	// Then send Enter to submit the line.
+	if err := exec.Command("tmux", "send-keys", "-t", name, "-l", message).Run(); err != nil {
+		return err
+	}
+	return exec.Command("tmux", "send-keys", "-t", name, "Enter").Run()
+}
+
+// stopClyde kills a viewer-managed tmux session.
+func stopClyde(sessionID string) error {
+	name := tmuxName(sessionID)
+	if !isTmuxRunning(name) {
+		return nil
+	}
+	return exec.Command("tmux", "kill-session", "-t", name).Run()
+}
+
+// isAgentBusy checks if the clyde agent in a tmux session is actively processing.
+// Heuristic: capture the last lines of the pane and look for the "You: " prompt.
+// If visible, clyde is idle. If not, it's working.
+func isViewerAgentBusy(sessionID string) bool {
+	name := tmuxName(sessionID)
+	if !isTmuxRunning(name) {
 		return false
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.busy
+	out, err := exec.Command("tmux", "capture-pane", "-t", name, "-p").Output()
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	// Check last 5 non-empty lines for the prompt
+	count := 0
+	for i := len(lines) - 1; i >= 0 && count < 5; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		count++
+		// The prompt ends with "You: " (styled, but the text is there)
+		// After ANSI stripping, look for "You:" at end of a line
+		stripped := stripANSI(line)
+		if strings.HasSuffix(stripped, "You: ") || strings.HasSuffix(stripped, "You:") {
+			return false // prompt visible = idle
+		}
+	}
+	return true // no prompt found = busy processing
+}
+
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+func stripANSI(s string) string {
+	return ansiRe.ReplaceAllString(s, "")
 }
 
 // ── Main ──
 
 func main() {
-	// Load .env from CWD for API keys
-	loadEnv()
-
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Use(middleware.CORS())
@@ -124,6 +174,7 @@ func main() {
 	api.GET("/sessions", getSessions)
 	api.GET("/sessions/:id/messages", getSessionMessages)
 	api.POST("/sessions/:id/messages", postSessionMessage)
+	api.POST("/sessions/:id/stop", stopSession)
 	api.GET("/sessions/:id/status", getSessionStatus)
 	api.GET("/projects", getProjects)
 	api.POST("/sessions/new", createSession)
@@ -133,39 +184,6 @@ func main() {
 
 	fmt.Println("🔍 Session Viewer running at http://localhost:8787")
 	e.Logger.Fatal(e.Start(":8787"))
-}
-
-func loadEnv() {
-	// Try .env in CWD, then parent dirs, then home
-	paths := []string{".env"}
-	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, ".env"))
-	}
-	// Walk up from CWD
-	cwd, _ := os.Getwd()
-	for dir := cwd; dir != "/" && dir != "."; dir = filepath.Dir(dir) {
-		p := filepath.Join(dir, ".env")
-		if _, err := os.Stat(p); err == nil {
-			paths = append([]string{p}, paths...)
-			break
-		}
-	}
-	for _, p := range paths {
-		_ = godotenv.Load(p)
-	}
-}
-
-func buildAgentConfig() agent.Config {
-	apiKey := os.Getenv("TS_AGENT_API_KEY")
-	return agent.Config{
-		APIKey:            apiKey,
-		APIURL:            "https://api.anthropic.com/v1/messages",
-		ModelID:           "claude-opus-4-6",
-		MaxTokens:         64000,
-		ContextWindowSize: 200000,
-		BraveSearchAPIKey: os.Getenv("BRAVE_SEARCH_API_KEY"),
-		MCPPlaywright:     false, // no browser in viewer agent
-	}
 }
 
 // ── Process discovery ──
@@ -354,6 +372,32 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+// getUsername returns the normalized username (same logic as session package).
+func getUsername() string {
+	out, err := exec.Command("git", "config", "user.name").Output()
+	if err == nil {
+		name := strings.TrimSpace(string(out))
+		if name != "" {
+			name = strings.ToLower(name)
+			name = strings.ReplaceAll(name, " ", "-")
+			re := regexp.MustCompile(`[^a-z0-9\-]`)
+			name = re.ReplaceAllString(name, "")
+			if name != "" {
+				return name
+			}
+		}
+	}
+	if u := os.Getenv("USER"); u != "" {
+		return strings.ToLower(u)
+	}
+	return "unknown"
+}
+
+// formatTimestampDir formats a time for session directory names.
+func formatTimestampDir(t time.Time) string {
+	return t.Format("2006-01-02T15-04-05")
+}
+
 // ── API handlers ──
 
 func getSessions(c echo.Context) error {
@@ -406,6 +450,8 @@ func getSessions(c echo.Context) error {
 			if !lm.IsZero() {
 				lms = lm.Format(time.RFC3339)
 			}
+
+			// Terminal-based running detection
 			running := false
 			rpid := 0
 			for _, proc := range processes {
@@ -415,18 +461,25 @@ func getSessions(c echo.Context) error {
 					break
 				}
 			}
+
+			// Viewer-managed tmux agent
+			viewerAgent := isTmuxRunning(tmuxName(sid))
+			agentBusy := false
+			if viewerAgent {
+				agentBusy = isViewerAgentBusy(sid)
+			}
+
 			lt, lmt := getLastMsgTypes(me)
-			// needs_reply: ball is in the user's court (for both running and past)
 			needsReply := lmt == "assistant"
-			busy := isAgentBusy(dir, sid)
 
 			all = append(all, SessionInfo{
 				ID: sid, User: user, Timestamp: parts[0],
 				MessageCount: len(me), LastModified: lms,
 				CWD: dir, Project: project, Branch: branch,
-				Running: running, PID: rpid,
+				Running: running || viewerAgent, PID: rpid,
 				Preview: getSessionPreview(sp), LastMsgType: lt,
-				NeedsReply: needsReply, AgentBusy: busy,
+				NeedsReply: needsReply,
+				ViewerAgent: viewerAgent, AgentBusy: agentBusy,
 			})
 		}
 	}
@@ -437,7 +490,7 @@ func getSessions(c echo.Context) error {
 func getSessionMessages(c echo.Context) error {
 	sid := c.Param("id")
 	cwd := c.QueryParam("cwd")
-	after := c.QueryParam("after") // only return messages after this filename
+	after := c.QueryParam("after")
 	if cwd == "" || sid == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd and id required"})
 	}
@@ -483,7 +536,7 @@ func getSessionMessages(c echo.Context) error {
 	return c.JSON(http.StatusOK, msgs)
 }
 
-// postSessionMessage writes a user message and starts an agent run
+// postSessionMessage starts clyde in tmux (if needed) and sends the message
 func postSessionMessage(c echo.Context) error {
 	sid := c.Param("id")
 	var body struct {
@@ -502,131 +555,70 @@ func postSessionMessage(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 	}
 
-	run := getOrCreateRun(body.CWD, sid)
-	run.mu.Lock()
-	if run.busy {
-		run.mu.Unlock()
+	// Check if agent is currently busy
+	if isViewerAgentBusy(sid) {
 		return c.JSON(http.StatusConflict, map[string]string{"error": "agent is busy processing"})
 	}
-	run.busy = true
-	run.mu.Unlock()
 
-	// Start agent in background
-	go runAgent(run, body.CWD, sid, sessPath, body.Content)
+	// Start clyde in tmux if not already running
+	if err := startClyde(body.CWD, sid); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to start clyde: " + err.Error(),
+		})
+	}
+
+	// Wait for clyde to be ready (show prompt)
+	// For resumed sessions, clyde needs a moment to load history
+	ready := false
+	for i := 0; i < 20; i++ { // up to 10 seconds
+		time.Sleep(500 * time.Millisecond)
+		if !isViewerAgentBusy(sid) {
+			ready = true
+			break
+		}
+	}
+	if !ready {
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "clyde not ready yet — try again in a moment",
+		})
+	}
+
+	// Send the message
+	if err := sendToClyde(sid, body.Content); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to send message: " + err.Error(),
+		})
+	}
 
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
-func runAgent(run *agentRun, cwd, sid, sessPath, userInput string) {
-	defer func() {
-		run.mu.Lock()
-		run.busy = false
-		run.mu.Unlock()
-	}()
-
-	// Open session for writing
-	sess, err := session.Open(sessPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[viewer] session open error: %v\n", err)
-		return
+// stopSession kills a viewer-managed clyde tmux session
+func stopSession(c echo.Context) error {
+	sid := c.Param("id")
+	if sid == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "id required"})
 	}
-
-	cfg := buildAgentConfig()
-	if cfg.APIKey == "" {
-		fmt.Fprintln(os.Stderr, "[viewer] TS_AGENT_API_KEY not set, cannot run agent")
-		// Write an error as a diagnostic
-		sess.WriteMessage(session.TypeDiagnostic, "⚠️ Agent error: TS_AGENT_API_KEY not configured\n")
-		return
+	if !isTmuxRunning(tmuxName(sid)) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "no viewer agent running for this session"})
 	}
-
-	// Create or reuse agent
-	run.mu.Lock()
-	needsHistory := run.ag == nil
-	run.mu.Unlock()
-
-	if needsHistory {
-		// Create fresh agent with callbacks
-		ag := agent.New(cfg,
-			agent.WithToolUseCallback(func(displayMsg, toolName, toolUseID string, toolInput map[string]interface{}) {
-				msgWithID := session.FormatToolUseID(displayMsg, toolUseID)
-				inputJSON, _ := json.Marshal(toolInput)
-				content := fmt.Sprintf("%s\nname: %s\ninput: %s\n",
-					session.StripANSI(msgWithID), toolName, string(inputJSON))
-				sess.WriteMessage(session.TypeToolUse, content)
-			}),
-			agent.WithOutputCallback(func(output string, toolUseID string) {
-				content := fmt.Sprintf("[%s]\n```\n%s\n```\n", toolUseID, output)
-				sess.WriteMessage(session.TypeToolResult, content)
-			}),
-			agent.WithThinkingCallback(func(text string, signature string) {
-				content := "💭 " + text
-				if signature != "" {
-					content += "\nsignature: " + signature
-				}
-				sess.WriteMessage(session.TypeThinking, content+"\n")
-			}),
-			agent.WithDiagnosticCallback(func(msg string) {
-				sess.WriteMessage(session.TypeDiagnostic, msg+"\n")
-			}),
-			agent.WithUserMessageCallback(func(text string) {
-				sess.WriteMessage(session.TypeUser, "**You:**\n\n"+text+"\n")
-			}),
-			agent.WithAssistantMessageCallback(func(text string) {
-				sess.WriteMessage(session.TypeAssistant, "**Claude:**\n\n"+text+"\n")
-			}),
-			agent.WithProgressCallback(func(msg string, toolUseID string) {
-				// Progress lines are already captured by ToolUseCallback
-			}),
-			agent.WithCompactionCallback(func(marker string, summary string) {
-				if marker != "" {
-					sess.WriteMessage(session.TypeCompaction, marker+"\n")
-				}
-				if summary != "" {
-					sess.WriteMessage(session.TypeSystem, "**System:**\n\n"+summary+"\n")
-				}
-			}),
-			agent.WithErrorCallback(func(err error) {
-				fmt.Fprintf(os.Stderr, "[viewer] agent error: %v\n", err)
-			}),
-		)
-
-		// Reconstruct history from existing session files
-		history, warnings, err := session.ReconstructHistory(sessPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[viewer] history reconstruction error: %v\n", err)
-		}
-		for _, w := range warnings {
-			fmt.Fprintf(os.Stderr, "[viewer] history warning: %s\n", w)
-		}
-		if len(history) > 0 {
-			ag.SetHistory(history)
-		}
-
-		run.mu.Lock()
-		run.ag = ag
-		run.sess = sess
-		run.history = true
-		run.mu.Unlock()
-	} else {
-		// Reuse existing agent - just update the session writer
-		run.mu.Lock()
-		run.sess = sess
-		run.mu.Unlock()
+	if err := stopClyde(sid); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
-
-	// Run the agent loop (blocking - this does thinking, tool calls, everything)
-	_, err = run.ag.HandleMessage(userInput)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[viewer] HandleMessage error: %v\n", err)
-		sess.WriteMessage(session.TypeDiagnostic, fmt.Sprintf("⚠️ Agent error: %v\n", err))
-	}
+	return c.JSON(http.StatusOK, map[string]string{"status": "stopped"})
 }
 
 func getSessionStatus(c echo.Context) error {
 	sid := c.Param("id")
-	cwd := c.QueryParam("cwd")
+	name := tmuxName(sid)
+	running := isTmuxRunning(name)
+	busy := false
+	if running {
+		busy = isViewerAgentBusy(sid)
+	}
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"busy": isAgentBusy(cwd, sid),
+		"viewer_agent": running,
+		"busy":         busy,
 	})
 }
 
@@ -664,17 +656,14 @@ func createSession(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "dir not found"})
 	}
 
-	// Create session directory
 	sessRoot := filepath.Join(body.CWD, ".clyde", "sessions")
 	if err := os.MkdirAll(sessRoot, 0755); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	now := time.Now()
-	username := session.GetUsername()
-	dirName := session.FormatTimestampDir(now) + "_" + username
+	dirName := formatTimestampDir(now) + "_" + getUsername()
 	sessDir := filepath.Join(sessRoot, dirName)
-
 	if err := os.MkdirAll(sessDir, 0755); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
