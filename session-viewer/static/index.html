@@ -144,7 +144,7 @@
           </div>
           <!-- Message type toggles -->
           <div class="flex gap-0.5">
-            <template x-for="t in ['user','assistant','thinking','tool-use','tool-result','compaction','diagnostic']" :key="t">
+            <template x-for="t in ['user','assistant','thinking','tools','compaction','diagnostic']" :key="t">
               <button @click="toggleType(t)"
                       :class="enabledTypes[t] ? 'btn-active btn-primary' : 'btn-ghost opacity-40'"
                       class="btn btn-xs" x-text="typeLabels[t]"></button>
@@ -161,13 +161,12 @@
           </div>
           <template x-for="msg in messages" :key="msg.filename">
             <div>
-              <!-- Tool-use / Tool-result: collapsible -->
-              <template x-if="msg.type === 'tool-use' || msg.type === 'tool-result'">
-                <details class="bg-base-300/30 rounded-lg my-1 group">
+              <!-- Tool-use: collapsible -->
+              <template x-if="msg.type === 'tool-use'">
+                <details open class="bg-base-300/30 rounded-lg my-1 group">
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
-                    <span :class="msg.type === 'tool-use' ? 'text-warning' : 'text-info'"
-                          x-text="msg.type === 'tool-use' ? '🔧 Tool Call' : '📋 Tool Result'"></span>
+                    <span class="text-warning">🔧 Tool Call</span>
                     <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
                   </summary>
                   <div class="px-3 pb-2 border-t border-base-300/50">
@@ -175,9 +174,22 @@
                   </div>
                 </details>
               </template>
+              <!-- Tool-result: collapsible, plain text -->
+              <template x-if="msg.type === 'tool-result'">
+                <details open class="bg-base-300/30 rounded-lg my-1 group">
+                  <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                    <span class="transition-transform group-open:rotate-90">▶</span>
+                    <span class="text-info">📋 Tool Result</span>
+                    <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
+                  </summary>
+                  <div class="px-3 pb-2 border-t border-base-300/50">
+                    <pre class="text-xs mt-2 whitespace-pre-wrap break-words font-mono opacity-80" x-text="msg.content"></pre>
+                  </div>
+                </details>
+              </template>
               <!-- Thinking: collapsible -->
               <template x-if="msg.type === 'thinking'">
-                <details class="bg-base-300/30 rounded-lg my-1 group">
+                <details open class="bg-base-300/30 rounded-lg my-1 group">
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-secondary">💭 Thinking</span>
@@ -188,17 +200,12 @@
                   </div>
                 </details>
               </template>
-              <!-- Compaction: collapsible -->
+              <!-- Compaction: not collapsible -->
               <template x-if="msg.type === 'compaction'">
-                <details class="bg-base-300/30 rounded-lg my-1 group">
-                  <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
-                    <span class="transition-transform group-open:rotate-90">▶</span>
-                    <span class="text-accent">📦 Compaction Summary</span>
-                  </summary>
-                  <div class="px-3 pb-2 border-t border-base-300/50">
-                    <div class="msg-content text-sm mt-2" x-html="renderMarkdown(msg.content)"></div>
-                  </div>
-                </details>
+                <div class="bg-accent/10 border border-accent/20 rounded-lg my-2 px-4 py-3">
+                  <div class="text-xs font-semibold text-accent mb-2">📦 Compaction Summary</div>
+                  <div class="msg-content text-sm" x-html="renderMarkdown(msg.content)"></div>
+                </div>
               </template>
               <!-- Diagnostic: inline small -->
               <template x-if="msg.type === 'diagnostic'">
@@ -264,12 +271,12 @@ function sessionViewer() {
     filterStatus: '',
     sortBy: 'recent',
     enabledTypes: {
-      'user': true, 'assistant': true, 'thinking': false,
-      'tool-use': false, 'tool-result': false, 'compaction': true, 'diagnostic': false
+      'user': true, 'assistant': true, 'thinking': true,
+      'tools': true, 'compaction': true, 'diagnostic': false
     },
     typeLabels: {
       'user': '👤', 'assistant': '🤖', 'thinking': '💭',
-      'tool-use': '🔧', 'tool-result': '📋', 'compaction': '📦', 'diagnostic': '🔬'
+      'tools': '🔧', 'compaction': '📦', 'diagnostic': '🔬'
     },
     replyText: '',
     sending: false,
@@ -346,7 +353,11 @@ function sessionViewer() {
     async loadMessages(incremental) {
       if (!this.selected) return;
       if (!incremental) this.loadingMsgs = true;
-      const types = Object.entries(this.enabledTypes).filter(([,v]) => v).map(([k]) => k).join(',');
+      const typeKeys = Object.entries(this.enabledTypes).filter(([,v]) => v).map(([k]) => k);
+      // Expand 'tools' virtual toggle into both wire types
+      const idx = typeKeys.indexOf('tools');
+      if (idx !== -1) { typeKeys.splice(idx, 1, 'tool-use', 'tool-result'); }
+      const types = typeKeys.join(',');
       let url = `/api/sessions/${encodeURIComponent(this.selected.id)}/messages?cwd=${encodeURIComponent(this.selected.cwd)}&types=${types}`;
       if (incremental && this.lastFilename) url += `&after=${encodeURIComponent(this.lastFilename)}`;
       try {
