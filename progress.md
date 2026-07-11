@@ -166,3 +166,33 @@ from per-second throttling or actual quota exhaustion. (The free tier is actuall
 **Root cause analysis:** The issue was diagnosed by observing that 1 of 4
 simultaneous searches succeeded while 3 failed, and subsequent individual searches
 worked fine — ruling out monthly quota exhaustion.
+
+### Session Viewer (2026-07-09 – 2026-07-11)
+
+Built a standalone web app for discovering and interacting with Clyde sessions across the machine.
+
+**Architecture:**
+- Go backend (Echo framework) with embedded static files, runs on `:8787`
+- Single-page Alpine.js + DaisyUI frontend (CDN imports, no bundler)
+- Tmux-based agent management: starts `clyde` in tmux for correct CWD + clean stop
+- Session discovery: scans `~/code`, `~/Downloads`, `~` for `.clyde/` directories
+- Process matching: `pgrep`/`lsof` for terminal-started sessions, tmux for viewer-managed
+
+**Key Features:**
+- Session list with filters (project, status, age), search, sort
+- Message view with markdown rendering (marked.js), chat bubbles for user/assistant
+- Collapsible thinking/tool-call blocks, plaintext tool results
+- Message type toggles (user, assistant, thinking, tools, compaction, diagnostic)
+- Reply box with ⌘+Enter, starts clyde agent if needed
+- Agent busy detection (tmux pane output heuristic for `You:` prompt)
+- Stop button for viewer-managed agents
+
+**Performance:**
+- Batch tmux lookup: single `tmux list-sessions` instead of N `has-session` calls (4.4s → 1.0s)
+- 5s session list cache
+- Server-side age filter (default 30 days: 112 sessions vs 915 total)
+- Server-side pagination (default 100 messages, "Load older" button)
+
+**Files:** `session-viewer/main.go` (~750 lines), `session-viewer/static/index.html` (~550 lines)
+**Branch:** `session-viewer`
+**Not in go.work** — build with `cd session-viewer && GOWORK=off go build`
