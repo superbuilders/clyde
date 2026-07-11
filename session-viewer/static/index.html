@@ -189,7 +189,7 @@
                     <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
                   </summary>
                   <div class="px-3 pb-2 border-t border-base-300/50">
-                    <pre class="text-xs mt-2 whitespace-pre-wrap break-words font-mono opacity-80" x-text="msg.content"></pre>
+                    <pre class="text-xs mt-2 whitespace-pre-wrap break-words font-mono opacity-80" x-text="cleanToolResult(msg.content)"></pre>
                   </div>
                 </details>
               </template>
@@ -199,10 +199,10 @@
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-secondary">💭 Thinking</span>
-                    <span class="opacity-50 truncate" x-text="msg.content.substring(0, 80) + '…'"></span>
+                    <span class="opacity-50 truncate" x-text="cleanThinking(msg.content).substring(0, 80) + '…'"></span>
                   </summary>
                   <div class="px-3 pb-2 border-t border-base-300/50">
-                    <div class="msg-content text-sm opacity-80 mt-2" x-html="renderMarkdown(msg.content)"></div>
+                    <div class="msg-content text-sm opacity-80 mt-2" x-html="renderMarkdown(cleanThinking(msg.content))"></div>
                   </div>
                 </details>
               </template>
@@ -229,7 +229,7 @@
               <template x-if="msg.type === 'assistant'">
                 <div class="chat chat-start">
                   <div class="chat-bubble chat-bubble-neutral max-w-4xl">
-                    <div class="msg-content" x-html="renderMarkdown(msg.content)"></div>
+                    <div class="msg-content" x-html="renderMarkdown(msg.content.replace(/^\*\*(Claude|Assistant):\*\*\s*/,''))"></div>
                   </div>
                 </div>
               </template>
@@ -483,8 +483,22 @@ function sessionViewer() {
       return d.toLocaleDateString();
     },
 
+    // Clean content for display — strip prefixes that are redundant with labels
+    cleanThinking(content) {
+      return content.replace(/^💭\s*/, '');
+    },
+
+    cleanToolResult(content) {
+      // Strip leading [tool_id] line and backtick fences
+      return content
+        .replace(/^\[toolu_[^\]]+\]\n?/, '')
+        .replace(/^```\w*\n?/, '')
+        .replace(/\n?```\s*$/, '')
+        .trim();
+    },
+
     toolPreview(content) {
-      const line = content.split('\n')[0] || '';
+      const line = (content.split('\n')[0] || '').replace(/^→\s*/, '');
       return line.substring(0, 80);
     },
 
