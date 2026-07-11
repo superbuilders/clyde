@@ -42,9 +42,10 @@
       <div class="flex items-center gap-2">
         <h1 class="text-lg font-bold flex-1">Sessions</h1>
         <!-- Project visibility popover -->
-        <div class="dropdown dropdown-end">
-          <div tabindex="0" role="button" class="btn btn-xs btn-ghost" title="Filter projects">⚙</div>
-          <div tabindex="0" class="dropdown-content z-50 bg-base-100 rounded-lg shadow-xl p-3 w-56 border border-base-300">
+        <div class="relative" x-data="{ open: false }">
+          <button @click="open = !open" class="btn btn-xs btn-ghost" title="Filter projects">⚙</button>
+          <div x-show="open" @click.outside="open = false" x-transition
+               class="absolute top-full left-0 mt-1 z-50 bg-base-100 rounded-lg shadow-xl p-3 w-56 border border-base-300">
             <div class="text-xs font-semibold mb-2 opacity-60">Show projects</div>
             <template x-for="p in allProjects" :key="p">
               <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-base-200 px-1 rounded text-sm">
