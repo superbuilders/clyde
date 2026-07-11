@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -22,32 +24,48 @@ import (
 //go:embed static/*
 var staticFiles embed.FS
 
-// ── Data types ──
+// ── Types ──
 
-type RunningProcess struct {
-	PID       int    `json:"pid"`
-	TTY       string `json:"tty"`
-	StartTime string `json:"start_time"`
-	Args      string `json:"args"`
-	CWD       string `json:"cwd"`
+// ViewerCache is the persistent JSON cache stored on disk.
+type ViewerCache struct {
+	Sessions    map[string]*CachedSession `json:"sessions"`    // key: "cwd::session_id"
+	Preferences Preferences               `json:"preferences"`
+	LastScan    string                     `json:"last_scan"`
 }
 
-type SessionInfo struct {
+type CachedSession struct {
+	ID            string `json:"id"`
+	CWD           string `json:"cwd"`
+	Project       string `json:"project"`
+	Branch        string `json:"branch"`
+	User          string `json:"user"`
+	Name          string `json:"name"`           // user-assigned display name
+	MessageCount  int    `json:"message_count"`
+	LastModified  string `json:"last_modified"`
+	Preview       string `json:"preview"`
+	Read          bool   `json:"read"`
+	LastReadCount int    `json:"last_read_count"` // message count when last marked read
+}
+
+type Preferences struct {
+	HiddenProjects    map[string]bool `json:"hidden_projects"`
+	CollapsedProjects map[string]bool `json:"collapsed_projects"`
+}
+
+// SessionResponse is what the API returns (cached data + live status).
+type SessionResponse struct {
 	ID           string `json:"id"`
-	User         string `json:"user"`
-	Timestamp    string `json:"timestamp"`
-	MessageCount int    `json:"message_count"`
-	LastModified string `json:"last_modified"`
 	CWD          string `json:"cwd"`
 	Project      string `json:"project"`
 	Branch       string `json:"branch"`
-	Running      bool   `json:"running"`
-	PID          int    `json:"pid,omitempty"`
+	User         string `json:"user"`
+	Name         string `json:"name"`
+	MessageCount int    `json:"message_count"`
+	LastModified string `json:"last_modified"`
 	Preview      string `json:"preview"`
-	LastMsgType  string `json:"last_msg_type"`
-	NeedsReply   bool   `json:"needs_reply"`
-	ViewerAgent  bool   `json:"viewer_agent"`
-	AgentBusy    bool   `json:"agent_busy"`
+	Unread       bool   `json:"unread"`
+	ProcessType  string `json:"process_type"` // "sh", "tmux", ""
+	Busy         bool   `json:"busy"`
 }
 
 type MessageFile struct {
@@ -63,100 +81,156 @@ type ProjectInfo struct {
 	Branch string `json:"branch"`
 }
 
-// ── Tmux management ──
+type RunningProcess struct {
+	PID       int
+	TTY       string
+	StartTime string
+	Args      string
+	CWD       string
+}
 
-// tmuxName returns a deterministic tmux session name for a viewer-managed agent.
+// ── Globals ──
+
+var (
+	cache     ViewerCache
+	cacheMu   sync.RWMutex
+	cachePath string
+	scanning  bool
+	scanMu    sync.Mutex
+)
+
+func cacheKey(cwd, id string) string { return cwd + "::" + id }
+
+// ── Cache management ──
+
+func initCache() {
+	home, _ := os.UserHomeDir()
+	cacheDir := filepath.Join(home, ".clyde")
+	os.MkdirAll(cacheDir, 0755)
+	cachePath = filepath.Join(cacheDir, "viewer-cache.json")
+
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		cache = newEmptyCache()
+		return
+	}
+	if err := json.Unmarshal(data, &cache); err != nil {
+		cache = newEmptyCache()
+		return
+	}
+	fixNilMaps(&cache)
+	fmt.Printf("📂 Loaded %d cached sessions\n", len(cache.Sessions))
+}
+
+func newEmptyCache() ViewerCache {
+	return ViewerCache{
+		Sessions: make(map[string]*CachedSession),
+		Preferences: Preferences{
+			HiddenProjects:    make(map[string]bool),
+			CollapsedProjects: make(map[string]bool),
+		},
+	}
+}
+
+func fixNilMaps(c *ViewerCache) {
+	if c.Sessions == nil {
+		c.Sessions = make(map[string]*CachedSession)
+	}
+	if c.Preferences.HiddenProjects == nil {
+		c.Preferences.HiddenProjects = make(map[string]bool)
+	}
+	if c.Preferences.CollapsedProjects == nil {
+		c.Preferences.CollapsedProjects = make(map[string]bool)
+	}
+}
+
+func saveCache() {
+	cacheMu.RLock()
+	data, err := json.MarshalIndent(cache, "", "  ")
+	cacheMu.RUnlock()
+	if err != nil {
+		return
+	}
+	os.WriteFile(cachePath, data, 0644)
+}
+
+// ── Tmux helpers ──
+
 func tmuxName(sessionID string) string {
-	// Sanitize for tmux: replace dots/colons with dashes
 	safe := strings.NewReplacer(".", "-", ":", "-").Replace(sessionID)
 	return "sv_" + safe
 }
 
-// isTmuxRunning checks if a tmux session exists.
-func isTmuxRunning(name string) bool {
-	sessions := getTmuxSessions()
-	_, ok := sessions[name]
-	return ok
-}
-
-// getTmuxSessions returns all active tmux session names (cached per call-site via caller).
-var _tmuxSessionsCache map[string]bool
-var _tmuxSessionsCacheTime time.Time
+var _tmuxCache map[string]bool
+var _tmuxCacheTime time.Time
 
 func getTmuxSessions() map[string]bool {
-	// Cache for 2 seconds to avoid hammering tmux during a single API call
-	if time.Since(_tmuxSessionsCacheTime) < 2*time.Second && _tmuxSessionsCache != nil {
-		return _tmuxSessionsCache
+	if time.Since(_tmuxCacheTime) < 2*time.Second && _tmuxCache != nil {
+		return _tmuxCache
 	}
 	result := make(map[string]bool)
 	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
-	if err != nil {
-		_tmuxSessionsCache = result
-		_tmuxSessionsCacheTime = time.Now()
-		return result
-	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			result[line] = true
+	if err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				result[line] = true
+			}
 		}
 	}
-	_tmuxSessionsCache = result
-	_tmuxSessionsCacheTime = time.Now()
+	_tmuxCache = result
+	_tmuxCacheTime = time.Now()
 	return result
 }
 
-// startClyde starts a clyde process in a tmux session with the correct CWD.
-// For sessions with existing messages, uses -r to resume.
-// For empty sessions, starts a fresh clyde REPL.
+func isTmuxRunning(name string) bool {
+	return getTmuxSessions()[name]
+}
+
 func startClyde(cwd, sessionID string) error {
 	name := tmuxName(sessionID)
 	if isTmuxRunning(name) {
-		return nil // already running
+		return nil
 	}
-
-	// Check if session has existing messages (needs -r flag)
 	sessDir := filepath.Join(cwd, ".clyde", "sessions", sessionID)
 	entries, _ := os.ReadDir(sessDir)
-	hasMessages := len(entries) > 0
-
 	var cmd string
-	if hasMessages {
+	if len(entries) > 0 {
 		cmd = fmt.Sprintf("cd %s && clyde -r %s", shellQuote(cwd), shellQuote(sessionID))
 	} else {
 		cmd = fmt.Sprintf("cd %s && clyde", shellQuote(cwd))
 	}
-
-	return exec.Command("tmux", "new-session", "-d", "-s", name, "-x", "200", "-y", "50", cmd).Run()
+	err := exec.Command("tmux", "new-session", "-d", "-s", name, "-x", "200", "-y", "50", cmd).Run()
+	// Invalidate tmux cache
+	_tmuxCacheTime = time.Time{}
+	return err
 }
 
-// sendToClyde sends a user message to the clyde REPL via tmux.
 func sendToClyde(sessionID, message string) error {
 	name := tmuxName(sessionID)
 	if !isTmuxRunning(name) {
 		return fmt.Errorf("tmux session %s not running", name)
 	}
-
-	// Use send-keys with -l (literal) to avoid interpretation of special chars.
-	// Then send Enter to submit the line.
 	if err := exec.Command("tmux", "send-keys", "-t", name, "-l", message).Run(); err != nil {
 		return err
 	}
 	return exec.Command("tmux", "send-keys", "-t", name, "Enter").Run()
 }
 
-// stopClyde kills a viewer-managed tmux session.
 func stopClyde(sessionID string) error {
 	name := tmuxName(sessionID)
 	if !isTmuxRunning(name) {
 		return nil
 	}
-	return exec.Command("tmux", "kill-session", "-t", name).Run()
+	err := exec.Command("tmux", "kill-session", "-t", name).Run()
+	_tmuxCacheTime = time.Time{}
+	return err
 }
 
-// isAgentBusy checks if the clyde agent in a tmux session is actively processing.
-// Heuristic: capture the last lines of the pane and look for the "You: " prompt.
-// If visible, clyde is idle. If not, it's working.
-func isViewerAgentBusy(sessionID string) bool {
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
+
+func isTmuxBusy(sessionID string) bool {
 	name := tmuxName(sessionID)
 	if !isTmuxRunning(name) {
 		return false
@@ -166,7 +240,6 @@ func isViewerAgentBusy(sessionID string) bool {
 		return false
 	}
 	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	// Check last 5 non-empty lines for the prompt
 	count := 0
 	for i := len(lines) - 1; i >= 0 && count < 5; i-- {
 		line := strings.TrimSpace(lines[i])
@@ -174,43 +247,12 @@ func isViewerAgentBusy(sessionID string) bool {
 			continue
 		}
 		count++
-		// The prompt ends with "You: " (styled, but the text is there)
-		// After ANSI stripping, look for "You:" at end of a line
 		stripped := stripANSI(line)
 		if strings.HasSuffix(stripped, "You: ") || strings.HasSuffix(stripped, "You:") {
-			return false // prompt visible = idle
+			return false
 		}
 	}
-	return true // no prompt found = busy processing
-}
-
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-
-func stripANSI(s string) string {
-	return ansiRe.ReplaceAllString(s, "")
-}
-
-// ── Main ──
-
-func main() {
-	e := echo.New()
-	e.Use(middleware.Logger())
-	e.Use(middleware.CORS())
-
-	api := e.Group("/api")
-	api.GET("/sessions", getSessions)
-	api.GET("/sessions/:id/messages", getSessionMessages)
-	api.POST("/sessions/:id/messages", postSessionMessage)
-	api.POST("/sessions/:id/stop", stopSession)
-	api.GET("/sessions/:id/status", getSessionStatus)
-	api.GET("/projects", getProjects)
-	api.POST("/sessions/new", createSession)
-
-	staticFS, _ := fs.Sub(staticFiles, "static")
-	e.GET("/*", echo.WrapHandler(http.FileServer(http.FS(staticFS))))
-
-	fmt.Println("🔍 Session Viewer running at http://localhost:8787")
-	e.Logger.Fatal(e.Start(":8787"))
+	return true
 }
 
 // ── Process discovery ──
@@ -256,21 +298,6 @@ func getRunningProcesses() []RunningProcess {
 	return processes
 }
 
-// ── Helpers ──
-
-func parseSessionTimestamp(sessionID string) (time.Time, error) {
-	parts := strings.SplitN(sessionID, "_", 2)
-	if len(parts) < 1 {
-		return time.Time{}, fmt.Errorf("invalid")
-	}
-	tsStr := strings.Replace(parts[0], "T", " ", 1)
-	sp := strings.SplitN(tsStr, " ", 2)
-	if len(sp) == 2 {
-		tsStr = sp[0] + " " + strings.Replace(sp[1], "-", ":", 2)
-	}
-	return time.Parse("2006-01-02 15:04:05", tsStr)
-}
-
 func matchProcessToSession(proc RunningProcess, sessionID string) bool {
 	if strings.Contains(proc.Args, "-r ") {
 		parts := strings.SplitN(proc.Args, "-r ", 2)
@@ -292,6 +319,58 @@ func matchProcessToSession(proc RunningProcess, sessionID string) bool {
 		d = -d
 	}
 	return d < 60*time.Second
+}
+
+// getLiveStatus computes process_type and busy for all sessions.
+// Returns map[cacheKey] → {processType, busy}
+type liveStatus struct {
+	processType string
+	busy        bool
+}
+
+func getLiveStatuses(sessions map[string]*CachedSession) map[string]liveStatus {
+	result := make(map[string]liveStatus)
+	processes := getRunningProcesses()
+	tmuxSessions := getTmuxSessions()
+
+	for key, s := range sessions {
+		st := liveStatus{}
+
+		// Check tmux first (sv_ prefix)
+		tName := tmuxName(s.ID)
+		if tmuxSessions[tName] {
+			st.processType = "tmux"
+			st.busy = isTmuxBusy(s.ID)
+			result[key] = st
+			continue
+		}
+
+		// Check terminal processes
+		for _, proc := range processes {
+			if proc.CWD == s.CWD && matchProcessToSession(proc, s.ID) {
+				st.processType = "sh"
+				break
+			}
+		}
+
+		result[key] = st
+	}
+	return result
+}
+
+// ── Helpers ──
+
+func parseSessionTimestamp(sessionID string) (time.Time, error) {
+	parts := strings.SplitN(sessionID, "_", 2)
+	if len(parts) < 1 {
+		return time.Time{}, fmt.Errorf("invalid")
+	}
+	tsStr := strings.Replace(parts[0], "T", " ", 1)
+	sp := strings.SplitN(tsStr, " ", 2)
+	if len(sp) == 2 {
+		tsStr = sp[0] + " " + strings.Replace(sp[1], "-", ":", 2)
+	}
+	return time.Parse("2006-01-02 15:04:05", tsStr)
 }
 
 func getSessionPreview(sessionPath string) string {
@@ -341,25 +420,6 @@ func getBranch(dir string, cache map[string]string) string {
 
 var messageTypeRe = regexp.MustCompile(`_([a-z-]+)\.md$`)
 
-func getLastMsgTypes(entries []os.DirEntry) (string, string) {
-	var last, lastMeaningful string
-	for i := len(entries) - 1; i >= 0; i-- {
-		m := messageTypeRe.FindStringSubmatch(entries[i].Name())
-		if len(m) >= 2 {
-			if last == "" {
-				last = m[1]
-			}
-			if lastMeaningful == "" && m[1] != "diagnostic" {
-				lastMeaningful = m[1]
-			}
-			if last != "" && lastMeaningful != "" {
-				break
-			}
-		}
-	}
-	return last, lastMeaningful
-}
-
 func discoverProjectDirs() map[string]bool {
 	s := make(map[string]bool)
 	home, _ := os.UserHomeDir()
@@ -399,7 +459,6 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
-// getUsername returns the normalized username (same logic as session package).
 func getUsername() string {
 	out, err := exec.Command("git", "config", "user.name").Output()
 	if err == nil {
@@ -420,47 +479,33 @@ func getUsername() string {
 	return "unknown"
 }
 
-// formatTimestampDir formats a time for session directory names.
 func formatTimestampDir(t time.Time) string {
 	return t.Format("2006-01-02T15-04-05")
 }
 
-// ── Session list cache ──
+// ── Background scanner ──
 
-var _sessionsCache []SessionInfo
-var _sessionsCacheTime time.Time
-const sessionsCacheTTL = 5 * time.Second
-
-// ── API handlers ──
-
-func getSessions(c echo.Context) error {
-	// Age filter: default to last 30 days, 0 = no limit
-	daysStr := c.QueryParam("days")
-	days := 30
-	if daysStr != "" {
-		if d, err := strconv.Atoi(daysStr); err == nil {
-			days = d
-		}
+func backgroundScan() {
+	scanMu.Lock()
+	if scanning {
+		scanMu.Unlock()
+		return
 	}
+	scanning = true
+	scanMu.Unlock()
+	defer func() {
+		scanMu.Lock()
+		scanning = false
+		scanMu.Unlock()
+	}()
 
-	// Check cache
-	now := time.Now()
-	if time.Since(_sessionsCacheTime) < sessionsCacheTTL && _sessionsCache != nil {
-		filtered := filterByAge(_sessionsCache, days, now)
-		return c.JSON(http.StatusOK, filtered)
-	}
-
-	processes := getRunningProcesses()
+	start := time.Now()
 	cwdSet := discoverProjectDirs()
-	for _, p := range processes {
-		if p.CWD != "" {
-			cwdSet[p.CWD] = true
-		}
-	}
 	home, _ := os.UserHomeDir()
 	bc := make(map[string]string)
 
-	var all []SessionInfo
+	found := make(map[string]bool)
+
 	for dir := range cwdSet {
 		sessDir := filepath.Join(dir, ".clyde", "sessions")
 		entries, err := os.ReadDir(sessDir)
@@ -478,17 +523,17 @@ func getSessions(c echo.Context) error {
 				continue
 			}
 			sid := e.Name()
+			key := cacheKey(dir, sid)
+			found[key] = true
 			sp := filepath.Join(sessDir, sid)
+
 			user := ""
 			parts := strings.SplitN(sid, "_", 2)
 			if len(parts) == 2 {
 				user = parts[1]
-				if idx := strings.Index(user, "_from_"); idx >= 0 {
-					user = user[:idx]
-				}
 			}
+
 			me, _ := os.ReadDir(sp)
-			sort.Slice(me, func(i, j int) bool { return me[i].Name() < me[j].Name() })
 			var lm time.Time
 			for _, m := range me {
 				if info, err := m.Info(); err == nil && info.ModTime().After(lm) {
@@ -500,67 +545,129 @@ func getSessions(c echo.Context) error {
 				lms = lm.Format(time.RFC3339)
 			}
 
-			// Terminal-based running detection
-			running := false
-			rpid := 0
-			for _, proc := range processes {
-				if proc.CWD == dir && matchProcessToSession(proc, sid) {
-					running = true
-					rpid = proc.PID
-					break
+			cacheMu.Lock()
+			existing := cache.Sessions[key]
+			if existing != nil {
+				existing.MessageCount = len(me)
+				existing.LastModified = lms
+				existing.Project = project
+				existing.Branch = branch
+				existing.User = user
+				if len(me) > existing.LastReadCount && existing.Read {
+					existing.Read = false
+				}
+				if existing.Preview == "" {
+					existing.Preview = getSessionPreview(sp)
+				}
+			} else {
+				cache.Sessions[key] = &CachedSession{
+					ID:            sid,
+					CWD:           dir,
+					Project:       project,
+					Branch:        branch,
+					User:          user,
+					MessageCount:  len(me),
+					LastModified:  lms,
+					Preview:       getSessionPreview(sp),
+					Read:          false,
+					LastReadCount: 0,
 				}
 			}
-
-			// Viewer-managed tmux agent
-			viewerAgent := isTmuxRunning(tmuxName(sid))
-			agentBusy := false
-			if viewerAgent {
-				agentBusy = isViewerAgentBusy(sid)
-			}
-
-			lt, lmt := getLastMsgTypes(me)
-			needsReply := lmt == "assistant"
-
-			all = append(all, SessionInfo{
-				ID: sid, User: user, Timestamp: parts[0],
-				MessageCount: len(me), LastModified: lms,
-				CWD: dir, Project: project, Branch: branch,
-				Running: running || viewerAgent, PID: rpid,
-				Preview: getSessionPreview(sp), LastMsgType: lt,
-				NeedsReply: needsReply,
-				ViewerAgent: viewerAgent, AgentBusy: agentBusy,
-			})
+			cacheMu.Unlock()
 		}
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i].LastModified > all[j].LastModified })
 
-	// Update cache
-	_sessionsCache = all
-	_sessionsCacheTime = time.Now()
+	// Prune deleted sessions
+	cacheMu.Lock()
+	for key := range cache.Sessions {
+		if !found[key] {
+			delete(cache.Sessions, key)
+		}
+	}
+	cache.LastScan = time.Now().Format(time.RFC3339)
+	cacheMu.Unlock()
 
-	filtered := filterByAge(all, days, now)
-	return c.JSON(http.StatusOK, filtered)
+	saveCache()
+	fmt.Printf("🔍 Scan: %d sessions in %v\n", len(found), time.Since(start).Round(time.Millisecond))
 }
 
-func filterByAge(sessions []SessionInfo, days int, now time.Time) []SessionInfo {
-	if days <= 0 {
-		return sessions
+func startBackgroundScanner() {
+	// Initial scan
+	go backgroundScan()
+	// Periodic refresh
+	go func() {
+		for {
+			time.Sleep(60 * time.Second)
+			backgroundScan()
+		}
+	}()
+}
+
+// ── API handlers ──
+
+func getSessions(c echo.Context) error {
+	daysStr := c.QueryParam("days")
+	days := 30
+	if daysStr != "" {
+		if d, err := strconv.Atoi(daysStr); err == nil {
+			days = d
+		}
 	}
-	cutoff := now.AddDate(0, 0, -days)
-	var result []SessionInfo
-	for _, s := range sessions {
-		if s.LastModified == "" {
-			continue
-		}
-		t, err := time.Parse(time.RFC3339, s.LastModified)
-		if err != nil {
-			continue
-		}
-		if t.After(cutoff) {
-			result = append(result, s)
-		}
+
+	cacheMu.RLock()
+	sessions := make(map[string]*CachedSession, len(cache.Sessions))
+	for k, v := range cache.Sessions {
+		sessions[k] = v
 	}
-	return result
+	prefs := cache.Preferences
+	cacheMu.RUnlock()
+
+	// Compute live statuses
+	statuses := getLiveStatuses(sessions)
+
+	now := time.Now()
+	cutoff := time.Time{}
+	if days > 0 {
+		cutoff = now.AddDate(0, 0, -days)
+	}
+
+	var result []SessionResponse
+	for key, s := range sessions {
+		// Age filter
+		if days > 0 {
+			if s.LastModified == "" {
+				continue
+			}
+			t, err := time.Parse(time.RFC3339, s.LastModified)
+			if err != nil || t.Before(cutoff) {
+				continue
+			}
+		}
+
+		st := statuses[key]
+		result = append(result, SessionResponse{
+			ID:           s.ID,
+			CWD:          s.CWD,
+			Project:      s.Project,
+			Branch:       s.Branch,
+			User:         s.User,
+			Name:         s.Name,
+			MessageCount: s.MessageCount,
+			LastModified: s.LastModified,
+			Preview:      s.Preview,
+			Unread:       !s.Read,
+			ProcessType:  st.processType,
+			Busy:         st.busy,
+		})
+	}
+
+	sort.Slice(result, func(i, j int) bool { return result[i].LastModified > result[j].LastModified })
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"sessions":    result,
+		"preferences": prefs,
+		"last_scan":   cache.LastScan,
+	})
 }
 
 func getSessionMessages(c echo.Context) error {
@@ -586,7 +693,6 @@ func getSessionMessages(c echo.Context) error {
 		}
 	}
 
-	// Pagination: limit (default 100), before (for loading older)
 	limit := 100
 	if l := c.QueryParam("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 {
@@ -595,7 +701,6 @@ func getSessionMessages(c echo.Context) error {
 	}
 	before := c.QueryParam("before")
 
-	// First pass: collect all matching filenames
 	var matched []os.DirEntry
 	for _, e := range entries {
 		if e.IsDir() {
@@ -615,7 +720,6 @@ func getSessionMessages(c echo.Context) error {
 		matched = append(matched, e)
 	}
 
-	// Apply limit: take the last N entries (most recent)
 	hasOlder := false
 	if len(matched) > limit && before == "" && after == "" {
 		hasOlder = true
@@ -643,7 +747,6 @@ func getSessionMessages(c echo.Context) error {
 	})
 }
 
-// postSessionMessage starts clyde in tmux (if needed) and sends the message
 func postSessionMessage(c echo.Context) error {
 	sid := c.Param("id")
 	var body struct {
@@ -656,58 +759,40 @@ func postSessionMessage(c echo.Context) error {
 	if body.CWD == "" || body.Content == "" || sid == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd, content, and id required"})
 	}
-
 	sessPath := filepath.Join(body.CWD, ".clyde", "sessions", sid)
 	if _, err := os.Stat(sessPath); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 	}
-
-	// Check if agent is currently busy
-	if isViewerAgentBusy(sid) {
+	if isTmuxBusy(sid) {
 		return c.JSON(http.StatusConflict, map[string]string{"error": "agent is busy processing"})
 	}
-
-	// Start clyde in tmux if not already running
 	if err := startClyde(body.CWD, sid); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "failed to start clyde: " + err.Error(),
-		})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to start clyde: " + err.Error()})
 	}
-
-	// Wait for clyde to be ready (show prompt)
-	// For resumed sessions, clyde needs a moment to load history
 	ready := false
-	for i := 0; i < 20; i++ { // up to 10 seconds
+	for i := 0; i < 20; i++ {
 		time.Sleep(500 * time.Millisecond)
-		if !isViewerAgentBusy(sid) {
+		if !isTmuxBusy(sid) {
 			ready = true
 			break
 		}
 	}
 	if !ready {
-		return c.JSON(http.StatusServiceUnavailable, map[string]string{
-			"error": "clyde not ready yet — try again in a moment",
-		})
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "clyde not ready yet"})
 	}
-
-	// Send the message
 	if err := sendToClyde(sid, body.Content); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "failed to send message: " + err.Error(),
-		})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to send: " + err.Error()})
 	}
-
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
-// stopSession kills a viewer-managed clyde tmux session
 func stopSession(c echo.Context) error {
 	sid := c.Param("id")
 	if sid == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "id required"})
 	}
 	if !isTmuxRunning(tmuxName(sid)) {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "no viewer agent running for this session"})
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "no tmux session running"})
 	}
 	if err := stopClyde(sid); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -718,15 +803,74 @@ func stopSession(c echo.Context) error {
 func getSessionStatus(c echo.Context) error {
 	sid := c.Param("id")
 	name := tmuxName(sid)
-	running := isTmuxRunning(name)
+	tmuxRunning := isTmuxRunning(name)
 	busy := false
-	if running {
-		busy = isViewerAgentBusy(sid)
+	if tmuxRunning {
+		busy = isTmuxBusy(sid)
 	}
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"viewer_agent": running,
+		"process_type": map[bool]string{true: "tmux", false: ""}[tmuxRunning],
 		"busy":         busy,
 	})
+}
+
+// patchSession updates user-editable metadata: name, read state.
+func patchSession(c echo.Context) error {
+	sid := c.Param("id")
+	cwd := c.QueryParam("cwd")
+	if sid == "" || cwd == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "id and cwd required"})
+	}
+	var body struct {
+		Name *string `json:"name"`
+		Read *bool   `json:"read"`
+	}
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
+
+	key := cacheKey(cwd, sid)
+	cacheMu.Lock()
+	s := cache.Sessions[key]
+	if s == nil {
+		cacheMu.Unlock()
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found in cache"})
+	}
+	if body.Name != nil {
+		s.Name = *body.Name
+	}
+	if body.Read != nil {
+		s.Read = *body.Read
+		if *body.Read {
+			s.LastReadCount = s.MessageCount
+		}
+	}
+	cacheMu.Unlock()
+
+	go saveCache()
+	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func patchPreferences(c echo.Context) error {
+	var body Preferences
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
+	cacheMu.Lock()
+	if body.HiddenProjects != nil {
+		cache.Preferences.HiddenProjects = body.HiddenProjects
+	}
+	if body.CollapsedProjects != nil {
+		cache.Preferences.CollapsedProjects = body.CollapsedProjects
+	}
+	cacheMu.Unlock()
+	go saveCache()
+	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func triggerScan(c echo.Context) error {
+	go backgroundScan()
+	return c.JSON(http.StatusAccepted, map[string]string{"status": "scanning"})
 }
 
 func getProjects(c echo.Context) error {
@@ -748,7 +892,6 @@ func getProjects(c echo.Context) error {
 	return c.JSON(http.StatusOK, projects)
 }
 
-// createSession creates a new session directory and returns its ID
 func createSession(c echo.Context) error {
 	var body struct {
 		CWD string `json:"cwd"`
@@ -759,25 +902,59 @@ func createSession(c echo.Context) error {
 	if body.CWD == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd required"})
 	}
-	if _, err := os.Stat(body.CWD); os.IsNotExist(err) {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "dir not found"})
-	}
-
 	sessRoot := filepath.Join(body.CWD, ".clyde", "sessions")
-	if err := os.MkdirAll(sessRoot, 0755); err != nil {
+	os.MkdirAll(sessRoot, 0755)
+	dirName := formatTimestampDir(time.Now()) + "_" + getUsername()
+	if err := os.MkdirAll(filepath.Join(sessRoot, dirName), 0755); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
-
-	now := time.Now()
-	dirName := formatTimestampDir(now) + "_" + getUsername()
-	sessDir := filepath.Join(sessRoot, dirName)
-	if err := os.MkdirAll(sessDir, 0755); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	// Add to cache immediately
+	key := cacheKey(body.CWD, dirName)
+	home, _ := os.UserHomeDir()
+	project := filepath.Base(body.CWD)
+	if body.CWD == home {
+		project = "~"
 	}
+	cacheMu.Lock()
+	cache.Sessions[key] = &CachedSession{
+		ID: dirName, CWD: body.CWD, Project: project, User: getUsername(),
+	}
+	cacheMu.Unlock()
+	go saveCache()
 
-	return c.JSON(http.StatusOK, map[string]string{
-		"status":     "ok",
-		"session_id": dirName,
-		"cwd":        body.CWD,
+	return c.JSON(http.StatusOK, map[string]string{"status": "ok", "session_id": dirName, "cwd": body.CWD})
+}
+
+// ── Main ──
+
+func main() {
+	initCache()
+	startBackgroundScanner()
+
+	e := echo.New()
+	e.Use(middleware.Logger())
+	e.Use(middleware.CORS())
+
+	api := e.Group("/api")
+	api.GET("/sessions", getSessions)
+	api.GET("/sessions/:id/messages", getSessionMessages)
+	api.POST("/sessions/:id/messages", postSessionMessage)
+	api.POST("/sessions/:id/stop", stopSession)
+	api.GET("/sessions/:id/status", getSessionStatus)
+	api.PATCH("/sessions/:id", patchSession)
+	api.POST("/sessions/scan", triggerScan)
+	api.POST("/sessions/new", createSession)
+	api.GET("/projects", getProjects)
+	api.GET("/preferences", func(c echo.Context) error {
+		cacheMu.RLock()
+		defer cacheMu.RUnlock()
+		return c.JSON(http.StatusOK, cache.Preferences)
 	})
+	api.PATCH("/preferences", patchPreferences)
+
+	staticFS, _ := fs.Sub(staticFiles, "static")
+	e.GET("/*", echo.WrapHandler(http.FileServer(http.FS(staticFS))))
+
+	fmt.Println("🔍 Session Viewer at http://localhost:8787")
+	e.Logger.Fatal(e.Start(":8787"))
 }
