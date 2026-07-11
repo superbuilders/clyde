@@ -66,6 +66,12 @@
           <option value="messages">Most msgs</option>
           <option value="project">Project</option>
         </select>
+        <select x-model="filterDays" @change="loadSessions()" class="select select-xs select-bordered">
+          <option value="7">Last 7d</option>
+          <option value="30">Last 30d</option>
+          <option value="90">Last 90d</option>
+          <option value="0">All time</option>
+        </select>
       </div>
       <div class="text-xs opacity-60" x-text="filteredSessions.length + ' of ' + sessions.length + ' sessions'"></div>
     </div>
@@ -270,6 +276,7 @@ function sessionViewer() {
     filterProject: '',
     filterStatus: '',
     sortBy: 'recent',
+    filterDays: '30',
     enabledTypes: {
       'user': true, 'assistant': true, 'thinking': true,
       'tools': true, 'compaction': true, 'diagnostic': false
@@ -299,7 +306,7 @@ function sessionViewer() {
     async loadSessions() {
       this.loading = true;
       try {
-        const r = await fetch('/api/sessions');
+        const r = await fetch('/api/sessions?days=' + this.filterDays);
         this.sessions = await r.json();
       } catch(e) { console.error('Failed to load sessions:', e); }
       this.loading = false;

@@ -74,8 +74,35 @@ func tmuxName(sessionID string) string {
 
 // isTmuxRunning checks if a tmux session exists.
 func isTmuxRunning(name string) bool {
-	err := exec.Command("tmux", "has-session", "-t", name).Run()
-	return err == nil
+	sessions := getTmuxSessions()
+	_, ok := sessions[name]
+	return ok
+}
+
+// getTmuxSessions returns all active tmux session names (cached per call-site via caller).
+var _tmuxSessionsCache map[string]bool
+var _tmuxSessionsCacheTime time.Time
+
+func getTmuxSessions() map[string]bool {
+	// Cache for 2 seconds to avoid hammering tmux during a single API call
+	if time.Since(_tmuxSessionsCacheTime) < 2*time.Second && _tmuxSessionsCache != nil {
+		return _tmuxSessionsCache
+	}
+	result := make(map[string]bool)
+	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+	if err != nil {
+		_tmuxSessionsCache = result
+		_tmuxSessionsCacheTime = time.Now()
+		return result
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			result[line] = true
+		}
+	}
+	_tmuxSessionsCache = result
+	_tmuxSessionsCacheTime = time.Now()
+	return result
 }
 
 // startClyde starts a clyde process in a tmux session with the correct CWD.
@@ -398,9 +425,31 @@ func formatTimestampDir(t time.Time) string {
 	return t.Format("2006-01-02T15-04-05")
 }
 
+// ── Session list cache ──
+
+var _sessionsCache []SessionInfo
+var _sessionsCacheTime time.Time
+const sessionsCacheTTL = 5 * time.Second
+
 // ── API handlers ──
 
 func getSessions(c echo.Context) error {
+	// Age filter: default to last 30 days, 0 = no limit
+	daysStr := c.QueryParam("days")
+	days := 30
+	if daysStr != "" {
+		if d, err := strconv.Atoi(daysStr); err == nil {
+			days = d
+		}
+	}
+
+	// Check cache
+	now := time.Now()
+	if time.Since(_sessionsCacheTime) < sessionsCacheTTL && _sessionsCache != nil {
+		filtered := filterByAge(_sessionsCache, days, now)
+		return c.JSON(http.StatusOK, filtered)
+	}
+
 	processes := getRunningProcesses()
 	cwdSet := discoverProjectDirs()
 	for _, p := range processes {
@@ -484,7 +533,34 @@ func getSessions(c echo.Context) error {
 		}
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].LastModified > all[j].LastModified })
-	return c.JSON(http.StatusOK, all)
+
+	// Update cache
+	_sessionsCache = all
+	_sessionsCacheTime = time.Now()
+
+	filtered := filterByAge(all, days, now)
+	return c.JSON(http.StatusOK, filtered)
+}
+
+func filterByAge(sessions []SessionInfo, days int, now time.Time) []SessionInfo {
+	if days <= 0 {
+		return sessions
+	}
+	cutoff := now.AddDate(0, 0, -days)
+	var result []SessionInfo
+	for _, s := range sessions {
+		if s.LastModified == "" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, s.LastModified)
+		if err != nil {
+			continue
+		}
+		if t.After(cutoff) {
+			result = append(result, s)
+		}
+	}
+	return result
 }
 
 func getSessionMessages(c echo.Context) error {
