@@ -167,9 +167,9 @@
           </div>
           <template x-for="msg in messages" :key="msg.filename">
             <div>
-              <!-- Tool-use: collapsible -->
+              <!-- Tool-use: collapsible, collapsed by default -->
               <template x-if="msg.type === 'tool-use'">
-                <details open class="bg-base-300/30 rounded-lg my-1 group">
+                <details class="bg-base-300/30 rounded-lg my-1 group border-l-2 border-warning/30 ml-2">
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-warning">🔧 Tool Call</span>
@@ -182,7 +182,7 @@
               </template>
               <!-- Tool-result: collapsible, plain text -->
               <template x-if="msg.type === 'tool-result'">
-                <details open class="bg-base-300/30 rounded-lg my-1 group">
+                <details open class="bg-base-300/30 rounded-lg my-1 group border-l-2 border-info/30 ml-2">
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-info">📋 Tool Result</span>
@@ -193,9 +193,9 @@
                   </div>
                 </details>
               </template>
-              <!-- Thinking: collapsible -->
+              <!-- Thinking: collapsible, but collapse if content matches summary -->
               <template x-if="msg.type === 'thinking'">
-                <details open class="bg-base-300/30 rounded-lg my-1 group">
+                <details :open="cleanThinking(msg.content).length > 120" class="bg-base-300/30 rounded-lg my-1 group">
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-secondary">💭 Thinking</span>
