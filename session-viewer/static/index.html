@@ -165,6 +165,14 @@
           <div x-show="loadingMsgs" class="text-center py-6">
             <span class="loading loading-spinner loading-md"></span>
           </div>
+          <!-- Load older button -->
+          <div x-show="hasOlder && !loadingMsgs" class="text-center pb-2">
+            <button @click="loadOlderMessages()" class="btn btn-xs btn-ghost opacity-60"
+                    :disabled="loadingOlder">
+              <span x-show="!loadingOlder">↑ Load older messages</span>
+              <span x-show="loadingOlder" class="loading loading-spinner loading-xs"></span>
+            </button>
+          </div>
           <template x-for="msg in messages" :key="msg.filename">
             <div>
               <!-- Tool-use: collapsible, collapsed by default -->
@@ -291,6 +299,8 @@ function sessionViewer() {
     pollTimer: null,
     statusTimer: null,
     lastFilename: '',
+    hasOlder: false,
+    loadingOlder: false,
     agentBusy: false,
     showNewModal: false,
     projects: [],
@@ -349,6 +359,7 @@ function sessionViewer() {
       this.selected = s;
       this.messages = [];
       this.lastFilename = '';
+      this.hasOlder = false;
       this.agentBusy = s.agent_busy || false;
       this.sendError = '';
       this.replyText = '';
@@ -361,7 +372,6 @@ function sessionViewer() {
       if (!this.selected) return;
       if (!incremental) this.loadingMsgs = true;
       const typeKeys = Object.entries(this.enabledTypes).filter(([,v]) => v).map(([k]) => k);
-      // Expand 'tools' virtual toggle into both wire types
       const idx = typeKeys.indexOf('tools');
       if (idx !== -1) { typeKeys.splice(idx, 1, 'tool-use', 'tool-result'); }
       const types = typeKeys.join(',');
@@ -369,7 +379,10 @@ function sessionViewer() {
       if (incremental && this.lastFilename) url += `&after=${encodeURIComponent(this.lastFilename)}`;
       try {
         const r = await fetch(url);
-        const msgs = await r.json() || [];
+        const data = await r.json();
+        // Handle both old array format and new {messages, has_older} format
+        const msgs = Array.isArray(data) ? data : (data?.messages || []);
+        const hasOlder = Array.isArray(data) ? false : (data?.has_older || false);
         if (incremental) {
           if (msgs && msgs.length > 0) {
             this.messages = [...this.messages, ...msgs];
@@ -378,12 +391,44 @@ function sessionViewer() {
           }
         } else {
           this.messages = msgs || [];
+          this.hasOlder = hasOlder;
           if (this.messages.length > 0) {
             this.lastFilename = this.messages[this.messages.length - 1].filename;
           }
         }
       } catch(e) { console.error(e); }
       this.loadingMsgs = false;
+    },
+
+    async loadOlderMessages() {
+      if (!this.selected || this.loadingOlder || !this.hasOlder) return;
+      this.loadingOlder = true;
+      const typeKeys = Object.entries(this.enabledTypes).filter(([,v]) => v).map(([k]) => k);
+      const idx = typeKeys.indexOf('tools');
+      if (idx !== -1) { typeKeys.splice(idx, 1, 'tool-use', 'tool-result'); }
+      const types = typeKeys.join(',');
+      const firstFilename = this.messages.length > 0 ? this.messages[0].filename : '';
+      let url = `/api/sessions/${encodeURIComponent(this.selected.id)}/messages?cwd=${encodeURIComponent(this.selected.cwd)}&types=${types}`;
+      if (firstFilename) url += `&before=${encodeURIComponent(firstFilename)}`;
+      try {
+        const r = await fetch(url);
+        const data = await r.json();
+        const msgs = Array.isArray(data) ? data : (data?.messages || []);
+        const hasOlder = Array.isArray(data) ? false : (data?.has_older || false);
+        if (msgs && msgs.length > 0) {
+          // Preserve scroll position
+          const container = this.$refs.msgContainer;
+          const oldHeight = container?.scrollHeight || 0;
+          this.messages = [...msgs, ...this.messages];
+          this.hasOlder = hasOlder;
+          this.$nextTick(() => {
+            if (container) container.scrollTop = container.scrollHeight - oldHeight;
+          });
+        } else {
+          this.hasOlder = false;
+        }
+      } catch(e) { console.error(e); }
+      this.loadingOlder = false;
     },
 
     startPolling() {

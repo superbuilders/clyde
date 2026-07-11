@@ -586,7 +586,17 @@ func getSessionMessages(c echo.Context) error {
 		}
 	}
 
-	var msgs []MessageFile
+	// Pagination: limit (default 100), before (for loading older)
+	limit := 100
+	if l := c.QueryParam("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	before := c.QueryParam("before")
+
+	// First pass: collect all matching filenames
+	var matched []os.DirEntry
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -595,10 +605,27 @@ func getSessionMessages(c echo.Context) error {
 		if after != "" && name <= after {
 			continue
 		}
+		if before != "" && name >= before {
+			continue
+		}
 		m := messageTypeRe.FindStringSubmatch(name)
 		if len(m) < 2 || !allowed[m[1]] {
 			continue
 		}
+		matched = append(matched, e)
+	}
+
+	// Apply limit: take the last N entries (most recent)
+	hasOlder := false
+	if len(matched) > limit && before == "" && after == "" {
+		hasOlder = true
+		matched = matched[len(matched)-limit:]
+	}
+
+	var msgs []MessageFile
+	for _, e := range matched {
+		name := e.Name()
+		m := messageTypeRe.FindStringSubmatch(name)
 		ts := strings.TrimSuffix(name, "_"+m[1]+".md")
 		content, err := readFileCapped(filepath.Join(sp, name), 50*1024)
 		if err != nil {
@@ -609,7 +636,11 @@ func getSessionMessages(c echo.Context) error {
 		}
 		msgs = append(msgs, MessageFile{Filename: name, Timestamp: ts, Type: m[1], Content: content})
 	}
-	return c.JSON(http.StatusOK, msgs)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"messages":  msgs,
+		"has_older": hasOlder,
+	})
 }
 
 // postSessionMessage starts clyde in tmux (if needed) and sends the message
