@@ -191,14 +191,9 @@ func startClyde(cwd, sessionID string) error {
 	if isTmuxRunning(name) {
 		return nil
 	}
-	sessDir := filepath.Join(cwd, ".clyde", "sessions", sessionID)
-	entries, _ := os.ReadDir(sessDir)
-	var cmd string
-	if len(entries) > 0 {
-		cmd = fmt.Sprintf("cd %s && clyde -r %s", shellQuote(cwd), shellQuote(sessionID))
-	} else {
-		cmd = fmt.Sprintf("cd %s && clyde", shellQuote(cwd))
-	}
+	// Always use -r to resume into the existing session directory,
+	// even if it's empty. Without -r, clyde creates its own new session.
+	cmd := fmt.Sprintf("cd %s && clyde -r %s", shellQuote(cwd), shellQuote(sessionID))
 	err := exec.Command("tmux", "new-session", "-d", "-s", name, "-x", "200", "-y", "50", cmd).Run()
 	// Invalidate tmux cache
 	_tmuxCacheTime = time.Time{}
@@ -922,6 +917,11 @@ func createSession(c echo.Context) error {
 	}
 	cacheMu.Unlock()
 	go saveCache()
+
+	// Start clyde in tmux immediately so the session is live
+	if err := startClyde(body.CWD, dirName); err != nil {
+		fmt.Printf("⚠️  Failed to start clyde for new session: %v\n", err)
+	}
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok", "session_id": dirName, "cwd": body.CWD})
 }
