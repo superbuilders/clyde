@@ -574,7 +574,11 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 
 			// Emit tool output body unconditionally (full, untruncated).
 			// The CLI layer handles truncation and display filtering.
-			if resultContent != "" && !strings.HasPrefix(resultContent, "Image loaded") {
+			// NOTE: This MUST fire for all results including image confirmations,
+			// because the output callback is what writes *_tool-result.md session
+			// files. Skipping it creates orphaned tool-use files that break
+			// session resume (see docs/bug-orphaned-tool-use-files.md).
+			if resultContent != "" {
 				if a.outputCallback != nil {
 					a.outputCallback(resultContent, toolBlock.ID)
 				}

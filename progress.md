@@ -142,6 +142,39 @@ the old logical-line math. Existing tests unaffected.
 
 ## Bugs Fixed
 
+### Orphaned tool-use session files breaking --resume (2026-07-02)
+
+**Problem:** Certain tool invocations wrote `*_tool-use.md` session files but never
+wrote a corresponding `*_tool-result.md` file. This left orphaned tool-use records
+that caused Claude API 400 errors on `--resume` (every `tool_use` must have a
+matching `tool_result`).
+
+**Two root causes:**
+1. **include_file (image) — structural bug:** In `agent/agent.go`, the output callback
+   (which writes `*_tool-result.md`) was guarded by
+   `!strings.HasPrefix(resultContent, "Image loaded")`. Every image include_file call
+   matched this prefix, so the callback never fired → no tool-result file ever written.
+   100% reproducible for all image includes.
+2. **Session interruption:** When a session is killed (Ctrl-C, crash) mid-tool-execution,
+   the tool-use file exists (written at dispatch time) but no result comes back.
+
+**Fix:**
+- **agent/agent.go:** Removed the `HasPrefix("Image loaded")` guard on the output
+  callback. The callback now fires for all results including image confirmations.
+  The display layer can still suppress visual output; session persistence is unaffected.
+- **agent/session/resume.go:** Added `synthesizeOrphanToolResults()` post-processing
+  step in `ReconstructHistory` that detects orphaned `tool_use` blocks and injects
+  placeholder `tool_result` messages (`"[Tool result unavailable — session was interrupted]"`).
+  Handles three cases: (a) mid-conversation partial orphans (some tools have results,
+  others don't), (b) end-of-session orphans, (c) mixed assistant messages (tool_use +
+  text combined due to missing tool-result files) that need splitting into proper
+  API message structure.
+
+**Tests:** 3 new tests: `TestReconstructHistory_OrphanToolUse_MidConversation`,
+`_EndOfSession`, `_AllOrphaned`. All 30 session resume tests pass.
+
+**Documented in:** `docs/bug-orphaned-tool-use-files.md`
+
 ### Brave Search 429s on concurrent requests (2025-07-17)
 
 **Problem:** When multiple `web_search` tool calls fire in the same turn (parallel

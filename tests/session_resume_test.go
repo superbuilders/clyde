@@ -1122,6 +1122,178 @@ func TestInferToolName(t *testing.T) {
 	}
 }
 
+// TestReconstructHistory_OrphanToolUse_MidConversation verifies that an orphaned
+// tool_use (no matching tool_result) in the middle of a conversation gets a
+// synthesized placeholder tool_result. This is the include_file image bug where
+// the output callback was skipped.
+func TestReconstructHistory_OrphanToolUse_MidConversation(t *testing.T) {
+	dir := t.TempDir()
+
+	// Simulate: user asks to include an image and read a file.
+	// include_file has no tool-result (the bug), but read_file does.
+	writeFile(t, dir, "2026-07-14T09-32-00.000_user.md", "**You:**\n\nLook at screenshot.png and read main.go\n")
+	writeFile(t, dir, "2026-07-14T09-32-03.000_tool-use.md",
+		"→ Including file: screenshot.png [toolu_img1]\nname: include_file\ninput: {\"path\":\"screenshot.png\"}\n")
+	writeFile(t, dir, "2026-07-14T09-32-03.500_tool-use.md",
+		"→ Reading file: main.go [toolu_read1]\nname: read_file\ninput: {\"path\":\"main.go\"}\n")
+	// Only tool-result for read_file — include_file is orphaned
+	writeFile(t, dir, "2026-07-14T09-32-04.000_tool-result.md",
+		"[toolu_read1]\n```\npackage main\n```\n")
+	writeFile(t, dir, "2026-07-14T09-32-07.000_assistant.md",
+		"**Claude:**\n\nHere's the image and the file.\n")
+
+	messages, warnings, err := session.ReconstructHistory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have a warning about synthesized tool_result
+	hasSynthWarning := false
+	for _, w := range warnings {
+		if strings.Contains(w, "synthesized placeholder tool_result") && strings.Contains(w, "toolu_img1") {
+			hasSynthWarning = true
+		}
+	}
+	if !hasSynthWarning {
+		t.Errorf("Expected warning about synthesized tool_result for toolu_img1, got: %v", warnings)
+	}
+
+	// Expected structure:
+	// Msg 0: user text
+	// Msg 1: assistant (tool_use x2)
+	// Msg 2: user (tool_result x2 — one real, one synthesized)
+	// Msg 3: assistant text
+	if len(messages) != 4 {
+		t.Fatalf("Expected 4 messages, got %d", len(messages))
+	}
+
+	// Verify the user tool_result message has both results
+	blocks2, ok := messages[2].Content.([]providers.ContentBlock)
+	if !ok {
+		t.Fatalf("Message 2: expected []ContentBlock, got %T", messages[2].Content)
+	}
+	if len(blocks2) != 2 {
+		t.Fatalf("Message 2: expected 2 tool_result blocks, got %d", len(blocks2))
+	}
+
+	// Verify both tool_use IDs have matching results
+	resultIDs := make(map[string]bool)
+	for _, b := range blocks2 {
+		if b.Type == "tool_result" {
+			resultIDs[b.ToolUseID] = true
+		}
+	}
+	if !resultIDs["toolu_img1"] {
+		t.Error("Missing tool_result for orphaned toolu_img1")
+	}
+	if !resultIDs["toolu_read1"] {
+		t.Error("Missing tool_result for toolu_read1")
+	}
+}
+
+// TestReconstructHistory_OrphanToolUse_EndOfSession verifies that orphaned
+// tool_use blocks at the end of a session (from interruption) get synthesized
+// tool_results.
+func TestReconstructHistory_OrphanToolUse_EndOfSession(t *testing.T) {
+	dir := t.TempDir()
+
+	// Complete first exchange
+	writeFile(t, dir, "2026-07-14T09-32-00.000_user.md", "**You:**\n\nHello\n")
+	writeFile(t, dir, "2026-07-14T09-32-03.000_assistant.md", "**Claude:**\n\nHi!\n")
+
+	// Second exchange: user asks something, tool starts but session dies
+	writeFile(t, dir, "2026-07-14T09-32-10.000_user.md", "**You:**\n\nRun a long command\n")
+	writeFile(t, dir, "2026-07-14T09-32-13.000_tool-use.md",
+		"→ Running bash: sleep 100 [toolu_interrupted]\nname: run_bash\ninput: {\"command\":\"sleep 100\"}\n")
+	// No tool-result — session was killed
+
+	messages, warnings, err := session.ReconstructHistory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have synthesized warning
+	hasSynthWarning := false
+	for _, w := range warnings {
+		if strings.Contains(w, "synthesized placeholder tool_result") && strings.Contains(w, "toolu_interrupted") {
+			hasSynthWarning = true
+		}
+	}
+	if !hasSynthWarning {
+		t.Errorf("Expected warning about synthesized tool_result, got: %v", warnings)
+	}
+
+	// The trailing cleanup may trim the incomplete tool loop, but the synthesis
+	// should have happened first. Let's verify the messages are well-formed.
+	// After synthesis: [..., assistant(tool_use), user(tool_result)]
+	// The trailing cleanup trims tool_result user + preceding assistant.
+	// So we should end up with just the first exchange.
+	if len(messages) != 2 {
+		t.Fatalf("Expected 2 messages (trailing interrupted loop trimmed), got %d", len(messages))
+	}
+	if messages[0].Role != "user" || messages[1].Role != "assistant" {
+		t.Error("Expected user/assistant pair from first exchange")
+	}
+}
+
+// TestReconstructHistory_OrphanToolUse_AllOrphaned verifies handling when
+// ALL tool_use blocks in an assistant message are orphaned (no tool-result files at all).
+func TestReconstructHistory_OrphanToolUse_AllOrphaned(t *testing.T) {
+	dir := t.TempDir()
+
+	writeFile(t, dir, "2026-07-14T09-32-00.000_user.md", "**You:**\n\nInclude two images\n")
+	writeFile(t, dir, "2026-07-14T09-32-03.000_tool-use.md",
+		"→ Including file: a.png [toolu_a]\nname: include_file\ninput: {\"path\":\"a.png\"}\n")
+	writeFile(t, dir, "2026-07-14T09-32-03.500_tool-use.md",
+		"→ Including file: b.png [toolu_b]\nname: include_file\ninput: {\"path\":\"b.png\"}\n")
+	// No tool-results at all, then assistant responds
+	writeFile(t, dir, "2026-07-14T09-32-07.000_assistant.md",
+		"**Claude:**\n\nI can see both images.\n")
+
+	messages, warnings, err := session.ReconstructHistory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have warnings for both orphans
+	synthCount := 0
+	for _, w := range warnings {
+		if strings.Contains(w, "synthesized placeholder tool_result") {
+			synthCount++
+		}
+	}
+	if synthCount != 2 {
+		t.Errorf("Expected 2 synthesis warnings, got %d (warnings: %v)", synthCount, warnings)
+	}
+
+	// Expected: user, assistant(tool_use x2), user(synth tool_result x2), assistant(text)
+	if len(messages) != 4 {
+		t.Fatalf("Expected 4 messages, got %d", len(messages))
+	}
+
+	// Verify the synthesized user message
+	blocks, ok := messages[2].Content.([]providers.ContentBlock)
+	if !ok {
+		t.Fatalf("Message 2: expected []ContentBlock, got %T", messages[2].Content)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("Message 2: expected 2 synthesized tool_result blocks, got %d", len(blocks))
+	}
+	for _, b := range blocks {
+		if b.Type != "tool_result" {
+			t.Errorf("Expected tool_result, got %q", b.Type)
+		}
+		content, ok := b.Content.(string)
+		if !ok {
+			t.Errorf("Expected string content, got %T", b.Content)
+			continue
+		}
+		if !strings.Contains(content, "session was interrupted") {
+			t.Errorf("Synthesized result should mention interruption, got: %q", content)
+		}
+	}
+}
+
 // --- Integration Tests ---
 
 // TestResumeIntegration_CreateAndReconstruct creates a real session, writes

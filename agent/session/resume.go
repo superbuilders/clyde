@@ -302,6 +302,14 @@ func ReconstructHistory(sessionDir string) ([]providers.Message, []string, error
 	// Flush any remaining pending message
 	flush()
 
+	// Synthesize placeholder tool_results for orphaned tool_use blocks.
+	// This handles two cases:
+	// 1. include_file images where the output callback was historically skipped
+	// 2. Session interruption where the tool was executing when the session died
+	// The Claude API requires every tool_use to have a matching tool_result.
+	// See docs/bug-orphaned-tool-use-files.md for details.
+	messages, warnings = synthesizeOrphanToolResults(messages, warnings)
+
 	// API history cleanup: if the last message is a user message, it represents
 	// an incomplete exchange (the user typed something but the process died or
 	// errored before getting a response). The message file stays on disk as a
@@ -340,6 +348,150 @@ func ReconstructHistory(sessionDir string) ([]providers.Message, []string, error
 	}
 
 	return messages, warnings, nil
+}
+
+// synthesizeOrphanToolResults scans reconstructed messages for assistant messages
+// containing tool_use blocks that have no matching tool_result in the following
+// user message. For each orphan, a placeholder tool_result is injected.
+//
+// This fixes two classes of orphans:
+//  1. include_file (image) calls where the output callback was historically skipped
+//  2. Session interruptions where a tool was executing when the process died
+//
+// When an assistant message has both tool_use blocks and other content (text)
+// but no following user message with tool_results, the function splits the
+// assistant message and injects the synthesized tool_results between the
+// tool_use and text portions, restoring proper API message structure.
+func synthesizeOrphanToolResults(messages []providers.Message, warnings []string) ([]providers.Message, []string) {
+	for i := 0; i < len(messages); i++ {
+		if messages[i].Role != "assistant" {
+			continue
+		}
+		blocks, ok := messages[i].Content.([]providers.ContentBlock)
+		if !ok {
+			continue
+		}
+
+		// Collect tool_use IDs from this assistant message
+		var useIDs []string
+		for _, b := range blocks {
+			if b.Type == "tool_use" && b.ID != "" {
+				useIDs = append(useIDs, b.ID)
+			}
+		}
+		if len(useIDs) == 0 {
+			continue
+		}
+
+		// Check the next message for matching tool_results
+		if i+1 < len(messages) && messages[i+1].Role == "user" {
+			nextBlocks, ok := messages[i+1].Content.([]providers.ContentBlock)
+			if !ok {
+				// Next user message is a plain string — no tool_results at all.
+				// Synthesize a new user message with tool_results and insert it
+				// between the assistant and the plain user message.
+				messages, warnings = synthAndInsertAfter(messages, i, useIDs, warnings)
+				i++ // skip the newly inserted message
+				continue
+			}
+
+			// Build set of already-matched tool_use IDs
+			matched := make(map[string]bool)
+			for _, b := range nextBlocks {
+				if b.Type == "tool_result" {
+					matched[b.ToolUseID] = true
+				}
+			}
+
+			// Synthesize results for unmatched tool_use IDs
+			modified := false
+			for _, id := range useIDs {
+				if !matched[id] {
+					nextBlocks = append(nextBlocks, providers.ContentBlock{
+						Type:      "tool_result",
+						ToolUseID: id,
+						Content:   "[Tool result unavailable — session was interrupted]",
+					})
+					warnings = append(warnings, fmt.Sprintf("synthesized placeholder tool_result for orphaned tool_use %s", id))
+					modified = true
+				}
+			}
+			if modified {
+				messages[i+1].Content = nextBlocks
+			}
+		} else {
+			// No following user message with tool_results.
+			// Check if this assistant message has mixed content (tool_use + text).
+			// If so, we need to split it: assistant(tool_use) → user(synth) → assistant(text)
+			// This happens when the include_file bug caused tool-result files to be
+			// skipped, and the assistant text got appended to the same message.
+			var toolUseBlocks, otherBlocks []providers.ContentBlock
+			for _, b := range blocks {
+				if b.Type == "tool_use" {
+					toolUseBlocks = append(toolUseBlocks, b)
+				} else {
+					otherBlocks = append(otherBlocks, b)
+				}
+			}
+
+			if len(otherBlocks) > 0 {
+				// Split: keep only tool_use on this assistant, create synth user,
+				// then new assistant with remaining blocks
+				messages[i].Content = toolUseBlocks
+
+				var synth []providers.ContentBlock
+				for _, id := range useIDs {
+					synth = append(synth, providers.ContentBlock{
+						Type:      "tool_result",
+						ToolUseID: id,
+						Content:   "[Tool result unavailable — session was interrupted]",
+					})
+					warnings = append(warnings, fmt.Sprintf("synthesized placeholder tool_result for orphaned tool_use %s", id))
+				}
+
+				// Insert synth user + new assistant after current position
+				expanded := make([]providers.Message, 0, len(messages)+2)
+				expanded = append(expanded, messages[:i+1]...)
+				expanded = append(expanded, providers.Message{
+					Role:    "user",
+					Content: synth,
+				})
+				expanded = append(expanded, providers.Message{
+					Role:    "assistant",
+					Content: otherBlocks,
+				})
+				expanded = append(expanded, messages[i+1:]...)
+				messages = expanded
+				i += 2 // skip the two newly inserted messages
+			} else {
+				// Pure tool_use assistant at end — just append synth user message
+				messages, warnings = synthAndInsertAfter(messages, i, useIDs, warnings)
+			}
+		}
+	}
+	return messages, warnings
+}
+
+// synthAndInsertAfter creates a synthesized user message with placeholder
+// tool_results for the given IDs and inserts it after position idx.
+func synthAndInsertAfter(messages []providers.Message, idx int, useIDs []string, warnings []string) ([]providers.Message, []string) {
+	var synth []providers.ContentBlock
+	for _, id := range useIDs {
+		synth = append(synth, providers.ContentBlock{
+			Type:      "tool_result",
+			ToolUseID: id,
+			Content:   "[Tool result unavailable — session was interrupted]",
+		})
+		warnings = append(warnings, fmt.Sprintf("synthesized placeholder tool_result for orphaned tool_use %s", id))
+	}
+	expanded := make([]providers.Message, 0, len(messages)+1)
+	expanded = append(expanded, messages[:idx+1]...)
+	expanded = append(expanded, providers.Message{
+		Role:    "user",
+		Content: synth,
+	})
+	expanded = append(expanded, messages[idx+1:]...)
+	return expanded, warnings
 }
 
 // pendingMessage accumulates content blocks for a message being built.
