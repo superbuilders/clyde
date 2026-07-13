@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clyde Session Viewer</title>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css" />
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5/full.css" rel="stylesheet" type="text/css" />
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    .msg-content pre { background: rgba(0,0,0,.35); padding: .75rem 1rem; border-radius: .5rem; overflow-x: auto; margin: .5rem 0; }
+    .msg-content code { font-family: 'SF Mono','Fira Code','Cascadia Code',monospace; font-size: .84em; }
+    .msg-content :not(pre) > code { background: rgba(0,0,0,.2); padding: .1em .35em; border-radius: .25rem; }
+    .msg-content p { margin: .4em 0; }
+    .msg-content h1,.msg-content h2,.msg-content h3 { margin: .7em 0 .2em; font-weight: 700; }
+    .msg-content h1 { font-size: 1.4em; } .msg-content h2 { font-size: 1.2em; } .msg-content h3 { font-size: 1.05em; }
+    .msg-content ul,.msg-content ol { padding-left: 1.5rem; margin: .4em 0; }
+    .msg-content ul { list-style: disc; } .msg-content ol { list-style: decimal; }
+    .msg-content li { margin: .2em 0; }
+    .msg-content table { border-collapse: collapse; margin: .5rem 0; width: 100%; font-size: .9em; }
+    .msg-content th,.msg-content td { border: 1px solid rgba(255,255,255,.12); padding: .3rem .6rem; text-align: left; }
+    .msg-content th { background: rgba(255,255,255,.06); font-weight: 600; }
+    .msg-content blockquote { border-left: 3px solid rgba(255,255,255,.25); padding-left: 1rem; margin: .5em 0; opacity: .85; }
+    .msg-content a { color: oklch(.72 .16 250); text-decoration: underline; }
+    .msg-content hr { border-color: rgba(255,255,255,.1); margin: .75em 0; }
+    .nice-scroll::-webkit-scrollbar { width: 5px; }
+    .nice-scroll::-webkit-scrollbar-track { background: transparent; }
+    .nice-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen bg-base-300">
+
+<div x-data="sessionViewer()" x-init="init()" class="flex h-screen">
+
+  <!-- ─── Left sidebar ─── -->
+  <div class="w-96 min-w-80 flex flex-col bg-base-200 border-r border-base-300">
+
+    <!-- Header -->
+    <div class="p-3 border-b border-base-300 space-y-2">
+      <div class="flex items-center gap-2">
+        <h1 class="text-lg font-bold flex-1">Sessions</h1>
+        <!-- Project visibility popover -->
+        <div class="relative" x-data="{ open: false }">
+          <button @click="open = !open" class="btn btn-xs btn-ghost" title="Filter projects">⚙</button>
+          <div x-show="open" @click.outside="open = false" x-transition
+               class="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-xl p-3 w-56 border border-base-300"
+               style="background-color: var(--color-base-100, #1d232a)">
+            <div class="text-xs font-semibold mb-2 opacity-60">Show projects</div>
+            <template x-for="p in allProjects" :key="p">
+              <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-base-200 px-1 rounded text-sm">
+                <input type="checkbox" class="checkbox checkbox-xs"
+                       :checked="!hiddenProjects[p]"
+                       @change="toggleProjectVisibility(p)" />
+                <span x-text="p"></span>
+              </label>
+            </template>
+          </div>
+        </div>
+        <button class="btn btn-xs btn-ghost" @click="triggerScan()" title="Rescan">⟳</button>
+        <button class="btn btn-xs btn-primary" @click="showNewModal = true">+ New</button>
+      </div>
+      <!-- Search + sort -->
+      <input type="text" x-model="search" placeholder="Search…"
+             class="input input-sm input-bordered w-full" />
+      <div class="flex gap-1.5">
+        <select x-model="sortBy" class="select select-xs select-bordered">
+          <option value="recent">Recent</option>
+          <option value="messages">Most msgs</option>
+          <option value="unread">Unread first</option>
+        </select>
+        <select x-model="filterDays" @change="loadSessions()" class="select select-xs select-bordered">
+          <option value="7">7d</option>
+          <option value="30">30d</option>
+          <option value="90">90d</option>
+          <option value="0">All</option>
+        </select>
+        <div class="flex-1 text-right text-xs opacity-50 self-center" x-text="visibleSessions.length + ' sessions'"></div>
+      </div>
+    </div>
+
+    <!-- Session list grouped by project -->
+    <div class="flex-1 overflow-y-auto nice-scroll">
+      <template x-for="group in groupedSessions" :key="group.project">
+        <div>
+          <!-- Project header -->
+          <div @click="toggleProjectCollapse(group.project)"
+               class="flex items-center gap-1.5 px-3 py-1.5 bg-base-300/50 cursor-pointer hover:bg-base-300/80 sticky top-0 z-10 border-b border-base-300">
+            <span class="text-xs opacity-50 transition-transform" :class="collapsedProjects[group.project] && '-rotate-90'">▼</span>
+            <span class="text-xs font-semibold flex-1" x-text="group.project"></span>
+            <span class="text-xs opacity-40" x-text="group.sessions.length"></span>
+          </div>
+          <!-- Sessions in group -->
+          <template x-if="!collapsedProjects[group.project]">
+            <div>
+              <template x-for="s in group.sessions" :key="s.id + s.cwd">
+                <div @click="selectSession(s)"
+                     :class="{'bg-primary/15 border-l-2 border-primary': selected?.id === s.id && selected?.cwd === s.cwd}"
+                     class="px-3 py-2 border-b border-base-300/50 cursor-pointer hover:bg-base-300/30 transition-colors">
+                  <div class="flex items-center gap-1.5">
+                    <!-- Process type indicator -->
+                    <span x-show="s.process_type === 'tmux'" class="text-blue-400 text-xs" title="tmux">⬤</span>
+                    <span x-show="s.process_type === 'sh'" class="text-green-400 text-xs" title="terminal">⬤</span>
+                    <span x-show="!s.process_type" class="text-base-content/20 text-xs">○</span>
+                    <!-- Name or preview -->
+                    <span class="text-sm flex-1 truncate"
+                          :class="s.unread ? 'font-bold' : 'opacity-80'"
+                          x-text="s.name || s.preview || s.id.substring(0, 19).replace('T', ' ')"></span>
+                    <!-- Busy indicator -->
+                    <span x-show="s.busy" class="loading loading-spinner loading-xs text-warning"></span>
+                    <!-- Unread dot -->
+                    <span x-show="s.unread" class="w-2 h-2 rounded-full bg-accent inline-block"></span>
+                  </div>
+                  <div class="text-xs opacity-40 mt-0.5 pl-5"
+                       x-text="[s.branch, formatTime(s.last_modified), s.message_count + ' msgs'].filter(Boolean).join(' · ')"></div>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </template>
+      <div x-show="visibleSessions.length === 0 && !loading" class="p-6 text-center opacity-50">No sessions found</div>
+      <div x-show="loading" class="p-6 text-center"><span class="loading loading-spinner loading-sm"></span></div>
+    </div>
+  </div>
+
+  <!-- New session modal -->
+  <dialog class="modal" :class="showNewModal && 'modal-open'">
+    <div class="modal-box">
+      <h3 class="font-bold text-lg mb-3">New Session</h3>
+      <select x-model="newSessionCWD" class="select select-bordered w-full mb-3">
+        <option value="">Select project…</option>
+        <template x-for="p in projects" :key="p.path">
+          <option :value="p.path" x-text="p.name + (p.branch ? ' (' + p.branch + ')' : '') + ' — ' + p.path"></option>
+        </template>
+      </select>
+      <div class="modal-action">
+        <button class="btn btn-ghost" @click="showNewModal = false">Cancel</button>
+        <button class="btn btn-primary" @click="createSession()" :disabled="!newSessionCWD">Create</button>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop" @click="showNewModal = false"></form>
+  </dialog>
+
+  <!-- ─── Main area ─── -->
+  <div class="flex-1 flex flex-col min-w-0">
+    <!-- No session selected -->
+    <template x-if="!selected">
+      <div class="flex-1 flex items-center justify-center text-base-content/30">
+        <div class="text-center">
+          <div class="text-5xl mb-3">🤖</div>
+          <div class="text-lg">Select a session to view</div>
+          <div class="text-sm mt-1 opacity-60" x-text="sessions.length + ' sessions discovered'"></div>
+        </div>
+      </div>
+    </template>
+
+    <!-- Session selected -->
+    <template x-if="selected">
+      <div class="flex flex-col h-full">
+        <!-- Top bar -->
+        <div class="px-4 py-2.5 border-b border-base-300 bg-base-200 flex items-center gap-2">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <!-- Editable session name -->
+              <template x-if="!editingName">
+                <span @dblclick="startEditName()" class="font-bold cursor-pointer" title="Double-click to rename"
+                      x-text="selected.name || selected.project + ' — ' + (selected.preview || selected.id).substring(0, 40)"></span>
+              </template>
+              <template x-if="editingName">
+                <input type="text" x-model="editNameValue" @blur="saveName()" @keydown.enter="saveName()" @keydown.escape="editingName = false"
+                       x-ref="nameInput" class="input input-sm input-bordered font-bold" />
+              </template>
+              <span x-show="selected.branch" class="badge badge-sm badge-outline" x-text="selected.branch"></span>
+              <span x-show="selected.process_type === 'tmux' && agentBusy" class="badge badge-sm badge-warning animate-pulse">⚡ busy</span>
+              <span x-show="selected.process_type === 'tmux' && !agentBusy" class="badge badge-sm badge-info">tmux</span>
+              <span x-show="selected.process_type === 'sh'" class="badge badge-sm badge-success">sh</span>
+            </div>
+            <div class="text-xs opacity-50 truncate" x-text="selected.cwd + ' · ' + selected.id"></div>
+          </div>
+          <!-- Message type toggles -->
+          <div class="flex gap-0.5">
+            <template x-for="t in ['user','assistant','thinking','tools','compaction','diagnostic']" :key="t">
+              <button @click="toggleType(t)"
+                      :class="enabledTypes[t] ? 'btn-active btn-primary' : 'btn-ghost opacity-40'"
+                      class="btn btn-xs" x-text="typeLabels[t]"></button>
+            </template>
+          </div>
+          <button x-show="selected.process_type === 'tmux'" @click="stopAgent()"
+                  class="btn btn-xs btn-error btn-outline" title="Stop">⏹</button>
+        </div>
+
+        <!-- Messages -->
+        <div class="flex-1 overflow-y-auto nice-scroll p-4 space-y-3" x-ref="msgContainer">
+          <div x-show="loadingMsgs" class="text-center py-6"><span class="loading loading-spinner loading-md"></span></div>
+          <div x-show="hasOlder && !loadingMsgs" class="text-center pb-2">
+            <button @click="loadOlderMessages()" class="btn btn-xs btn-ghost opacity-60" :disabled="loadingOlder">
+              <span x-show="!loadingOlder">↑ Load older messages</span>
+              <span x-show="loadingOlder" class="loading loading-spinner loading-xs"></span>
+            </button>
+          </div>
+          <template x-for="msg in messages" :key="msg.filename">
+            <div>
+              <!-- Tool-use -->
+              <template x-if="msg.type === 'tool-use'">
+                <details class="bg-base-300/30 rounded-lg my-1 group border-l-2 border-warning/30 ml-2">
+                  <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                    <span class="transition-transform group-open:rotate-90">▶</span>
+                    <span class="text-warning">🔧 Tool Call</span>
+                    <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
+                  </summary>
+                  <div class="px-3 pb-2 border-t border-base-300/50">
+                    <div class="msg-content text-xs mt-2" x-html="renderMarkdown(msg.content)"></div>
+                  </div>
+                </details>
+              </template>
+              <!-- Tool-result -->
+              <template x-if="msg.type === 'tool-result'">
+                <details open class="bg-base-300/30 rounded-lg my-1 group border-l-2 border-info/30 ml-2">
+                  <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                    <span class="transition-transform group-open:rotate-90">▶</span>
+                    <span class="text-info">📋 Result</span>
+                    <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
+                  </summary>
+                  <div class="px-3 pb-2 border-t border-base-300/50">
+                    <pre class="text-xs mt-2 whitespace-pre-wrap break-words font-mono opacity-80" x-text="cleanToolResult(msg.content)"></pre>
+                  </div>
+                </details>
+              </template>
+              <!-- Thinking -->
+              <template x-if="msg.type === 'thinking'">
+                <details :open="cleanThinking(msg.content).length > 120" class="bg-base-300/30 rounded-lg my-1 group">
+                  <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                    <span class="transition-transform group-open:rotate-90">▶</span>
+                    <span class="text-secondary">💭 Thinking</span>
+                    <span class="opacity-50 truncate" x-text="cleanThinking(msg.content).substring(0, 80) + '…'"></span>
+                  </summary>
+                  <div class="px-3 pb-2 border-t border-base-300/50">
+                    <div class="msg-content text-sm opacity-80 mt-2" x-html="renderMarkdown(cleanThinking(msg.content))"></div>
+                  </div>
+                </details>
+              </template>
+              <!-- Compaction -->
+              <template x-if="msg.type === 'compaction'">
+                <div class="bg-accent/10 border border-accent/20 rounded-lg my-2 px-4 py-3">
+                  <div class="text-xs font-semibold text-accent mb-2">📦 Compaction Summary</div>
+                  <div class="msg-content text-sm" x-html="renderMarkdown(msg.content)"></div>
+                </div>
+              </template>
+              <!-- Diagnostic -->
+              <template x-if="msg.type === 'diagnostic'">
+                <div class="text-xs opacity-40 font-mono px-2 py-1" x-text="msg.content.substring(0, 200)"></div>
+              </template>
+              <!-- User -->
+              <template x-if="msg.type === 'user'">
+                <div class="chat chat-end">
+                  <div class="chat-bubble chat-bubble-primary">
+                    <div class="msg-content" x-html="renderMarkdown(msg.content.replace(/^\*\*You:\*\*\s*/,''))"></div>
+                  </div>
+                </div>
+              </template>
+              <!-- Assistant -->
+              <template x-if="msg.type === 'assistant'">
+                <div class="chat chat-start">
+                  <div class="chat-bubble chat-bubble-neutral max-w-4xl">
+                    <div class="msg-content" x-html="renderMarkdown(msg.content.replace(/^\*\*(Claude|Assistant):\*\*\s*/,''))"></div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+          <div x-show="agentBusy" class="flex items-center gap-2 py-2 px-4 opacity-60">
+            <span class="loading loading-dots loading-sm"></span>
+            <span class="text-sm">Agent is working…</span>
+          </div>
+        </div>
+
+        <!-- Reply box -->
+        <div class="border-t border-base-300 bg-base-200 p-3">
+          <div class="flex gap-2">
+            <textarea x-model="replyText" @keydown.meta.enter="sendReply()" @keydown.ctrl.enter="sendReply()"
+                      placeholder="Send a message… (⌘+Enter)" class="textarea textarea-bordered flex-1 min-h-[3rem] max-h-32 text-sm"
+                      :disabled="sending" rows="2"></textarea>
+            <button @click="sendReply()" class="btn btn-primary self-end" :disabled="!replyText.trim() || sending">
+              <span x-show="!sending">Send</span>
+              <span x-show="sending" class="loading loading-spinner loading-sm"></span>
+            </button>
+          </div>
+          <div x-show="sendError" class="text-error text-xs mt-1" x-text="sendError"></div>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+function sessionViewer() {
+  return {
+    sessions: [],
+    selected: null,
+    messages: [],
+    loading: false,
+    loadingMsgs: false,
+    search: '',
+    sortBy: 'recent',
+    filterDays: '30',
+    hiddenProjects: {},
+    collapsedProjects: {},
+    enabledTypes: {
+      'user': true, 'assistant': true, 'thinking': true,
+      'tools': true, 'compaction': true, 'diagnostic': false
+    },
+    typeLabels: { 'user': '👤', 'assistant': '🤖', 'thinking': '💭', 'tools': '🔧', 'compaction': '📦', 'diagnostic': '🔬' },
+    replyText: '', sending: false, sendError: '',
+    pollTimer: null, statusTimer: null,
+    lastFilename: '', hasOlder: false, loadingOlder: false,
+    agentBusy: false,
+    showNewModal: false, projects: [], newSessionCWD: '',
+    editingName: false, editNameValue: '',
+
+    async init() {
+      await this.loadSessions();
+      this.loadProjects();
+      setInterval(() => this.loadSessions(), 15000);
+    },
+
+    async loadSessions() {
+      this.loading = true;
+      try {
+        const r = await fetch('/api/sessions?days=' + this.filterDays);
+        const data = await r.json();
+        this.sessions = data.sessions || [];
+        if (data.preferences) {
+          this.hiddenProjects = data.preferences.hidden_projects || {};
+          this.collapsedProjects = data.preferences.collapsed_projects || {};
+        }
+      } catch(e) { console.error(e); }
+      this.loading = false;
+    },
+
+    async loadProjects() {
+      try { const r = await fetch('/api/projects'); this.projects = await r.json(); } catch(e) {}
+    },
+
+    get allProjects() {
+      return [...new Set(this.sessions.map(s => s.project))].sort();
+    },
+
+    get visibleSessions() {
+      let list = this.sessions.filter(s => !this.hiddenProjects[s.project]);
+      if (this.search) {
+        const q = this.search.toLowerCase();
+        list = list.filter(s =>
+          (s.name || '').toLowerCase().includes(q) ||
+          (s.preview || '').toLowerCase().includes(q) ||
+          (s.project || '').toLowerCase().includes(q) ||
+          (s.branch || '').toLowerCase().includes(q) ||
+          (s.id || '').toLowerCase().includes(q)
+        );
+      }
+      if (this.sortBy === 'messages') list.sort((a,b) => b.message_count - a.message_count);
+      else if (this.sortBy === 'unread') list.sort((a,b) => (b.unread?1:0) - (a.unread?1:0) || (b.last_modified||'').localeCompare(a.last_modified||''));
+      return list;
+    },
+
+    get groupedSessions() {
+      const groups = {};
+      for (const s of this.visibleSessions) {
+        if (!groups[s.project]) groups[s.project] = { latest: '', sessions: [] };
+        groups[s.project].sessions.push(s);
+        if ((s.last_modified || '') > groups[s.project].latest) groups[s.project].latest = s.last_modified || '';
+      }
+      return Object.keys(groups)
+        .sort((a, b) => (groups[b].latest || '').localeCompare(groups[a].latest || ''))
+        .map(p => ({ project: p, sessions: groups[p].sessions }));
+    },
+
+    toggleProjectVisibility(project) {
+      this.hiddenProjects[project] = !this.hiddenProjects[project];
+      if (!this.hiddenProjects[project]) delete this.hiddenProjects[project];
+      this.savePreferences();
+    },
+
+    toggleProjectCollapse(project) {
+      this.collapsedProjects[project] = !this.collapsedProjects[project];
+      if (!this.collapsedProjects[project]) delete this.collapsedProjects[project];
+      this.savePreferences();
+    },
+
+    async savePreferences() {
+      try {
+        await fetch('/api/preferences', {
+          method: 'PATCH', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ hidden_projects: this.hiddenProjects, collapsed_projects: this.collapsedProjects })
+        });
+      } catch(e) {}
+    },
+
+    async selectSession(s) {
+      this.selected = s;
+      this.messages = [];
+      this.lastFilename = '';
+      this.hasOlder = false;
+      this.agentBusy = s.busy || false;
+      this.sendError = '';
+      this.replyText = '';
+      this.editingName = false;
+      // Mark as read
+      if (s.unread) {
+        s.unread = false;
+        fetch(`/api/sessions/${encodeURIComponent(s.id)}?cwd=${encodeURIComponent(s.cwd)}`, {
+          method: 'PATCH', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ read: true })
+        });
+      }
+      await this.loadMessages(false);
+      this.startPolling();
+      this.$nextTick(() => this.scrollToBottom());
+    },
+
+    startEditName() {
+      this.editNameValue = this.selected?.name || '';
+      this.editingName = true;
+      this.$nextTick(() => this.$refs.nameInput?.focus());
+    },
+
+    async saveName() {
+      this.editingName = false;
+      if (!this.selected) return;
+      const newName = this.editNameValue.trim();
+      this.selected.name = newName;
+      // Update in sessions list too
+      const match = this.sessions.find(s => s.id === this.selected.id && s.cwd === this.selected.cwd);
+      if (match) match.name = newName;
+      await fetch(`/api/sessions/${encodeURIComponent(this.selected.id)}?cwd=${encodeURIComponent(this.selected.cwd)}`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name: newName })
+      });
+    },
+
+    async loadMessages(incremental) {
+      if (!this.selected) return;
+      if (!incremental) this.loadingMsgs = true;
+      const typeKeys = Object.entries(this.enabledTypes).filter(([,v]) => v).map(([k]) => k);
+      const idx = typeKeys.indexOf('tools');
+      if (idx !== -1) { typeKeys.splice(idx, 1, 'tool-use', 'tool-result'); }
+      const types = typeKeys.join(',');
+      let url = `/api/sessions/${encodeURIComponent(this.selected.id)}/messages?cwd=${encodeURIComponent(this.selected.cwd)}&types=${types}`;
+      if (incremental && this.lastFilename) url += `&after=${encodeURIComponent(this.lastFilename)}`;
+      try {
+        const r = await fetch(url);
+        const data = await r.json();
+        const msgs = Array.isArray(data) ? data : (data?.messages || []);
+        const hasOlder = data?.has_older || false;
+        if (incremental) {
+          if (msgs?.length > 0) {
+            this.messages = [...this.messages, ...msgs];
+            this.lastFilename = msgs[msgs.length - 1].filename;
+            this.$nextTick(() => this.scrollToBottom());
+          }
+        } else {
+          this.messages = msgs || [];
+          this.hasOlder = hasOlder;
+          if (this.messages.length > 0) this.lastFilename = this.messages[this.messages.length - 1].filename;
+        }
+      } catch(e) { console.error(e); }
+      this.loadingMsgs = false;
+    },
+
+    async loadOlderMessages() {
+      if (!this.selected || this.loadingOlder || !this.hasOlder) return;
+      this.loadingOlder = true;
+      const typeKeys = Object.entries(this.enabledTypes).filter(([,v]) => v).map(([k]) => k);
+      const idx = typeKeys.indexOf('tools');
+      if (idx !== -1) { typeKeys.splice(idx, 1, 'tool-use', 'tool-result'); }
+      const types = typeKeys.join(',');
+      const first = this.messages[0]?.filename || '';
+      let url = `/api/sessions/${encodeURIComponent(this.selected.id)}/messages?cwd=${encodeURIComponent(this.selected.cwd)}&types=${types}`;
+      if (first) url += `&before=${encodeURIComponent(first)}`;
+      try {
+        const r = await fetch(url);
+        const data = await r.json();
+        const msgs = data?.messages || [];
+        if (msgs.length > 0) {
+          const container = this.$refs.msgContainer;
+          const oldH = container?.scrollHeight || 0;
+          this.messages = [...msgs, ...this.messages];
+          this.hasOlder = data?.has_older || false;
+          this.$nextTick(() => { if (container) container.scrollTop = container.scrollHeight - oldH; });
+        } else {
+          this.hasOlder = false;
+        }
+      } catch(e) { console.error(e); }
+      this.loadingOlder = false;
+    },
+
+    startPolling() {
+      this.stopPolling();
+      this.pollTimer = setInterval(() => this.loadMessages(true), 3000);
+      this.statusTimer = setInterval(() => this.pollStatus(), 4000);
+    },
+    stopPolling() {
+      if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+      if (this.statusTimer) { clearInterval(this.statusTimer); this.statusTimer = null; }
+    },
+
+    async pollStatus() {
+      if (!this.selected) return;
+      try {
+        const r = await fetch(`/api/sessions/${encodeURIComponent(this.selected.id)}/status?cwd=${encodeURIComponent(this.selected.cwd)}`);
+        const data = await r.json();
+        this.selected.process_type = data.process_type;
+        this.agentBusy = data.busy;
+      } catch(e) {}
+    },
+
+    toggleType(t) {
+      this.enabledTypes[t] = !this.enabledTypes[t];
+      this.lastFilename = '';
+      this.loadMessages(false);
+    },
+
+    async sendReply() {
+      if (!this.replyText.trim() || !this.selected || this.sending) return;
+      this.sending = true; this.sendError = '';
+      try {
+        const r = await fetch(`/api/sessions/${encodeURIComponent(this.selected.id)}/messages`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ cwd: this.selected.cwd, content: this.replyText.trim() })
+        });
+        const data = await r.json();
+        if (!r.ok) { this.sendError = data.error || 'Send failed'; }
+        else {
+          this.replyText = '';
+          this.selected.process_type = 'tmux';
+          this.agentBusy = true;
+          setTimeout(() => this.loadMessages(true), 1500);
+        }
+      } catch(e) { this.sendError = e.message; }
+      this.sending = false;
+    },
+
+    async stopAgent() {
+      if (!this.selected) return;
+      try {
+        await fetch(`/api/sessions/${encodeURIComponent(this.selected.id)}/stop`, { method: 'POST' });
+        this.selected.process_type = '';
+        this.agentBusy = false;
+      } catch(e) { console.error(e); }
+    },
+
+    async triggerScan() {
+      await fetch('/api/sessions/scan', { method: 'POST' });
+      setTimeout(() => this.loadSessions(), 2000);
+    },
+
+    async createSession() {
+      if (!this.newSessionCWD) return;
+      try {
+        const r = await fetch('/api/sessions/new', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ cwd: this.newSessionCWD })
+        });
+        const data = await r.json();
+        if (r.ok) {
+          this.showNewModal = false;
+          await this.loadSessions();
+          const s = this.sessions.find(s => s.id === data.session_id && s.cwd === data.cwd);
+          if (s) this.selectSession(s);
+        }
+      } catch(e) { console.error(e); }
+    },
+
+    scrollToBottom() {
+      const c = this.$refs.msgContainer;
+      if (c) c.scrollTop = c.scrollHeight;
+    },
+
+    formatTime(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      const diff = Date.now() - d;
+      if (diff < 60000) return 'now';
+      if (diff < 3600000) return Math.floor(diff/60000) + 'm';
+      if (diff < 86400000) return Math.floor(diff/3600000) + 'h';
+      if (diff < 604800000) return Math.floor(diff/86400000) + 'd';
+      return d.toLocaleDateString();
+    },
+
+    cleanThinking(c) { return c.replace(/^💭\s*/, ''); },
+    cleanToolResult(c) {
+      return c.replace(/^\[toolu_[^\]]+\]\n?/, '').replace(/^```\w*\n?/, '').replace(/\n?```\s*$/, '').trim();
+    },
+    toolPreview(c) { return (c.split('\n')[0] || '').replace(/^→\s*/, '').substring(0, 80); },
+    renderMarkdown(c) {
+      if (!c) return '';
+      try { return marked.parse(c, { breaks: true, gfm: true }); }
+      catch(e) { return '<pre>' + this.escHtml(c) + '</pre>'; }
+    },
+    escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  };
+}
+</script>
+</body>
+</html>

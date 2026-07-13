@@ -43,3 +43,4 @@ test_read_*.txt
 # Experimental builds
 clyde-qwen
 cmd/
+session-viewer/session-viewer
