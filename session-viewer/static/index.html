@@ -541,7 +541,13 @@ function sessionViewer() {
         if (r.ok) {
           await this.loadSessions();
           const s = this.sessions.find(s => s.id === data.session_id && s.cwd === data.cwd);
-          if (s) this.selectSession(s);
+          if (s) {
+            await this.selectSession(s);
+            this.$nextTick(() => {
+              const ta = document.querySelector('textarea');
+              if (ta) ta.focus();
+            });
+          }
         }
       } catch(e) { console.error(e); }
     },

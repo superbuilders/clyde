@@ -918,6 +918,7 @@ func createSession(c echo.Context) error {
 	cacheMu.Lock()
 	cache.Sessions[key] = &CachedSession{
 		ID: dirName, CWD: body.CWD, Project: project, User: getUsername(),
+		LastModified: time.Now().Format(time.RFC3339),
 	}
 	cacheMu.Unlock()
 	go saveCache()
