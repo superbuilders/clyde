@@ -182,13 +182,18 @@
             </div>
             <div class="text-xs opacity-50 truncate" x-text="selected.cwd + ' · ' + selected.id"></div>
           </div>
-          <!-- View mode toggle (Hidden / Collapsed / Expanded) -->
+          <!-- Per-type view mode toggles -->
           <div class="flex gap-0.5 items-center">
-            <span class="text-xs opacity-40 mr-1">View:</span>
-            <template x-for="mode in ['hidden','collapsed','expanded']" :key="mode">
-              <button @click="setViewMode(mode)"
-                      :class="viewMode === mode ? 'btn-active btn-primary' : 'btn-ghost opacity-40'"
-                      class="btn btn-xs capitalize" x-text="mode"></button>
+            <template x-for="t in [{key:'thinking',icon:'💭'},{key:'tools',icon:'🔧'},{key:'compaction',icon:'📦'},{key:'diagnostic',icon:'🔬'}]" :key="t.key">
+              <button @click="cycleTypeView(t.key)"
+                      :class="{
+                        'btn-primary btn-active': typeViewMode[t.key] === 'expanded',
+                        'btn-ghost opacity-60': typeViewMode[t.key] === 'collapsed',
+                        'btn-ghost opacity-20 line-through': typeViewMode[t.key] === 'hidden'
+                      }"
+                      class="btn btn-xs"
+                      :title="t.key + ': ' + typeViewMode[t.key]"
+                      x-text="t.icon"></button>
             </template>
           </div>
           <button x-show="selected.process_type === 'tmux'" @click="stopAgent()"
@@ -211,8 +216,8 @@
                 <div class="text-xs opacity-40 italic px-4 py-1.5" x-text="msg.content"></div>
               </template>
               <!-- Tool-use -->
-              <template x-if="msg.type === 'tool-use'">
-                <details :open="viewMode === 'expanded'" class="bg-yellow-900/10 rounded-lg my-1 group border-l-2 border-yellow-500/40 ml-2">
+              <template x-if="msg.type === 'tool-use' && modeFor('tool-use') !== 'hidden'">
+                <details :open="modeFor('tool-use') === 'expanded'" class="bg-yellow-900/10 rounded-lg my-1 group border-l-2 border-yellow-500/40 ml-2">
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-yellow-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-yellow-400 font-bold">🔧 Tool Call</span>
@@ -224,8 +229,8 @@
                 </details>
               </template>
               <!-- Tool-result -->
-              <template x-if="msg.type === 'tool-result'">
-                <details :open="viewMode === 'expanded'" class="bg-blue-900/10 rounded-lg my-1 group border-l-2 border-blue-400/40 ml-2">
+              <template x-if="msg.type === 'tool-result' && modeFor('tool-result') !== 'hidden'">
+                <details :open="modeFor('tool-result') === 'expanded'" class="bg-blue-900/10 rounded-lg my-1 group border-l-2 border-blue-400/40 ml-2">
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-blue-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-blue-400 font-bold">📋 Result</span>
@@ -237,8 +242,8 @@
                 </details>
               </template>
               <!-- Thinking -->
-              <template x-if="msg.type === 'thinking'">
-                <details :open="viewMode === 'expanded'" class="bg-purple-900/10 rounded-lg my-1 group border-l-2 border-purple-400/40">
+              <template x-if="msg.type === 'thinking' && modeFor('thinking') !== 'hidden'">
+                <details :open="modeFor('thinking') === 'expanded'" class="bg-purple-900/10 rounded-lg my-1 group border-l-2 border-purple-400/40">
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-purple-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-purple-400 font-bold">💭 Thinking</span>
@@ -250,14 +255,14 @@
                 </details>
               </template>
               <!-- Compaction -->
-              <template x-if="msg.type === 'compaction'">
+              <template x-if="msg.type === 'compaction' && modeFor('compaction') !== 'hidden'">
                 <div class="bg-accent/10 border border-accent/20 rounded-lg my-2 px-4 py-3">
                   <div class="text-xs font-semibold text-accent mb-2">📦 Compaction Summary</div>
                   <div class="msg-content text-sm" x-html="renderMarkdown(msg.content)"></div>
                 </div>
               </template>
               <!-- Diagnostic -->
-              <template x-if="msg.type === 'diagnostic'">
+              <template x-if="msg.type === 'diagnostic' && modeFor('diagnostic') !== 'hidden'">
                 <div class="text-xs opacity-40 font-mono px-2 py-1" x-text="msg.content.substring(0, 200)"></div>
               </template>
               <!-- User -->
@@ -292,18 +297,6 @@
 
         <!-- Reply box -->
         <div class="border-t border-base-300 bg-base-200 p-3">
-          <!-- Pending images preview -->
-          <div x-show="pendingImages.length > 0" class="flex flex-wrap gap-2 mb-2">
-            <template x-for="(img, idx) in pendingImages" :key="idx">
-              <div class="relative group">
-                <div class="badge badge-sm badge-outline gap-1">
-                  <span>📎</span>
-                  <span x-text="img" class="max-w-32 truncate"></span>
-                  <button @click="pendingImages.splice(idx, 1)" class="text-error hover:text-error-content ml-1">✕</button>
-                </div>
-              </div>
-            </template>
-          </div>
           <div class="flex gap-2">
             <input type="file" accept="image/*" class="hidden" x-ref="imageInput" @change="handleImageUpload($event)" multiple />
             <button @click="$refs.imageInput.click()" class="btn btn-ghost btn-sm self-end px-2" title="Upload image" :disabled="!selected || sending">📎</button>
@@ -311,7 +304,7 @@
                       @input="saveDraft()"
                       placeholder="Send a message… (⌘+Enter)" class="textarea textarea-bordered flex-1 min-h-[3rem] max-h-32 text-sm"
                       :disabled="sending" rows="2"></textarea>
-            <button @click="sendReply()" class="btn btn-primary self-end" :disabled="(!replyText.trim() && pendingImages.length === 0) || sending">
+            <button @click="sendReply()" class="btn btn-primary self-end" :disabled="!replyText.trim() || sending">
               <span x-show="!sending">Send</span>
               <span x-show="sending" class="loading loading-spinner loading-sm"></span>
             </button>
@@ -356,7 +349,7 @@ function sessionViewer() {
     liveOnly: false,
     hiddenProjects: {},
     collapsedProjects: {},
-    viewMode: 'collapsed', // 'hidden' | 'collapsed' | 'expanded'
+    
     replyText: '', sending: false, sendError: '',
     pollTimer: null, statusTimer: null,
     lastFilename: '', hasOlder: false, loadingOlder: false,
@@ -364,8 +357,8 @@ function sessionViewer() {
     editingName: false, editNameValue: '',
     // Takeover modal state
     takeoverModal: false, takeoverPid: null, takeoverTty: '',
-    // Image upload state
-    pendingImages: [],
+    // Per-type view modes: 'expanded' | 'hidden' | 'collapsed'
+    typeViewMode: { thinking: 'collapsed', tools: 'collapsed', compaction: 'expanded', diagnostic: 'hidden' },
 
     async init() {
       await this.loadSessions();
@@ -487,7 +480,6 @@ function sessionViewer() {
       this.agentBusy = s.busy || false;
       this.sendError = '';
       this.replyText = this.loadDraft(s);
-      this.pendingImages = [];
       this.editingName = false;
       // Mark as read
       if (s.unread) {
@@ -593,19 +585,20 @@ function sessionViewer() {
       } catch(e) {}
     },
 
-    setViewMode(mode) {
-      this.viewMode = mode;
-      // Force open/close all details elements in the message container
-      this.$nextTick(() => {
-        const container = this.$refs.msgContainer;
-        if (!container) return;
-        const details = container.querySelectorAll('details');
-        if (mode === 'expanded') {
-          details.forEach(d => d.open = true);
-        } else if (mode === 'collapsed') {
-          details.forEach(d => d.open = false);
-        }
-      });
+    cycleTypeView(type) {
+      const order = ['expanded', 'hidden', 'collapsed'];
+      const cur = this.typeViewMode[type] || 'collapsed';
+      const idx = order.indexOf(cur);
+      this.typeViewMode[type] = order[(idx + 1) % order.length];
+    },
+
+    // Returns the view mode for a given message type
+    modeFor(msgType) {
+      if (msgType === 'tool-use' || msgType === 'tool-result') return this.typeViewMode.tools || 'collapsed';
+      if (msgType === 'thinking') return this.typeViewMode.thinking || 'collapsed';
+      if (msgType === 'compaction') return this.typeViewMode.compaction || 'expanded';
+      if (msgType === 'diagnostic') return this.typeViewMode.diagnostic || 'hidden';
+      return 'expanded'; // user, assistant always expanded
     },
 
     async handleImageUpload(event) {
@@ -620,7 +613,10 @@ function sessionViewer() {
           const r = await fetch('/api/upload', { method: 'POST', body: fd });
           const data = await r.json();
           if (r.ok && data.filename) {
-            this.pendingImages.push(data.filename);
+            // Immediately prepend include directive to textarea
+            const inc = 'include ./' + data.filename + '\n';
+            this.replyText = inc + this.replyText;
+            this.saveDraft();
           } else {
             this.sendError = data.error || 'Upload failed';
           }
@@ -631,16 +627,10 @@ function sessionViewer() {
     },
 
     async sendReply(force = false) {
-      if ((!this.replyText.trim() && this.pendingImages.length === 0) || !this.selected || this.sending) return;
+      if (!this.replyText.trim() || !this.selected || this.sending) return;
       this.sending = true; this.sendError = '';
       try {
-        // Prepend include directives for any pending images
-        let content = this.replyText.trim();
-        if (this.pendingImages.length > 0) {
-          const includes = this.pendingImages.map(f => 'include ./' + f).join('\n');
-          content = includes + (content ? '\n' + content : '');
-        }
-        const payload = { cwd: this.selected.cwd, content };
+        const payload = { cwd: this.selected.cwd, content: this.replyText.trim() };
         if (force) payload.force = true;
         const r = await fetch(`/api/sessions/${encodeURIComponent(this.selected.id)}/messages`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -659,7 +649,6 @@ function sessionViewer() {
           this.sendError = data.error || 'Send failed';
         } else {
           this.replyText = '';
-          this.pendingImages = [];
           this.saveDraft(); // clear localStorage draft
           this.selected.process_type = 'tmux';
           this.agentBusy = true;
@@ -756,34 +745,46 @@ function sessionViewer() {
     },
 
     get displayMessages() {
-      if (this.viewMode !== 'hidden') return this.messages;
-      // In hidden mode, group consecutive non-user/non-assistant msgs into summaries
       const result = [];
-      let group = [];
-      const flushGroup = () => {
-        if (group.length === 0) return;
-        const counts = {};
-        for (const m of group) {
-          const t = m.type === 'tool-use' || m.type === 'tool-result' ? 'tool' : m.type;
-          counts[t] = (counts[t] || 0) + 1;
+      // Group consecutive messages of the same normalized type that are 'hidden'
+      // into per-type-run summary lines
+      let runType = null;
+      let runCount = 0;
+      let runFile = null;
+      const typeLabel = { tool: 'tool call', thinking: 'thinking trace', compaction: 'compaction', diagnostic: 'diagnostic' };
+      const normalize = (t) => (t === 'tool-use' || t === 'tool-result') ? 'tool' : t;
+
+      const flushRun = () => {
+        if (runType && runCount > 0) {
+          const label = typeLabel[runType] || runType;
+          result.push({ type: '_summary', filename: runFile, content: runCount + ' ' + label + (runCount > 1 ? 's' : '') });
         }
-        const parts = [];
-        if (counts.tool) parts.push(counts.tool + ' tool call' + (counts.tool > 1 ? 's' : ''));
-        if (counts.thinking) parts.push(counts.thinking + ' thinking trace' + (counts.thinking > 1 ? 's' : ''));
-        if (counts.compaction) parts.push(counts.compaction + ' compaction' + (counts.compaction > 1 ? 's' : ''));
-        if (counts.diagnostic) parts.push(counts.diagnostic + ' diagnostic' + (counts.diagnostic > 1 ? 's' : ''));
-        result.push({ type: '_summary', filename: group[0].filename, content: parts.join(', ') });
-        group = [];
+        runType = null; runCount = 0; runFile = null;
       };
+
       for (const msg of this.messages) {
         if (msg.type === 'user' || msg.type === 'assistant') {
-          flushGroup();
+          flushRun();
           result.push(msg);
+          continue;
+        }
+        const mode = this.modeFor(msg.type);
+        if (mode === 'hidden') {
+          const nt = normalize(msg.type);
+          if (nt === runType) {
+            runCount++;
+          } else {
+            flushRun();
+            runType = nt;
+            runCount = 1;
+            runFile = msg.filename;
+          }
         } else {
-          group.push(msg);
+          flushRun();
+          result.push(msg);
         }
       }
-      flushGroup();
+      flushRun();
       return result;
     },
 
