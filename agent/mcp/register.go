@@ -3,12 +3,19 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/superbuilders/clyde/agent/providers"
 	"github.com/superbuilders/clyde/agent/tools"
 )
+
+// ScreenshotDir is the default directory where Playwright screenshots are
+// saved. This directory should be gitignored so screenshots don't get
+// accidentally committed to repositories.
+const ScreenshotDir = ".clyde/screenshots"
 
 // RegisterPlaywrightTools registers the 21 Playwright MCP tools into clyde's
 // tool registry. Each tool delegates to the given PlaywrightServer on invocation.
@@ -37,6 +44,12 @@ func RegisterPlaywrightTools(server *PlaywrightServer) error {
 					"  - Ensure Node.js and npx are installed\n"+
 					"  - Try running: npx @playwright/mcp@latest --headless\n"+
 					"  - Check that Playwright browsers are installed: npx playwright install chromium", err)
+			}
+
+			// Redirect screenshot filenames to the gitignored screenshots dir
+			// so they don't get accidentally committed to repositories.
+			if originalName == "browser_take_screenshot" {
+				input = redirectScreenshotFilename(input)
 			}
 
 			result, err := server.CallTool(ctx, originalName, input)
@@ -116,4 +129,49 @@ func RegisterPlaywrightTools(server *PlaywrightServer) error {
 	}
 
 	return nil
+}
+
+// RedirectScreenshotFilename ensures screenshot files are saved to the
+// gitignored ScreenshotDir. If no filename is provided, it sets a default
+// inside ScreenshotDir. If a filename is provided as a bare name or relative
+// path, it's redirected into ScreenshotDir. Absolute paths are left as-is.
+//
+// The directory is created if it doesn't exist.
+// Exported for testing.
+func RedirectScreenshotFilename(input map[string]interface{}) map[string]interface{} {
+	return redirectScreenshotFilename(input)
+}
+
+func redirectScreenshotFilename(input map[string]interface{}) map[string]interface{} {
+	// Ensure the screenshots directory exists
+	os.MkdirAll(ScreenshotDir, 0755)
+
+	filename, hasFilename := input["filename"].(string)
+
+	if !hasFilename || filename == "" {
+		// No filename provided — Playwright will use its default naming
+		// (page-{timestamp}.png) but we want it inside our dir.
+		// Set the filename explicitly.
+		ts := time.Now().Format("20060102-150405")
+		ext := "png"
+		if typ, ok := input["type"].(string); ok && typ == "jpeg" {
+			ext = "jpeg"
+		}
+		input["filename"] = filepath.Join(ScreenshotDir, fmt.Sprintf("page-%s.%s", ts, ext))
+		return input
+	}
+
+	// If it's already an absolute path, respect the user's intent
+	if filepath.IsAbs(filename) {
+		return input
+	}
+
+	// If already under ScreenshotDir, leave it alone
+	if strings.HasPrefix(filename, ScreenshotDir) {
+		return input
+	}
+
+	// Redirect relative filename into ScreenshotDir
+	input["filename"] = filepath.Join(ScreenshotDir, filename)
+	return input
 }
