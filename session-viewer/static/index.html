@@ -183,17 +183,17 @@
             <div class="text-xs opacity-50 truncate" x-text="selected.cwd + ' · ' + selected.id"></div>
           </div>
           <!-- Per-type view mode toggles -->
-          <div class="flex gap-0.5 items-center">
-            <template x-for="t in [{key:'thinking',icon:'💭'},{key:'tools',icon:'🔧'},{key:'compaction',icon:'📦'},{key:'diagnostic',icon:'🔬'}]" :key="t.key">
+          <div class="flex gap-1 items-center">
+            <template x-for="t in [{key:'thinking',label:'think',icon:'💭'},{key:'tools',label:'tool',icon:'🔧'},{key:'compaction',label:'compact',icon:'📦'},{key:'diagnostic',label:'debug',icon:'🔬'}]" :key="t.key">
               <button @click="cycleTypeView(t.key)"
                       :class="{
-                        'btn-primary btn-active': typeViewMode[t.key] === 'expanded',
-                        'btn-ghost opacity-60': typeViewMode[t.key] === 'collapsed',
-                        'btn-ghost opacity-20 line-through': typeViewMode[t.key] === 'hidden'
+                        'btn-primary': typeViewMode[t.key] === 'expanded',
+                        'btn-soft': typeViewMode[t.key] === 'collapsed',
+                        'btn-ghost opacity-30': typeViewMode[t.key] === 'hidden'
                       }"
-                      class="btn btn-xs"
-                      :title="t.key + ': ' + typeViewMode[t.key]"
-                      x-text="t.icon"></button>
+                      class="btn btn-xs gap-0.5 font-normal text-[11px]"
+                      :title="t.key + ' — ' + typeViewMode[t.key] + ' (click to cycle)'"
+              ><span x-text="t.icon"></span><span x-text="t.label" :class="typeViewMode[t.key] === 'hidden' && 'line-through'"></span></button>
             </template>
           </div>
           <button x-show="selected.process_type === 'tmux'" @click="stopAgent()"
@@ -213,7 +213,10 @@
             <div>
               <!-- Summary (hidden mode) -->
               <template x-if="msg.type === '_summary'">
-                <div class="text-xs opacity-40 italic px-4 py-1.5" x-text="msg.content"></div>
+                <div class="flex items-center gap-1.5 px-4 py-1 my-0.5">
+                  <span class="text-[10px] opacity-25">┄</span>
+                  <span class="text-xs opacity-40 italic" x-text="msg.content"></span>
+                </div>
               </template>
               <!-- Tool-use -->
               <template x-if="msg.type === 'tool-use' && modeFor('tool-use') !== 'hidden'">
@@ -298,8 +301,8 @@
         <!-- Reply box -->
         <div class="border-t border-base-300 bg-base-200 p-3">
           <div class="flex gap-2">
-            <input type="file" accept="image/*" class="hidden" x-ref="imageInput" @change="handleImageUpload($event)" multiple />
-            <button @click="$refs.imageInput.click()" class="btn btn-ghost btn-sm self-end px-2" title="Upload image" :disabled="!selected || sending">📎</button>
+            <input type="file" class="hidden" x-ref="fileInput" @change="handleFileUpload($event)" multiple />
+            <button @click="$refs.fileInput.click()" class="btn btn-ghost btn-sm self-end px-2" title="Upload file" :disabled="!selected || sending">📎</button>
             <textarea x-model="replyText" @keydown.meta.enter="sendReply()" @keydown.ctrl.enter="sendReply()"
                       @input="saveDraft()"
                       placeholder="Send a message… (⌘+Enter)" class="textarea textarea-bordered flex-1 min-h-[3rem] max-h-32 text-sm"
@@ -358,7 +361,7 @@ function sessionViewer() {
     // Takeover modal state
     takeoverModal: false, takeoverPid: null, takeoverTty: '',
     // Per-type view modes: 'expanded' | 'hidden' | 'collapsed'
-    typeViewMode: { thinking: 'collapsed', tools: 'collapsed', compaction: 'expanded', diagnostic: 'hidden' },
+    typeViewMode: { thinking: 'collapsed', tools: 'expanded', compaction: 'expanded', diagnostic: 'hidden' },
 
     async init() {
       await this.loadSessions();
@@ -601,13 +604,13 @@ function sessionViewer() {
       return 'expanded'; // user, assistant always expanded
     },
 
-    async handleImageUpload(event) {
+    async handleFileUpload(event) {
       if (!this.selected) return;
       const files = event.target.files;
       if (!files || files.length === 0) return;
       for (const file of files) {
         const fd = new FormData();
-        fd.append('image', file);
+        fd.append('file', file);
         fd.append('cwd', this.selected.cwd);
         try {
           const r = await fetch('/api/upload', { method: 'POST', body: fd });

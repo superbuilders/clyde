@@ -947,15 +947,15 @@ func getProjects(c echo.Context) error {
 	return c.JSON(http.StatusOK, projects)
 }
 
-// uploadImage saves an uploaded image to the project root and returns the filename.
-func uploadImage(c echo.Context) error {
+// uploadFile saves an uploaded file to the project root (session CWD) and returns the filename.
+func uploadFile(c echo.Context) error {
 	cwd := c.FormValue("cwd")
 	if cwd == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd required"})
 	}
-	file, err := c.FormFile("image")
+	file, err := c.FormFile("file")
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "image file required"})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "file required"})
 	}
 	src, err := file.Open()
 	if err != nil {
@@ -992,7 +992,7 @@ func uploadImage(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to write file: " + err.Error()})
 	}
 
-	fmt.Printf("📎 Uploaded image: %s → %s\n", file.Filename, dstPath)
+	fmt.Printf("📎 Uploaded file: %s → %s\n", file.Filename, dstPath)
 	return c.JSON(http.StatusOK, map[string]string{"filename": safeName})
 }
 
@@ -1054,7 +1054,7 @@ func main() {
 	api.PATCH("/sessions/:id", patchSession)
 	api.POST("/sessions/scan", triggerScan)
 	api.POST("/sessions/new", createSession)
-	api.POST("/upload", uploadImage)
+	api.POST("/upload", uploadFile)
 	api.GET("/projects", getProjects)
 	api.GET("/preferences", func(c echo.Context) error {
 		cacheMu.RLock()
