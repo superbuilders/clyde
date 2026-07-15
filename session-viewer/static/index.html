@@ -185,40 +185,40 @@
             <div>
               <!-- Tool-use -->
               <template x-if="msg.type === 'tool-use'">
-                <details class="bg-base-300/30 rounded-lg my-1 group border-l-2 border-warning/30 ml-2">
-                  <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                <details class="bg-yellow-900/10 rounded-lg my-1 group border-l-2 border-yellow-500/40 ml-2">
+                  <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-yellow-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
-                    <span class="text-warning">🔧 Tool Call</span>
+                    <span class="text-yellow-400 font-bold">🔧 Tool Call</span>
                     <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
                   </summary>
-                  <div class="px-3 pb-2 border-t border-base-300/50">
-                    <div class="msg-content text-xs mt-2" x-html="renderMarkdown(msg.content)"></div>
+                  <div class="px-3 pb-2 border-t border-yellow-500/20">
+                    <div class="msg-content text-xs mt-2 text-yellow-100/80" x-html="renderMarkdown(msg.content)"></div>
                   </div>
                 </details>
               </template>
               <!-- Tool-result -->
               <template x-if="msg.type === 'tool-result'">
-                <details open class="bg-base-300/30 rounded-lg my-1 group border-l-2 border-info/30 ml-2">
-                  <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                <details open class="bg-blue-900/10 rounded-lg my-1 group border-l-2 border-blue-400/40 ml-2">
+                  <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-blue-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
-                    <span class="text-info">📋 Result</span>
+                    <span class="text-blue-400 font-bold">📋 Result</span>
                     <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
                   </summary>
-                  <div class="px-3 pb-2 border-t border-base-300/50">
-                    <pre class="text-xs mt-2 whitespace-pre-wrap break-words font-mono opacity-80" x-text="cleanToolResult(msg.content)"></pre>
+                  <div class="px-3 pb-2 border-t border-blue-400/20">
+                    <pre class="text-xs mt-2 whitespace-pre-wrap break-words font-mono text-blue-100/70" x-text="cleanToolResult(msg.content)"></pre>
                   </div>
                 </details>
               </template>
               <!-- Thinking -->
               <template x-if="msg.type === 'thinking'">
-                <details :open="cleanThinking(msg.content).length > 120" class="bg-base-300/30 rounded-lg my-1 group">
-                  <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-base-300/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                <details :open="cleanThinking(msg.content).length > 120" class="bg-purple-900/10 rounded-lg my-1 group border-l-2 border-purple-400/40">
+                  <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-purple-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
-                    <span class="text-secondary">💭 Thinking</span>
+                    <span class="text-purple-400 font-bold">💭 Thinking</span>
                     <span class="opacity-50 truncate" x-text="cleanThinking(msg.content).substring(0, 80) + '…'"></span>
                   </summary>
-                  <div class="px-3 pb-2 border-t border-base-300/50">
-                    <div class="msg-content text-sm opacity-80 mt-2" x-html="renderMarkdown(cleanThinking(msg.content))"></div>
+                  <div class="px-3 pb-2 border-t border-purple-400/20">
+                    <div class="msg-content text-sm mt-2 text-purple-200/70" x-html="renderMarkdown(cleanThinking(msg.content))"></div>
                   </div>
                 </details>
               </template>
@@ -235,17 +235,23 @@
               </template>
               <!-- User -->
               <template x-if="msg.type === 'user'">
-                <div class="chat chat-end">
-                  <div class="chat-bubble chat-bubble-primary">
-                    <div class="msg-content" x-html="renderMarkdown(msg.content.replace(/^\*\*You:\*\*\s*/,''))"></div>
+                <div class="my-2">
+                  <div class="font-bold text-cyan-400 text-sm mb-1">You:</div>
+                  <div class="chat chat-end">
+                    <div class="chat-bubble chat-bubble-primary">
+                      <div class="msg-content" x-html="renderMarkdown(msg.content.replace(/^\*\*You:\*\*\s*/,''))"></div>
+                    </div>
                   </div>
                 </div>
               </template>
               <!-- Assistant -->
               <template x-if="msg.type === 'assistant'">
-                <div class="chat chat-start">
-                  <div class="chat-bubble chat-bubble-neutral max-w-4xl">
-                    <div class="msg-content" x-html="renderMarkdown(msg.content.replace(/^\*\*(Claude|Assistant):\*\*\s*/,''))"></div>
+                <div class="my-2">
+                  <div class="font-bold text-green-400 text-sm mb-1">Clyde:</div>
+                  <div class="chat chat-start">
+                    <div class="chat-bubble chat-bubble-neutral max-w-4xl">
+                      <div class="msg-content" x-html="renderMarkdown(msg.content.replace(/^\*\*(Claude|Assistant):\*\*\s*/,''))"></div>
+                    </div>
                   </div>
                 </div>
               </template>
