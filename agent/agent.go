@@ -572,17 +572,14 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 				}
 			}
 
-			// Emit tool output body unconditionally (full, untruncated).
-			// The CLI layer handles truncation and display filtering.
-			// NOTE: This MUST fire for all results including image confirmations,
-			// because the output callback is what writes *_tool-result.md session
-			// files. Skipping it creates orphaned tool-use files that break
-			// session resume (see docs/bug-orphaned-tool-use-files.md).
-			if resultContent != "" {
-				if a.outputCallback != nil {
-					a.outputCallback(resultContent, toolBlock.ID)
-				}
-			}
+			// NOTE: outputCallback is NOT fired here. It is deferred until
+			// after GuardOversizedToolResults so that the session file
+			// contains whatever the LLM actually sees. If the guard replaces
+			// oversized content with an error message, the session file must
+			// contain the error message — not the raw data — otherwise
+			// resuming the session with -r would reload content that was
+			// explicitly too large for the context window.
+			// See the post-guard outputCallback loop below.
 
 			toolResults = append(toolResults, providers.ContentBlock{
 				Type:      "tool_result",
@@ -597,11 +594,134 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			toolResults = append(toolResults, pendingImages...)
 		}
 
+		// Guard: check each tool result for context-window overflow.
+		// If a single result is so large it would blow the context window,
+		// replace its content with an error message *before* sending,
+		// so the LLM can adjust (e.g. pipe to file, use head/tail/wc).
+		toolResults = a.GuardOversizedToolResults(toolResults)
+
+		// Emit outputCallback for each tool_result AFTER the guard has run.
+		// This ensures the session file contains exactly what the LLM sees:
+		// if the guard replaced oversized content with an error message, the
+		// error message is what gets persisted. This is critical because
+		// session files are loaded on resume (-r) and must not contain
+		// content that would overflow the context window.
+		if a.outputCallback != nil {
+			for _, block := range toolResults {
+				if block.Type != "tool_result" {
+					continue
+				}
+				content, ok := block.Content.(string)
+				if !ok || content == "" {
+					continue
+				}
+				a.outputCallback(content, block.ToolUseID)
+			}
+		}
+
 		// Add tool results to history
 		a.history = append(a.history, providers.Message{
 			Role:    "user",
 			Content: toolResults,
 		})
+	}
+}
+
+// CharsPerToken is the estimated average number of characters per token.
+// Used for pre-flight checks on tool result sizes. Conservative estimate
+// (lower means we flag smaller outputs, erring on the safe side).
+const CharsPerToken = 3.5
+
+// MaxToolResultTokenFraction is the maximum fraction of the remaining
+// context window that a single tool result may consume. If a tool result
+// would exceed this fraction, it is replaced with an error message.
+const MaxToolResultTokenFraction = 0.5
+
+// EstimateTokens returns a rough token count for the given text.
+// Exported for testing.
+func EstimateTokens(text string) int {
+	return int(float64(len(text)) / CharsPerToken)
+}
+
+// GuardOversizedToolResults checks each tool_result block and replaces
+// any whose estimated token count would overflow the remaining context
+// window with a descriptive error message. This prevents the harness from
+// crashing when a single tool call returns more data than the context
+// window can hold.
+//
+// The LLM receives an error explaining what happened and can retry with
+// head/tail/wc, or redirect output to a file and grep it.
+func (a *Agent) GuardOversizedToolResults(results []providers.ContentBlock) []providers.ContentBlock {
+	// If we don't know the context window size, we can't do the check.
+	if a.contextWindowSize == 0 {
+		return results
+	}
+
+	// Estimate remaining budget: contextWindow - currentUsage - reserve.
+	totalInput := a.lastUsage.InputTokens + a.lastUsage.CacheReadInputTokens
+	reserve := a.reserveTokens
+	if reserve == 0 {
+		reserve = DefaultReserveTokens
+	}
+	remaining := a.contextWindowSize - totalInput - reserve
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	// Also compute a hard ceiling: no single result should ever take
+	// more than MaxToolResultTokenFraction of the full context window.
+	hardCeiling := int(float64(a.contextWindowSize) * MaxToolResultTokenFraction)
+
+	// Use the smaller of the two as the effective limit.
+	limit := remaining
+	if hardCeiling < limit {
+		limit = hardCeiling
+	}
+
+	for i, block := range results {
+		if block.Type != "tool_result" {
+			continue
+		}
+		content, ok := block.Content.(string)
+		if !ok || content == "" {
+			continue
+		}
+
+		estimated := EstimateTokens(content)
+		if estimated <= limit {
+			continue
+		}
+
+		// Replace with an error message the LLM can act on.
+		replacementMsg := fmt.Sprintf(
+			"ERROR: Tool result too large for context window (estimated %d tokens, limit %d tokens, context window %d tokens). "+
+				"The output was %d characters long and has been discarded to prevent a crash.\n\n"+
+				"Suggestions:\n"+
+				"  - For bash commands: redirect output to a file and use head/tail/grep to inspect it\n"+
+				"    Example: run_bash(\"your-command > /tmp/output.txt && wc -l /tmp/output.txt\")\n"+
+				"  - For file reads: use grep to find specific sections instead of reading the whole file\n"+
+				"  - For search results: narrow the search pattern or add file filters\n"+
+				"  - For directory listings: target a specific subdirectory",
+			estimated, limit, a.contextWindowSize, len(content),
+		)
+
+		if a.diagnosticCallback != nil {
+			a.diagnosticCallback(fmt.Sprintf("⚠️ Tool result discarded: %d chars (~%d tokens) exceeds limit of %d tokens",
+				len(content), estimated, limit))
+		}
+
+		results[i].Content = replacementMsg
+		results[i].IsError = true
+	}
+
+	return results
+}
+
+// EmitOutputCallback calls the output callback if set.
+// Exported for testing the guard → callback → session file pipeline.
+func (a *Agent) EmitOutputCallback(content string, toolUseID string) {
+	if a.outputCallback != nil {
+		a.outputCallback(content, toolUseID)
 	}
 }
 
