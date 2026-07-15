@@ -113,7 +113,7 @@
                     <!-- Busy indicator -->
                     <span x-show="s.busy" class="loading loading-spinner loading-xs text-warning"></span>
                     <!-- Unread dot -->
-                    <span x-show="s.unread" class="w-2 h-2 rounded-full bg-accent inline-block"></span>
+                    <span x-show="s.unread" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
                   </div>
                   <div class="text-xs opacity-40 mt-0.5 pl-5"
                        x-text="[s.branch, formatTime(s.last_modified), s.message_count + ' msgs'].filter(Boolean).join(' · ')"></div>
@@ -364,7 +364,26 @@ function sessionViewer() {
       try {
         const r = await fetch('/api/sessions?days=' + this.filterDays);
         const data = await r.json();
-        this.sessions = data.sessions || [];
+        const newSessions = data.sessions || [];
+
+        // Detect busy→idle transitions to mark sessions as unread
+        for (const ns of newSessions) {
+          const prev = this.sessions.find(s => s.id === ns.id && s.cwd === ns.cwd);
+          if (prev && prev.busy && !ns.busy) {
+            // Agent was busy, now idle (showing "You: " prompt) → mark unread
+            // But only if we're not currently viewing this session
+            if (!(this.selected?.id === ns.id && this.selected?.cwd === ns.cwd)) {
+              ns.unread = true;
+              // Persist to backend
+              fetch(`/api/sessions/${encodeURIComponent(ns.id)}?cwd=${encodeURIComponent(ns.cwd)}`, {
+                method: 'PATCH', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ read: false })
+              });
+            }
+          }
+        }
+
+        this.sessions = newSessions;
         if (data.preferences) {
           this.hiddenProjects = data.preferences.hidden_projects || {};
           this.collapsedProjects = data.preferences.collapsed_projects || {};
