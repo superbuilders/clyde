@@ -100,7 +100,7 @@
               <template x-for="s in group.sessions" :key="s.id + s.cwd">
                 <div @click="selectSession(s)"
                      :class="{'bg-primary/15 border-l-2 border-primary': selected?.id === s.id && selected?.cwd === s.cwd}"
-                     class="px-3 py-2 border-b border-base-300/50 cursor-pointer hover:bg-base-300/30 transition-colors">
+                     class="relative px-3 py-2 border-b border-base-300/50 cursor-pointer hover:bg-base-300/30 transition-colors group/card">
                   <div class="flex items-center gap-1.5">
                     <!-- Process type indicator -->
                     <span x-show="s.process_type === 'tmux'" class="text-blue-400 text-xs" title="tmux">⬤</span>
@@ -114,6 +114,24 @@
                     <span x-show="s.busy" class="loading loading-spinner loading-xs text-warning"></span>
                     <!-- Unread dot -->
                     <span x-show="s.unread" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
+                    <!-- Hamburger menu -->
+                    <div class="relative" x-data="{ menuOpen: false }" @click.stop>
+                      <button @click="menuOpen = !menuOpen"
+                              class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 text-xs px-1 transition-opacity"
+                              title="Session options">⋮</button>
+                      <div x-show="menuOpen" @click.outside="menuOpen = false" x-transition
+                           class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-40 text-sm"
+                           style="background-color: var(--color-base-100, #1d232a)">
+                        <button @click="toggleReadState(s); menuOpen = false"
+                                class="w-full text-left px-3 py-1.5 hover:bg-base-300/50"
+                                x-text="s.unread ? 'Mark read' : 'Mark unread'"></button>
+                        <button x-show="s.process_type === 'tmux' || s.process_type === 'sh'"
+                                @click="killSession(s); menuOpen = false"
+                                class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
+                        <button @click="renameSession(s); menuOpen = false"
+                                class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
+                      </div>
+                    </div>
                   </div>
                   <div class="text-xs opacity-40 mt-0.5 pl-5"
                        x-text="[s.branch, formatTime(s.last_modified), s.message_count + ' msgs'].filter(Boolean).join(' · ')"></div>
@@ -674,6 +692,40 @@ function sessionViewer() {
         this.selected.process_type = '';
         this.agentBusy = false;
       } catch(e) { console.error(e); }
+    },
+
+    // ── Hamburger menu actions ──
+    async toggleReadState(s) {
+      s.unread = !s.unread;
+      await fetch(`/api/sessions/${encodeURIComponent(s.id)}?cwd=${encodeURIComponent(s.cwd)}`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ read: !s.unread })
+      });
+    },
+
+    async killSession(s) {
+      try {
+        await fetch(`/api/sessions/${encodeURIComponent(s.id)}/stop`, { method: 'POST' });
+        s.process_type = '';
+        s.busy = false;
+        if (this.selected?.id === s.id && this.selected?.cwd === s.cwd) {
+          this.selected.process_type = '';
+          this.agentBusy = false;
+        }
+      } catch(e) { console.error(e); }
+    },
+
+    renameSession(s) {
+      const newName = prompt('Rename session:', s.name || '');
+      if (newName === null) return; // cancelled
+      s.name = newName.trim();
+      if (this.selected?.id === s.id && this.selected?.cwd === s.cwd) {
+        this.selected.name = s.name;
+      }
+      fetch(`/api/sessions/${encodeURIComponent(s.id)}?cwd=${encodeURIComponent(s.cwd)}`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name: s.name })
+      });
     },
 
     async triggerScan() {
