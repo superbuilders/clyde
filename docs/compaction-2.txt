@@ -1,0 +1,16 @@
+We need an algorithm that solves for 3 cases:
+* Convos with 1 user message, where the objective does not change
+* Convos with 1 user message, where the objective changes during the LLM turns
+* Convos with many user messages where the user changes the objective
+* Convos with many user messages where the llm changes the objective
+
+Since tool calls take up most of the context window the naive approach would be:
+* Preserve all user<>assistant pairs where objective changes happen (so that the next llm knows what we asked for, and what it completed thereafter)
+* Preserve *some* select tool results
+* Otherwise summarize: 1) ALL unimportant messages 2) tool results which are not important to the *current* objective
+* Do this in a static number of LLM calls, and the smallest number of llm calls possible (with the caveat that 1 is too few for the case where there are multiple user messages and objective changes) 
+Is 3 ideal?:
+* Pick message pairs to preserve (or original message if no LLM response has happened yet)
+* Pick tools to preserve
+* Write summary
+* 4. Deterministic code uses the output of 1-3 to build the “new” message history

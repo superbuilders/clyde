@@ -160,12 +160,13 @@
             </div>
             <div class="text-xs opacity-50 truncate" x-text="selected.cwd + ' · ' + selected.id"></div>
           </div>
-          <!-- Message type toggles -->
-          <div class="flex gap-0.5">
-            <template x-for="t in ['user','assistant','thinking','tools','compaction','diagnostic']" :key="t">
-              <button @click="toggleType(t)"
-                      :class="enabledTypes[t] ? 'btn-active btn-primary' : 'btn-ghost opacity-40'"
-                      class="btn btn-xs" x-text="typeLabels[t]"></button>
+          <!-- View mode toggle (Hidden / Collapsed / Expanded) -->
+          <div class="flex gap-0.5 items-center">
+            <span class="text-xs opacity-40 mr-1">View:</span>
+            <template x-for="mode in ['hidden','collapsed','expanded']" :key="mode">
+              <button @click="setViewMode(mode)"
+                      :class="viewMode === mode ? 'btn-active btn-primary' : 'btn-ghost opacity-40'"
+                      class="btn btn-xs capitalize" x-text="mode"></button>
             </template>
           </div>
           <button x-show="selected.process_type === 'tmux'" @click="stopAgent()"
@@ -181,11 +182,15 @@
               <span x-show="loadingOlder" class="loading loading-spinner loading-xs"></span>
             </button>
           </div>
-          <template x-for="msg in messages" :key="msg.filename">
+          <template x-for="msg in displayMessages" :key="msg.filename">
             <div>
+              <!-- Summary (hidden mode) -->
+              <template x-if="msg.type === '_summary'">
+                <div class="text-xs opacity-40 italic px-4 py-1.5" x-text="msg.content"></div>
+              </template>
               <!-- Tool-use -->
               <template x-if="msg.type === 'tool-use'">
-                <details class="bg-yellow-900/10 rounded-lg my-1 group border-l-2 border-yellow-500/40 ml-2">
+                <details :open="viewMode === 'expanded'" class="bg-yellow-900/10 rounded-lg my-1 group border-l-2 border-yellow-500/40 ml-2">
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-yellow-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-yellow-400 font-bold">🔧 Tool Call</span>
@@ -198,7 +203,7 @@
               </template>
               <!-- Tool-result -->
               <template x-if="msg.type === 'tool-result'">
-                <details open class="bg-blue-900/10 rounded-lg my-1 group border-l-2 border-blue-400/40 ml-2">
+                <details :open="viewMode === 'expanded'" class="bg-blue-900/10 rounded-lg my-1 group border-l-2 border-blue-400/40 ml-2">
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-blue-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-blue-400 font-bold">📋 Result</span>
@@ -211,7 +216,7 @@
               </template>
               <!-- Thinking -->
               <template x-if="msg.type === 'thinking'">
-                <details :open="cleanThinking(msg.content).length > 120" class="bg-purple-900/10 rounded-lg my-1 group border-l-2 border-purple-400/40">
+                <details :open="viewMode === 'expanded'" class="bg-purple-900/10 rounded-lg my-1 group border-l-2 border-purple-400/40">
                   <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-purple-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
                     <span class="transition-transform group-open:rotate-90">▶</span>
                     <span class="text-purple-400 font-bold">💭 Thinking</span>
@@ -333,6 +338,7 @@ function sessionViewer() {
       'tools': true, 'compaction': true, 'diagnostic': false
     },
     typeLabels: { 'user': '👤', 'assistant': '🤖', 'thinking': '💭', 'tools': '🔧', 'compaction': '📦', 'diagnostic': '🔬' },
+    viewMode: 'collapsed', // 'hidden' | 'collapsed' | 'expanded'
     replyText: '', sending: false, sendError: '',
     pollTimer: null, statusTimer: null,
     lastFilename: '', hasOlder: false, loadingOlder: false,
@@ -479,10 +485,8 @@ function sessionViewer() {
     async loadMessages(incremental) {
       if (!this.selected) return;
       if (!incremental) this.loadingMsgs = true;
-      const typeKeys = Object.entries(this.enabledTypes).filter(([,v]) => v).map(([k]) => k);
-      const idx = typeKeys.indexOf('tools');
-      if (idx !== -1) { typeKeys.splice(idx, 1, 'tool-use', 'tool-result'); }
-      const types = typeKeys.join(',');
+      // Always load all types — view mode controls display, not fetching
+      const types = 'user,assistant,thinking,tool-use,tool-result,compaction';
       let url = `/api/sessions/${encodeURIComponent(this.selected.id)}/messages?cwd=${encodeURIComponent(this.selected.cwd)}&types=${types}`;
       if (incremental && this.lastFilename) url += `&after=${encodeURIComponent(this.lastFilename)}`;
       try {
@@ -508,10 +512,7 @@ function sessionViewer() {
     async loadOlderMessages() {
       if (!this.selected || this.loadingOlder || !this.hasOlder) return;
       this.loadingOlder = true;
-      const typeKeys = Object.entries(this.enabledTypes).filter(([,v]) => v).map(([k]) => k);
-      const idx = typeKeys.indexOf('tools');
-      if (idx !== -1) { typeKeys.splice(idx, 1, 'tool-use', 'tool-result'); }
-      const types = typeKeys.join(',');
+      const types = 'user,assistant,thinking,tool-use,tool-result,compaction';
       const first = this.messages[0]?.filename || '';
       let url = `/api/sessions/${encodeURIComponent(this.selected.id)}/messages?cwd=${encodeURIComponent(this.selected.cwd)}&types=${types}`;
       if (first) url += `&before=${encodeURIComponent(first)}`;
@@ -552,10 +553,19 @@ function sessionViewer() {
       } catch(e) {}
     },
 
-    toggleType(t) {
-      this.enabledTypes[t] = !this.enabledTypes[t];
-      this.lastFilename = '';
-      this.loadMessages(false);
+    setViewMode(mode) {
+      this.viewMode = mode;
+      // Force open/close all details elements in the message container
+      this.$nextTick(() => {
+        const container = this.$refs.msgContainer;
+        if (!container) return;
+        const details = container.querySelectorAll('details');
+        if (mode === 'expanded') {
+          details.forEach(d => d.open = true);
+        } else if (mode === 'collapsed') {
+          details.forEach(d => d.open = false);
+        }
+      });
     },
 
     async handleImageUpload(event) {
@@ -669,6 +679,38 @@ function sessionViewer() {
     scrollToBottom() {
       const c = this.$refs.msgContainer;
       if (c) c.scrollTop = c.scrollHeight;
+    },
+
+    get displayMessages() {
+      if (this.viewMode !== 'hidden') return this.messages;
+      // In hidden mode, group consecutive non-user/non-assistant msgs into summaries
+      const result = [];
+      let group = [];
+      const flushGroup = () => {
+        if (group.length === 0) return;
+        const counts = {};
+        for (const m of group) {
+          const t = m.type === 'tool-use' || m.type === 'tool-result' ? 'tool' : m.type;
+          counts[t] = (counts[t] || 0) + 1;
+        }
+        const parts = [];
+        if (counts.tool) parts.push(counts.tool + ' tool call' + (counts.tool > 1 ? 's' : ''));
+        if (counts.thinking) parts.push(counts.thinking + ' thinking trace' + (counts.thinking > 1 ? 's' : ''));
+        if (counts.compaction) parts.push(counts.compaction + ' compaction' + (counts.compaction > 1 ? 's' : ''));
+        if (counts.diagnostic) parts.push(counts.diagnostic + ' diagnostic' + (counts.diagnostic > 1 ? 's' : ''));
+        result.push({ type: '_summary', filename: group[0].filename, content: parts.join(', ') });
+        group = [];
+      };
+      for (const msg of this.messages) {
+        if (msg.type === 'user' || msg.type === 'assistant') {
+          flushGroup();
+          result.push(msg);
+        } else {
+          group.push(msg);
+        }
+      }
+      flushGroup();
+      return result;
     },
 
     formatTime(iso) {
