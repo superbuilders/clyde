@@ -273,6 +273,25 @@
       </div>
     </template>
   </div>
+
+  <!-- Takeover confirmation modal -->
+  <div x-show="takeoverModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @keydown.escape.window="cancelTakeover()">
+    <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full mx-4 p-6" @click.outside="cancelTakeover()">
+      <div class="text-lg font-bold mb-1">⚠️ Session Running in Terminal</div>
+      <p class="text-sm opacity-70 mb-4">
+        This session has a clyde process running in your terminal
+        (PID <span class="font-mono" x-text="takeoverPid"></span>, TTY <span class="font-mono" x-text="takeoverTty"></span>).
+      </p>
+      <p class="text-sm mb-4">
+        Sending a message here will <strong>kill the terminal process</strong> and take over the session in tmux.
+        The terminal tab will show the process as exited.
+      </p>
+      <div class="flex justify-end gap-2">
+        <button @click="cancelTakeover()" class="btn btn-sm btn-ghost">Cancel</button>
+        <button @click="confirmTakeover()" class="btn btn-sm btn-warning">Kill &amp; Take Over</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -298,6 +317,8 @@ function sessionViewer() {
     lastFilename: '', hasOlder: false, loadingOlder: false,
     agentBusy: false,
     editingName: false, editNameValue: '',
+    // Takeover modal state
+    takeoverModal: false, takeoverPid: null, takeoverTty: '',
 
     async init() {
       await this.loadSessions();
@@ -496,17 +517,28 @@ function sessionViewer() {
       this.loadMessages(false);
     },
 
-    async sendReply() {
+    async sendReply(force = false) {
       if (!this.replyText.trim() || !this.selected || this.sending) return;
       this.sending = true; this.sendError = '';
       try {
+        const payload = { cwd: this.selected.cwd, content: this.replyText.trim() };
+        if (force) payload.force = true;
         const r = await fetch(`/api/sessions/${encodeURIComponent(this.selected.id)}/messages`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ cwd: this.selected.cwd, content: this.replyText.trim() })
+          body: JSON.stringify(payload)
         });
         const data = await r.json();
-        if (!r.ok) { this.sendError = data.error || 'Send failed'; }
-        else {
+        if (!r.ok) {
+          if (data.error === 'terminal_process_running') {
+            // Show takeover confirmation modal
+            this.takeoverPid = data.pid;
+            this.takeoverTty = data.tty || '?';
+            this.takeoverModal = true;
+            this.sending = false;
+            return;
+          }
+          this.sendError = data.error || 'Send failed';
+        } else {
           this.replyText = '';
           this.selected.process_type = 'tmux';
           this.agentBusy = true;
@@ -514,6 +546,17 @@ function sessionViewer() {
         }
       } catch(e) { this.sendError = e.message; }
       this.sending = false;
+    },
+
+    async confirmTakeover() {
+      this.takeoverModal = false;
+      await this.sendReply(true);
+    },
+
+    cancelTakeover() {
+      this.takeoverModal = false;
+      this.takeoverPid = null;
+      this.takeoverTty = '';
     },
 
     async stopAgent() {

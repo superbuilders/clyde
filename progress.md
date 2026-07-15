@@ -229,3 +229,22 @@ Built a standalone web app for discovering and interacting with Clyde sessions a
 **Files:** `session-viewer/main.go` (~750 lines), `session-viewer/static/index.html` (~550 lines)
 **Branch:** `session-viewer`
 **Not in go.work** — build with `cd session-viewer && GOWORK=off go build`
+
+### Terminal Process Takeover (2026-07-14)
+
+**Problem:** When a clyde session is running in a plain macOS terminal (process_type `"sh"`),
+sending a message from the session viewer would silently launch a *second* clyde process
+in tmux on the same session directory. This created a split-brain: two processes interleaving
+writes to the same session files with no coordination, compounding the file-collision bug.
+The terminal user had no indication anything happened.
+
+**Fix:**
+- **Backend** (`session-viewer/main.go`): Added `findTerminalProcess()` to detect shell clyde
+  processes on a session, and `killTerminalProcess()` using SIGTERM → 5s wait → SIGKILL.
+  Modified `postSessionMessage()` to check for terminal processes before launching tmux.
+  If found without `force: true`, returns 409 with `{"error": "terminal_process_running", "pid", "tty"}`.
+  With `force: true`, kills the terminal process first, then proceeds normally.
+- **Frontend** (`session-viewer/static/index.html`): `sendReply()` detects the
+  `terminal_process_running` response and shows a DaisyUI modal warning the user that
+  their terminal process will be killed. "Kill & Take Over" confirms with `force: true`;
+  "Cancel" aborts. Escape key and clicking outside also dismiss.

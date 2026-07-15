@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -742,11 +743,49 @@ func getSessionMessages(c echo.Context) error {
 	})
 }
 
+// findTerminalProcess returns a non-tmux clyde process attached to this session, if any.
+func findTerminalProcess(cwd, sessionID string) *RunningProcess {
+	// Don't bother scanning if there's already a tmux session for this ID
+	if isTmuxRunning(tmuxName(sessionID)) {
+		return nil
+	}
+	for _, proc := range getRunningProcesses() {
+		if proc.CWD == cwd && matchProcessToSession(proc, sessionID) {
+			return &proc
+		}
+	}
+	return nil
+}
+
+// killTerminalProcess sends SIGTERM to a process and waits for it to exit.
+func killTerminalProcess(pid int) error {
+	// Check the process exists first
+	if err := syscall.Kill(pid, 0); err != nil {
+		return fmt.Errorf("process %d not found: %w", pid, err)
+	}
+	// SIGTERM for graceful shutdown
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("failed to signal process %d: %w", pid, err)
+	}
+	// Wait up to 5 seconds for it to die
+	for i := 0; i < 50; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if err := syscall.Kill(pid, 0); err != nil {
+			return nil // process is gone
+		}
+	}
+	// Force kill if still alive
+	syscall.Kill(pid, syscall.SIGKILL)
+	time.Sleep(200 * time.Millisecond)
+	return nil
+}
+
 func postSessionMessage(c echo.Context) error {
 	sid := c.Param("id")
 	var body struct {
 		CWD     string `json:"cwd"`
 		Content string `json:"content"`
+		Force   bool   `json:"force"`
 	}
 	if err := c.Bind(&body); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
@@ -761,6 +800,26 @@ func postSessionMessage(c echo.Context) error {
 	if isTmuxBusy(sid) {
 		return c.JSON(http.StatusConflict, map[string]string{"error": "agent is busy processing"})
 	}
+
+	// Check for a terminal clyde process on this session
+	if proc := findTerminalProcess(body.CWD, sid); proc != nil {
+		if !body.Force {
+			// Return details so the frontend can show a takeover confirmation
+			return c.JSON(http.StatusConflict, map[string]interface{}{
+				"error": "terminal_process_running",
+				"pid":   proc.PID,
+				"tty":   proc.TTY,
+			})
+		}
+		// Force mode: kill the terminal process before proceeding
+		fmt.Printf("⚠️  Killing terminal clyde (PID %d, TTY %s) for session %s\n", proc.PID, proc.TTY, sid)
+		if err := killTerminalProcess(proc.PID); err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "failed to kill terminal process: " + err.Error(),
+			})
+		}
+	}
+
 	if err := startClyde(body.CWD, sid); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to start clyde: " + err.Error()})
 	}
