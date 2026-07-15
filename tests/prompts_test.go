@@ -31,7 +31,7 @@ func TestSystemPromptLoading(t *testing.T) {
 		"web_search",
 		"browse",
 		"IMPORTANT DECIDER",
-		"DOCUMENTATION & MEMORY",
+		"AVOID OVERSIZED TOOL RESULTS",
 	}
 
 	for _, required := range requiredContent {
