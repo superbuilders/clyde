@@ -17,26 +17,26 @@ Agent fixes:
   - **impl:** `RedirectScreenshotPath()` in `agent/mcp/register.go` intercepts `browser_take_screenshot` calls and redirects relative filenames to `.clyde/screenshots/` (added to `.gitignore`). Absolute paths left untouched. Directory auto-created. 6 unit tests in `tests/screenshot_redirect_test.go`.
 
 Session Viewer
-- [ ] Save entered text when changing tabs
+- [x] Save entered text when changing tabs
   - localstorage should be used to preserve text state in the text entry area so tht it persists when it is navigated away from for any reason; it should be scoped to chat though
-- [ ] Image input
+- [x] Image input
   - there should be an image input next to the text entry that lets users upload images, "uploaded" images should be placed in the root of the project in question and the text "include ./image-name.ext\n" should be prepended to the next prompt so that clyde knows to use the image tool to include the "uploaded" image
-- [ ] Hidden/collapse/expand toggle 
+- [x] Hidden/collapse/expand toggle 
   - instead of visible/invisible, the buttons at the top right of the chat should toggle through Hidden/collapse/expand, where
     - hidden: everything except debug info *shows* as 'n tool calls' '1 thinking trace' etc
     - collapsed: same as now (n lines per n tool calls) but "collapse all"; user can still uncollapse individual lines
     - expand: same as now, but collapsed sections should get expanded when toggled back to this as well; user can still collapse individual lines
   - also, user and agent output should never be hidden, those buttons can be removed
-- [ ] improved visibility through colors:
+- [x] improved visibility through colors:
   - the user input and the agent output should have 'You:\n' and 'Clyde:\n' prepended before they are drawn, 
   - also those labels should have colors so that when scanning large sections it is easy to find them
   - also, thinking traces and tool call/results, when expanded should have unique colors 
   - (see the clyde TUI for what colors to use)
-- [ ] live toggle
+- [x] live toggle
   - in the same bar as the sort dropdown and date range filter, there should be a blue toggle switch that, when on causes all projects in the sidebar to *only* show live chats; off should show everythign 
-- [ ] read state 
+- [x] read state 
   - use logalstorage to track "read state" for each chat; when a chat goes from agent working to 'You: ' it should be marked as unread and a small red dot should appear in the top right corner of that chat in the side bar; when this chat is opened the dot should disappear
-- [ ] hamburger menu
+- [x] hamburger menu
   - in the sidebar with the chats, each chat should have a hamburger menu in the top right where chat options can go; to start, the menu should have these options:
     - mark un/read (toggles read state, uses appropriate verb depending on status)
     - kill (only for running sessions, stops them, kills tmux)
