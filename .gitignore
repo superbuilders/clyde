@@ -40,6 +40,9 @@ test_read_*.txt
 # Clyde session history
 .clyde/sessions/
 
+# Playwright screenshots (auto-saved by agent)
+.clyde/screenshots/
+
 # Experimental builds
 clyde-qwen
 cmd/
