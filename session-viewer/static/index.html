@@ -63,7 +63,7 @@
       <!-- Search + sort -->
       <input type="text" x-model="search" placeholder="Search…"
              class="input input-sm input-bordered w-full" />
-      <div class="flex gap-1.5">
+      <div class="flex gap-1.5 items-center">
         <select x-model="sortBy" class="select select-xs select-bordered">
           <option value="recent">Recent</option>
           <option value="messages">Most msgs</option>
@@ -75,6 +75,10 @@
           <option value="90">90d</option>
           <option value="0">All</option>
         </select>
+        <label class="flex items-center gap-1 cursor-pointer" title="Show only live sessions">
+          <input type="checkbox" x-model="liveOnly" class="toggle toggle-xs toggle-info" />
+          <span class="text-xs" :class="liveOnly ? 'text-info font-semibold' : 'opacity-50'">Live</span>
+        </label>
         <div class="flex-1 text-right text-xs opacity-50 self-center" x-text="visibleSessions.length + ' sessions'"></div>
       </div>
     </div>
@@ -331,6 +335,7 @@ function sessionViewer() {
     search: '',
     sortBy: 'recent',
     filterDays: '30',
+    liveOnly: false,
     hiddenProjects: {},
     collapsedProjects: {},
     enabledTypes: {
@@ -374,6 +379,9 @@ function sessionViewer() {
 
     get visibleSessions() {
       let list = this.sessions.filter(s => !this.hiddenProjects[s.project]);
+      if (this.liveOnly) {
+        list = list.filter(s => s.process_type === 'tmux' || s.process_type === 'sh');
+      }
       if (this.search) {
         const q = this.search.toLowerCase();
         list = list.filter(s =>
