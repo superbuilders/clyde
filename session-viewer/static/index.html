@@ -261,6 +261,7 @@
         <div class="border-t border-base-300 bg-base-200 p-3">
           <div class="flex gap-2">
             <textarea x-model="replyText" @keydown.meta.enter="sendReply()" @keydown.ctrl.enter="sendReply()"
+                      @input="saveDraft()"
                       placeholder="Send a message… (⌘+Enter)" class="textarea textarea-bordered flex-1 min-h-[3rem] max-h-32 text-sm"
                       :disabled="sending" rows="2"></textarea>
             <button @click="sendReply()" class="btn btn-primary self-end" :disabled="!replyText.trim() || sending">
@@ -393,14 +394,31 @@ function sessionViewer() {
       } catch(e) {}
     },
 
+    // ── localStorage draft helpers ──
+    _draftKey(s) { return 'clyde_draft_' + s.cwd + '::' + s.id; },
+    saveDraft() {
+      if (!this.selected) return;
+      const key = this._draftKey(this.selected);
+      if (this.replyText.trim()) {
+        localStorage.setItem(key, this.replyText);
+      } else {
+        localStorage.removeItem(key);
+      }
+    },
+    loadDraft(s) {
+      return localStorage.getItem(this._draftKey(s)) || '';
+    },
+
     async selectSession(s) {
+      // Save draft for the session we're leaving
+      if (this.selected) this.saveDraft();
       this.selected = s;
       this.messages = [];
       this.lastFilename = '';
       this.hasOlder = false;
       this.agentBusy = s.busy || false;
       this.sendError = '';
-      this.replyText = '';
+      this.replyText = this.loadDraft(s);
       this.editingName = false;
       // Mark as read
       if (s.unread) {
@@ -540,6 +558,7 @@ function sessionViewer() {
           this.sendError = data.error || 'Send failed';
         } else {
           this.replyText = '';
+          this.saveDraft(); // clear localStorage draft
           this.selected.process_type = 'tmux';
           this.agentBusy = true;
           setTimeout(() => this.loadMessages(true), 1500);
