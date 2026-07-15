@@ -177,6 +177,19 @@ When working on tasks, especially complex ones:
 
 Always use the appropriate tool first, then provide a natural response based on the results.
 
+IMPORTANT: AVOID OVERSIZED TOOL RESULTS:
+Be careful pulling too much data from tool calls — if a tool result is too large for the
+context window it will be discarded and you will receive an error. To avoid this:
+  - Use head, tail, wc, and grep to inspect large outputs instead of dumping them raw
+  - Example: run_bash("find . -name '*.go' | head -50") instead of listing everything
+  - Example: run_bash("cat big-file.txt | wc -l") to check size before reading
+  - Example: run_bash("your-command > /tmp/output.txt && head -100 /tmp/output.txt")
+  - For grep/search: add file pattern filters to narrow results
+  - For directory listings: target specific subdirectories
+  - For large files: use grep to find relevant sections rather than reading the whole file
+If a tool result IS discarded for being too large, the error message will explain what
+happened — adjust your approach and retry with a more targeted query.
+
 CONVERSATION HISTORY:
 Your session history is automatically persisted to disk as timestamped Markdown files.
 Message files are named <timestamp>_<type>.md where type is one of:
