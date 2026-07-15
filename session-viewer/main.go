@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -946,6 +947,55 @@ func getProjects(c echo.Context) error {
 	return c.JSON(http.StatusOK, projects)
 }
 
+// uploadImage saves an uploaded image to the project root and returns the filename.
+func uploadImage(c echo.Context) error {
+	cwd := c.FormValue("cwd")
+	if cwd == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd required"})
+	}
+	file, err := c.FormFile("image")
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "image file required"})
+	}
+	src, err := file.Open()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to open uploaded file"})
+	}
+	defer src.Close()
+
+	// Sanitize filename — keep original name but make it safe
+	safeName := filepath.Base(file.Filename)
+	safeName = strings.ReplaceAll(safeName, " ", "-")
+	dstPath := filepath.Join(cwd, safeName)
+
+	// If file already exists, add a numeric suffix
+	if _, err := os.Stat(dstPath); err == nil {
+		ext := filepath.Ext(safeName)
+		base := strings.TrimSuffix(safeName, ext)
+		for i := 1; ; i++ {
+			candidate := fmt.Sprintf("%s-%d%s", base, i, ext)
+			dstPath = filepath.Join(cwd, candidate)
+			if _, err := os.Stat(dstPath); os.IsNotExist(err) {
+				safeName = candidate
+				break
+			}
+		}
+	}
+
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to create file: " + err.Error()})
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to write file: " + err.Error()})
+	}
+
+	fmt.Printf("📎 Uploaded image: %s → %s\n", file.Filename, dstPath)
+	return c.JSON(http.StatusOK, map[string]string{"filename": safeName})
+}
+
 func createSession(c echo.Context) error {
 	var body struct {
 		CWD string `json:"cwd"`
@@ -1004,6 +1054,7 @@ func main() {
 	api.PATCH("/sessions/:id", patchSession)
 	api.POST("/sessions/scan", triggerScan)
 	api.POST("/sessions/new", createSession)
+	api.POST("/upload", uploadImage)
 	api.GET("/projects", getProjects)
 	api.GET("/preferences", func(c echo.Context) error {
 		cacheMu.RLock()

@@ -259,12 +259,26 @@
 
         <!-- Reply box -->
         <div class="border-t border-base-300 bg-base-200 p-3">
+          <!-- Pending images preview -->
+          <div x-show="pendingImages.length > 0" class="flex flex-wrap gap-2 mb-2">
+            <template x-for="(img, idx) in pendingImages" :key="idx">
+              <div class="relative group">
+                <div class="badge badge-sm badge-outline gap-1">
+                  <span>📎</span>
+                  <span x-text="img" class="max-w-32 truncate"></span>
+                  <button @click="pendingImages.splice(idx, 1)" class="text-error hover:text-error-content ml-1">✕</button>
+                </div>
+              </div>
+            </template>
+          </div>
           <div class="flex gap-2">
+            <input type="file" accept="image/*" class="hidden" x-ref="imageInput" @change="handleImageUpload($event)" multiple />
+            <button @click="$refs.imageInput.click()" class="btn btn-ghost btn-sm self-end px-2" title="Upload image" :disabled="!selected || sending">📎</button>
             <textarea x-model="replyText" @keydown.meta.enter="sendReply()" @keydown.ctrl.enter="sendReply()"
                       @input="saveDraft()"
                       placeholder="Send a message… (⌘+Enter)" class="textarea textarea-bordered flex-1 min-h-[3rem] max-h-32 text-sm"
                       :disabled="sending" rows="2"></textarea>
-            <button @click="sendReply()" class="btn btn-primary self-end" :disabled="!replyText.trim() || sending">
+            <button @click="sendReply()" class="btn btn-primary self-end" :disabled="(!replyText.trim() && pendingImages.length === 0) || sending">
               <span x-show="!sending">Send</span>
               <span x-show="sending" class="loading loading-spinner loading-sm"></span>
             </button>
@@ -320,6 +334,8 @@ function sessionViewer() {
     editingName: false, editNameValue: '',
     // Takeover modal state
     takeoverModal: false, takeoverPid: null, takeoverTty: '',
+    // Image upload state
+    pendingImages: [],
 
     async init() {
       await this.loadSessions();
@@ -419,6 +435,7 @@ function sessionViewer() {
       this.agentBusy = s.busy || false;
       this.sendError = '';
       this.replyText = this.loadDraft(s);
+      this.pendingImages = [];
       this.editingName = false;
       // Mark as read
       if (s.unread) {
@@ -535,11 +552,39 @@ function sessionViewer() {
       this.loadMessages(false);
     },
 
+    async handleImageUpload(event) {
+      if (!this.selected) return;
+      const files = event.target.files;
+      if (!files || files.length === 0) return;
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append('image', file);
+        fd.append('cwd', this.selected.cwd);
+        try {
+          const r = await fetch('/api/upload', { method: 'POST', body: fd });
+          const data = await r.json();
+          if (r.ok && data.filename) {
+            this.pendingImages.push(data.filename);
+          } else {
+            this.sendError = data.error || 'Upload failed';
+          }
+        } catch(e) { this.sendError = 'Upload error: ' + e.message; }
+      }
+      // Reset file input so the same file can be selected again
+      event.target.value = '';
+    },
+
     async sendReply(force = false) {
-      if (!this.replyText.trim() || !this.selected || this.sending) return;
+      if ((!this.replyText.trim() && this.pendingImages.length === 0) || !this.selected || this.sending) return;
       this.sending = true; this.sendError = '';
       try {
-        const payload = { cwd: this.selected.cwd, content: this.replyText.trim() };
+        // Prepend include directives for any pending images
+        let content = this.replyText.trim();
+        if (this.pendingImages.length > 0) {
+          const includes = this.pendingImages.map(f => 'include ./' + f).join('\n');
+          content = includes + (content ? '\n' + content : '');
+        }
+        const payload = { cwd: this.selected.cwd, content };
         if (force) payload.force = true;
         const r = await fetch(`/api/sessions/${encodeURIComponent(this.selected.id)}/messages`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -558,6 +603,7 @@ function sessionViewer() {
           this.sendError = data.error || 'Send failed';
         } else {
           this.replyText = '';
+          this.pendingImages = [];
           this.saveDraft(); // clear localStorage draft
           this.selected.process_type = 'tmux';
           this.agentBusy = true;
