@@ -55,13 +55,13 @@ func (a *Agent) ShouldCompact() bool {
 	return totalInput > threshold
 }
 
-// Compact performs conversation compaction. It:
-//  1. Identifies the first (pinned) user message
-//  2. Runs a multi-phase summarization workflow
-//  3. Replaces history with: first user message + summary + recent messages
-//  4. Emits callbacks for session persistence
+// Compact performs conversation compaction using a 3-call pipeline:
+//  1. Identify decision/pivot points in the conversation
+//  2. Identify tool results relevant to those pivot points
+//  3. Write a gap-filling summary covering everything not preserved
+//  4. Deterministically assemble new history from preserved messages + summary
 //
-// Returns an error if summarization fails.
+// Returns an error if any LLM call fails.
 func (a *Agent) Compact() error {
 	if len(a.history) < 4 {
 		// Too few messages to compact meaningfully
@@ -75,16 +75,12 @@ func (a *Agent) Compact() error {
 	}
 
 	// Step 2: Determine what to keep vs. summarize.
-	// Keep the last few messages (recent context) and summarize the rest.
 	keepCount := a.recentKeepCount()
 	summarizeEnd := len(a.history) - keepCount
 	if summarizeEnd <= firstUserIdx+1 {
-		// Not enough to summarize — the "old" portion is just the first message
 		return nil
 	}
 
-	// The messages to summarize: everything between first user message and the kept tail.
-	// We skip the first user message itself (it's preserved verbatim).
 	toSummarize := a.history[firstUserIdx+1 : summarizeEnd]
 	keptMessages := a.history[summarizeEnd:]
 
@@ -93,21 +89,12 @@ func (a *Agent) Compact() error {
 		a.compactionCallback("🗜️ Compacting conversation history...", "")
 	}
 	if a.diagnosticCallback != nil {
-		a.diagnosticCallback(fmt.Sprintf("🗜️ Compacting: %d messages → summary + %d recent messages",
+		a.diagnosticCallback(fmt.Sprintf("🗜️ Compacting: %d messages → summary + preserved + %d recent messages",
 			len(a.history), keepCount))
 	}
 
-	// Step 4: Run multi-phase compaction workflow.
-	// In multi-turn conversations the most recent user message captures the
-	// current objective, which may differ from the original mission.
-	lastUserMsg, lastUserIdx := a.findLastUserMessage()
-	// Only treat as a distinct current objective if it's a different message
-	// than the first user message (i.e., a multi-turn conversation).
-	var currentObjective string
-	if lastUserIdx > firstUserIdx {
-		currentObjective = messageText(lastUserMsg)
-	}
-	summary, err := a.runCompactionWorkflow(firstUserMsg, currentObjective, toSummarize, keptMessages)
+	// Step 4: Run the 3-call compaction workflow.
+	summary, preservedMessages, err := a.runCompactionWorkflow(firstUserMsg, toSummarize, keptMessages)
 	if err != nil {
 		return fmt.Errorf("compaction failed: %w", err)
 	}
@@ -117,8 +104,8 @@ func (a *Agent) Compact() error {
 		a.compactionCallback("", summary)
 	}
 
-	// Step 6: Replace history with compacted version.
-	// Structure: [first user msg] [assistant ack] [summary as user] [assistant ack] [kept messages...]
+	// Step 6: Deterministic assembly of new history.
+	// Structure: [pinned first msg] [ack] [summary] [ack] [preserved messages...] [kept messages...]
 	var newHistory []providers.Message
 
 	// First user message — pinned, verbatim
@@ -142,12 +129,51 @@ func (a *Agent) Compact() error {
 		Content: "I've reviewed the compaction summary and understand the context. I'll continue from where we left off.",
 	})
 
-	// Append recent kept messages
-	newHistory = append(newHistory, keptMessages...)
+	// Preserved messages (pivot points and critical tool results) in chronological order.
+	// Ensure proper user/assistant alternation.
+	if len(preservedMessages) > 0 {
+		newHistory = appendPreservedMessages(newHistory, preservedMessages)
+	}
+
+	// Append recent kept messages, maintaining alternation at the boundary.
+	if len(keptMessages) > 0 {
+		newHistory = appendPreservedMessages(newHistory, keptMessages)
+	}
 
 	a.history = newHistory
 
 	return nil
+}
+
+// appendPreservedMessages appends preserved messages to history while maintaining
+// proper user/assistant alternation. Inserts bridging messages as needed.
+func appendPreservedMessages(history []providers.Message, preserved []providers.Message) []providers.Message {
+	if len(preserved) == 0 {
+		return history
+	}
+
+	lastRole := history[len(history)-1].Role
+
+	for _, msg := range preserved {
+		// If we'd have two consecutive messages with the same role, insert a bridge
+		if msg.Role == lastRole {
+			if lastRole == "user" {
+				history = append(history, providers.Message{
+					Role:    "assistant",
+					Content: "Continuing with the task.",
+				})
+			} else {
+				history = append(history, providers.Message{
+					Role:    "user",
+					Content: "[System: continued]",
+				})
+			}
+		}
+		history = append(history, msg)
+		lastRole = msg.Role
+	}
+
+	return history
 }
 
 // FindFirstUserMessage locates the first user text message in history.
@@ -158,11 +184,9 @@ func (a *Agent) FindFirstUserMessage() (providers.Message, int) {
 }
 
 // findFirstUserMessage locates the first user text message in history.
-// This is the "pinned" / "sacred" original mission message.
 func (a *Agent) findFirstUserMessage() (providers.Message, int) {
 	for i, msg := range a.history {
 		if msg.Role == "user" {
-			// Check if it's a plain text message (not a tool_result or system injection)
 			if text, ok := msg.Content.(string); ok {
 				if !strings.HasPrefix(text, "[System:") {
 					return msg, i
@@ -174,8 +198,7 @@ func (a *Agent) findFirstUserMessage() (providers.Message, int) {
 }
 
 // FindLastUserMessage locates the most recent user text message in history.
-// In multi-turn conversations this captures the current objective, which may
-// differ from the original mission. Exported for testing.
+// Exported for testing.
 func (a *Agent) FindLastUserMessage() (providers.Message, int) {
 	return a.findLastUserMessage()
 }
@@ -206,7 +229,7 @@ func (a *Agent) RecentKeepCount() int {
 // the history is short.
 func (a *Agent) recentKeepCount() int {
 	keep := 4
-	if len(a.history) < keep+4 { // need at least 4 messages to summarize + 4 to keep
+	if len(a.history) < keep+4 {
 		keep = 2
 	}
 	if keep > len(a.history)-2 {
@@ -218,198 +241,165 @@ func (a *Agent) recentKeepCount() int {
 	return keep
 }
 
-// --- Multi-phase compaction workflow (CMP-2) ---
+// --- 3-call compaction workflow ---
 
-// runCompactionWorkflow executes the 5-phase compaction pipeline.
-// Each phase makes a focused LLM call and produces intermediate output
-// that feeds into the next phase.
+// runCompactionWorkflow executes the 3-call compaction pipeline:
 //
-// Phases:
-//  1. Goal/constraint extraction
-//  2. Decision capture
-//  3. File-state analysis (git-centric)
-//  4. Tool-result synthesis
-//  5. Handoff drafting
+//  1. Identify decision/pivot points
+//  2. Identify tool results relevant to those pivots (sequentially dependent on 1)
+//  3. Write gap-filling summary (sequentially dependent on 1 and 2)
+//
+// Returns the summary text and a slice of preserved messages to include
+// in the post-compaction history.
 func (a *Agent) runCompactionWorkflow(
 	firstUserMsg providers.Message,
-	currentObjective string,
 	toSummarize []providers.Message,
 	keptMessages []providers.Message,
-) (string, error) {
+) (string, []providers.Message, error) {
 
 	missionText := messageText(firstUserMsg)
 
-	// Serialize the conversation using intelligent tool-result summarization (CMP-3).
-	// Oversized tool outputs are summarized via LLM rather than hard-truncated.
-	convText := a.serializeMessagesWithSummarization(toSummarize, missionText, keptMessages)
+	// Serialize the full conversation with message numbers (no truncation).
+	numberedConv := serializeNumberedMessages(toSummarize)
 
-	// Build recent-context block if enabled (feeds into every phase).
-	// Recent context uses hard truncation (no LLM) since these messages
-	// are already kept in full in the post-compaction history.
-	recentCtx := ""
-	if a.compactIncludeRecentContext {
-		recentCtx = serializeMessagesHard(keptMessages, DefaultToolResultThreshold)
-	}
-
-	// Phase 1: Goal/constraint extraction
-	a.emitCompactionProgress("🗜️ Compaction phase 1/5: extracting goals & constraints...")
-	phase1System := "You are analyzing a conversation to extract the original goal and any constraints.\n" +
-		"Return a concise Markdown section with:\n" +
-		"- **Goal**: The core task/mission in 1-3 sentences\n" +
-		"- **Constraints**: Any requirements, limitations, or acceptance criteria mentioned\n" +
-		"Be precise. Quote exact requirements when possible."
-	if currentObjective != "" {
-		phase1System += "\n\nIMPORTANT: A 'Current Objective' section is provided in addition to the Original Mission. " +
-			"This is the user's most recent request and represents what they are CURRENTLY working on. " +
-			"Your Goal section should capture BOTH the original mission AND the current objective, " +
-			"clearly distinguishing between them. The current objective takes priority for determining next steps."
-	}
-	goals, err := a.compactionPhaseCall(
-		phase1System,
-		missionText, currentObjective, convText, recentCtx,
-	)
-	if err != nil {
-		return "", fmt.Errorf("phase 1 (goals) failed: %w", err)
-	}
-	a.emitCompactionDebug("Phase 1 output", goals)
-
-	// Phase 2: Decision capture
-	a.emitCompactionProgress("🗜️ Compaction phase 2/5: capturing decisions...")
-	decisions, err := a.compactionPhaseCall(
-		"You are analyzing a conversation to extract key technical decisions.\n"+
-			"Return a concise Markdown section with:\n"+
-			"- **Decisions Made**: Each significant choice, what was chosen, and why\n"+
-			"- **Alternatives Rejected**: Notable alternatives that were considered but not chosen\n"+
-			"Focus on decisions that a future reader would need to understand to continue the work.\n"+
-			"Preserve specific names, paths, and technical details.",
-		missionText, currentObjective, convText, recentCtx,
-	)
-	if err != nil {
-		return "", fmt.Errorf("phase 2 (decisions) failed: %w", err)
-	}
-	a.emitCompactionDebug("Phase 2 output", decisions)
-
-	// Phase 3: File-state analysis (git-centric)
-	a.emitCompactionProgress("🗜️ Compaction phase 3/5: analyzing file & git state...")
+	// Capture git state for context.
 	gitState := CaptureGitState()
-	fileState, err := a.compactionPhaseCall(
-		"You are analyzing a conversation to summarize the current state of the codebase.\n"+
-			"Return a concise Markdown section with:\n"+
-			"- **Files Modified/Created**: Key files that were changed or created, with brief descriptions\n"+
-			"- **Current State**: What state the code is in right now\n"+
-			"Do NOT include raw diffs. Reference file paths precisely.\n\n"+
-			"Git state information:\n"+gitState,
-		missionText, currentObjective, convText, recentCtx,
-	)
+
+	// --- Call 1: Identify decision/pivot points ---
+	a.emitCompactionProgress("🗜️ Compaction call 1/3: identifying decision points...")
+
+	call1System := "You are analyzing a coding session to identify decision and pivot points — " +
+		"moments where the objective changes. This includes:\n\n" +
+		"- User explicitly redirecting work (\"stop X, now do Y\")\n" +
+		"- LLM discovering an approach won't work and pivoting\n" +
+		"- Scope changes or new requirements emerging\n" +
+		"- Completion of one objective and transition to the next\n\n" +
+		"For each pivot, identify the specific message number(s) where the change happens.\n\n" +
+		"Output EXACTLY this format:\n\n" +
+		"## Current Objective\n" +
+		"[What the session is actively working on RIGHT NOW — this is the most important output]\n\n" +
+		"## Objective Timeline\n" +
+		"1. [Messages N-M]: [objective description]\n" +
+		"2. [Messages M-P]: Pivoted to [description] because [reason]\n" +
+		"...\n\n" +
+		"## Preserve\n" +
+		"- Message N: [which pivot this captures and why]\n" +
+		"- Messages X-Y: [which pivot this captures and why]\n\n" +
+		"If there are no pivots (single objective throughout), say so and list nothing to preserve.\n" +
+		"Preserve the MINIMUM messages needed — only the actual pivot moments."
+
+	call1Input := fmt.Sprintf("## Original Mission (preserved separately — do NOT restate)\n\n%s\n\n## Conversation\n\n%s",
+		missionText, numberedConv)
+
+	call1Output, err := a.compactionCall(call1System, call1Input)
 	if err != nil {
-		return "", fmt.Errorf("phase 3 (file-state) failed: %w", err)
+		return "", nil, fmt.Errorf("call 1 (decision points) failed: %w", err)
 	}
-	a.emitCompactionDebug("Phase 3 output", fileState)
+	a.emitCompactionDebug("Call 1 output (decision points)", call1Output)
 
-	// Phase 4: Tool-result synthesis
-	a.emitCompactionProgress("🗜️ Compaction phase 4/5: synthesizing tool outputs...")
-	toolSynthesis, err := a.compactionPhaseCall(
-		"You are analyzing a conversation to summarize significant tool outputs.\n"+
-			"Return a concise Markdown section with:\n"+
-			"- **Significant Outputs**: Key results from tool executions (test results, errors encountered, search findings)\n"+
-			"- **Errors Resolved**: Any errors that were encountered and how they were fixed\n"+
-			"Skip routine outputs (simple file reads, directory listings). Focus on outputs that informed decisions.",
-		missionText, currentObjective, convText, recentCtx,
-	)
+	// --- Call 2: Identify tool results to preserve ---
+	a.emitCompactionProgress("🗜️ Compaction call 2/3: identifying critical tool results...")
+
+	call2System := "A triage analysis of this coding session identified specific decision points " +
+		"(provided below as 'Triage Analysis'). Now identify tool results that should be preserved " +
+		"verbatim because they are critical evidence.\n\n" +
+		"PRESERVE tool results that:\n" +
+		"- Directly caused or informed an identified pivot (e.g., test failure that triggered a rethink)\n" +
+		"- Are critical to the CURRENT OBJECTIVE (e.g., error output still being debugged)\n" +
+		"- Contain information that cannot be trivially re-derived\n\n" +
+		"DO NOT preserve:\n" +
+		"- Routine file reads, directory listings, successful command runs\n" +
+		"- Tool results from completed/superseded objectives\n" +
+		"- Results that can trivially be re-run\n\n" +
+		"Output EXACTLY this format:\n\n" +
+		"## Preserve\n" +
+		"- Message N: [which decision point this supports, or \"current objective\"]\n\n" +
+		"If no tool results need preservation, say \"No tool results to preserve.\""
+
+	call2Input := fmt.Sprintf("## Triage Analysis (from previous step)\n\n%s\n\n## Conversation\n\n%s",
+		call1Output, numberedConv)
+
+	call2Output, err := a.compactionCall(call2System, call2Input)
 	if err != nil {
-		return "", fmt.Errorf("phase 4 (tool-results) failed: %w", err)
+		return "", nil, fmt.Errorf("call 2 (tool results) failed: %w", err)
 	}
-	a.emitCompactionDebug("Phase 4 output", toolSynthesis)
+	a.emitCompactionDebug("Call 2 output (tool results)", call2Output)
 
-	// Phase 5: Handoff drafting — assemble everything into a structured document
-	a.emitCompactionProgress("🗜️ Compaction phase 5/5: drafting handoff document...")
+	// Parse preserved message indices from calls 1 and 2.
+	preserveIndices := ParsePreserveIndices(call1Output, call2Output)
+	preserved := extractPreservedMessages(toSummarize, preserveIndices)
 
-	assemblyInput := fmt.Sprintf(
-		"## Phase Outputs\n\n"+
-			"### Goals & Constraints\n%s\n\n"+
-			"### Decisions\n%s\n\n"+
-			"### File & Git State\n%s\n\n"+
-			"### Tool Output Synthesis\n%s\n\n"+
-			"### Git State\n%s",
-		goals, decisions, fileState, toolSynthesis, gitState,
+	if a.diagnosticCallback != nil {
+		a.diagnosticCallback(fmt.Sprintf("🗜️ Preserving %d messages from calls 1+2", len(preserved)))
+	}
+
+	// --- Call 3: Write gap-filling summary ---
+	a.emitCompactionProgress("🗜️ Compaction call 3/3: writing summary...")
+
+	// Build the list of what's being preserved for Call 3's awareness.
+	preservedDesc := describePreservedMessages(toSummarize, preserveIndices)
+
+	// Serialize recent kept messages for bridging context.
+	recentCtx := serializeMessagesPlain(keptMessages)
+
+	call3System := "You are writing a summary to fill the gaps between preserved messages " +
+		"in a compacted coding session. The triage analyses below show which messages will be " +
+		"kept verbatim — do NOT repeat their content.\n\n" +
+		"Cover:\n" +
+		"- Work completed (that isn't captured in preserved messages)\n" +
+		"- Decisions made and their rationale\n" +
+		"- Errors encountered and how they were resolved\n" +
+		"- Current state of the codebase\n\n" +
+		"Do NOT include a \"Goal\" or \"Objective\" section — the current objective is captured " +
+		"in the triage analysis below, and the original mission is preserved separately.\n\n" +
+		"Be concise. This summary exists to provide continuity between preserved messages, " +
+		"not to replace them."
+
+	call3Input := fmt.Sprintf(
+		"## Triage Analysis (decision points)\n\n%s\n\n"+
+			"## Triage Analysis (tool results)\n\n%s\n\n"+
+			"## Messages Being Preserved Verbatim\n\n%s\n\n"+
+			"## Conversation\n\n%s\n\n"+
+			"## Git State\n\n%s\n\n"+
+			"## Recent Messages (still in context after compaction)\n\n%s",
+		call1Output, call2Output, preservedDesc, numberedConv, gitState, recentCtx,
 	)
 
-	// Add recent context for bridging if enabled
-	bridgeInstruction := ""
-	if a.compactIncludeRecentContext && recentCtx != "" {
-		assemblyInput += "\n\n### Recent Messages (still in context)\n" + recentCtx
-		bridgeInstruction = "\n\nIMPORTANT: The 'Recent Messages' section shows what will remain in context after compaction. " +
-			"Call out any open threads, pending actions, or decisions that bridge between your summary and those recent messages."
-	}
-
-	phase5System := "You are writing a developer handoff document from phase outputs.\n" +
-		"Combine the provided phase outputs into a single, well-structured Markdown document with these sections:\n\n" +
-		"## Goal\n(from phase 1)\n\n" +
-		"## Constraints\n(from phase 1)\n\n" +
-		"## Progress\n(synthesize from all phases — what has been accomplished)\n\n" +
-		"## Key Decisions\n(from phase 2)\n\n" +
-		"## Current State\n(from phase 3 — include git SHA/branch if available)\n\n" +
-		"## Next Steps\n(infer from the conversation what should happen next)\n\n" +
-		"## Critical Context\n(anything a future reader must know — errors, gotchas, important details)\n\n" +
-		"Be concise but thorough. This document replaces the conversation history, so nothing important should be lost.\n" +
-		"Do NOT include the original user message — it is preserved separately."
-	if currentObjective != "" {
-		phase5System += "\n\nIMPORTANT: The conversation has multiple user requests. A 'Current Objective' is provided " +
-			"representing the user's most recent request. Your Goal section MUST clearly state this current objective " +
-			"as the active focus. The Next Steps section should be derived from the current objective, not the original mission."
-	}
-	phase5System += bridgeInstruction
-
-	handoff, err := a.compactionPhaseCall(
-		phase5System,
-		missionText, currentObjective, assemblyInput, "",
-	)
+	call3Output, err := a.compactionCall(call3System, call3Input)
 	if err != nil {
-		return "", fmt.Errorf("phase 5 (handoff) failed: %w", err)
+		return "", nil, fmt.Errorf("call 3 (summary) failed: %w", err)
 	}
-	a.emitCompactionDebug("Phase 5 output (final handoff)", handoff)
+	a.emitCompactionDebug("Call 3 output (summary)", call3Output)
 
-	// Post-compaction: check for uncommitted changes
+	// Extract current objective from Call 1 and prepend it to the summary.
+	currentObj := ExtractCurrentObjective(call1Output)
+	var summary strings.Builder
+	if currentObj != "" {
+		summary.WriteString("## Current Objective\n\n")
+		summary.WriteString(currentObj)
+		summary.WriteString("\n\n")
+	}
+	summary.WriteString(call3Output)
+
+	// Append git state.
 	if gitState != "" && !strings.Contains(gitState, "not a git repo") {
+		summary.WriteString("\n\n## Git State\n\n")
+		summary.WriteString(gitState)
 		status := captureGitStatus()
 		if status != "" {
-			handoff += "\n\n---\n⚠️ **Uncommitted changes detected at compaction time:**\n```\n" + status + "\n```\n"
+			summary.WriteString("\n⚠️ **Uncommitted changes at compaction time:**\n```\n")
+			summary.WriteString(status)
+			summary.WriteString("\n```\n")
 		}
 	}
 
-	return handoff, nil
+	return summary.String(), preserved, nil
 }
 
-// compactionPhaseCall makes a single LLM call for one compaction phase.
-// It builds a user message from the mission, conversation, and optional recent context,
-// then sends it with the given system prompt.
-//
-// currentObjective is non-empty in multi-turn conversations and contains the
-// most recent user request. Phases should prefer this over the original mission
-// when determining what the user is currently working on.
-func (a *Agent) compactionPhaseCall(
-	systemPrompt string,
-	missionText string,
-	currentObjective string,
-	conversationOrInput string,
-	recentContext string,
-) (string, error) {
-	var content strings.Builder
-	content.WriteString("## Original Mission\n\n")
-	content.WriteString(missionText)
-	if currentObjective != "" {
-		content.WriteString("\n\n## Current Objective (Most Recent User Request)\n\n")
-		content.WriteString(currentObjective)
-	}
-	content.WriteString("\n\n## Conversation\n\n")
-	content.WriteString(conversationOrInput)
-	if recentContext != "" {
-		content.WriteString("\n\n## Recent Context (messages being kept)\n\n")
-		content.WriteString(recentContext)
-	}
-
+// compactionCall makes a single LLM call for one compaction step.
+func (a *Agent) compactionCall(systemPrompt string, userContent string) (string, error) {
 	messages := []providers.Message{
-		{Role: "user", Content: content.String()},
+		{Role: "user", Content: userContent},
 	}
 
 	resp, err := a.apiClient.Call(systemPrompt, messages, nil)
@@ -424,9 +414,216 @@ func (a *Agent) compactionPhaseCall(
 		}
 	}
 	if len(parts) == 0 {
-		return "", fmt.Errorf("empty response from compaction phase")
+		return "", fmt.Errorf("empty response from compaction call")
 	}
 	return strings.Join(parts, "\n"), nil
+}
+
+// --- Message serialization ---
+
+// serializeNumberedMessages converts messages to numbered text format
+// with NO truncation of tool results.
+func serializeNumberedMessages(msgs []providers.Message) string {
+	var sb strings.Builder
+	for i, msg := range msgs {
+		role := msg.Role
+		switch content := msg.Content.(type) {
+		case string:
+			sb.WriteString(fmt.Sprintf("[%d] **%s**: %s\n\n", i, role, content))
+		case []providers.ContentBlock:
+			for _, block := range content {
+				switch block.Type {
+				case "text":
+					sb.WriteString(fmt.Sprintf("[%d] **%s**: %s\n\n", i, role, block.Text))
+				case "tool_use":
+					sb.WriteString(fmt.Sprintf("[%d] **%s** [tool_use: %s]: %v\n\n", i, role, block.Name, block.Input))
+				case "tool_result":
+					resultText := ""
+					if s, ok := block.Content.(string); ok {
+						resultText = s // No truncation
+					}
+					sb.WriteString(fmt.Sprintf("[%d] **tool_result**: %s\n\n", i, resultText))
+				case "thinking":
+					// Skip thinking blocks
+				}
+			}
+		}
+	}
+	return sb.String()
+}
+
+// serializeMessagesPlain converts messages to plain text without numbering.
+// Used for recent context. No truncation.
+func serializeMessagesPlain(msgs []providers.Message) string {
+	var sb strings.Builder
+	for _, msg := range msgs {
+		role := msg.Role
+		switch content := msg.Content.(type) {
+		case string:
+			sb.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, content))
+		case []providers.ContentBlock:
+			for _, block := range content {
+				switch block.Type {
+				case "text":
+					sb.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, block.Text))
+				case "tool_use":
+					sb.WriteString(fmt.Sprintf("**%s** [tool_use: %s]: %v\n\n", role, block.Name, block.Input))
+				case "tool_result":
+					resultText := ""
+					if s, ok := block.Content.(string); ok {
+						resultText = s
+					}
+					sb.WriteString(fmt.Sprintf("**tool_result**: %s\n\n", resultText))
+				case "thinking":
+					// Skip thinking blocks
+				}
+			}
+		}
+	}
+	return sb.String()
+}
+
+// SerializeMessages is the exported serializer for tests. No truncation.
+func SerializeMessages(msgs []providers.Message) string {
+	return serializeMessagesPlain(msgs)
+}
+
+// --- Parse/extract helpers ---
+
+// ParsePreserveIndices extracts message indices from Call 1 and Call 2 output.
+// Looks for patterns like "Message N", "Messages N-M" in ## Preserve sections.
+// Exported for testing.
+func ParsePreserveIndices(call1Output, call2Output string) map[int]bool {
+	indices := make(map[int]bool)
+	for _, output := range []string{call1Output, call2Output} {
+		lines := strings.Split(output, "\n")
+		inPreserve := false
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "## Preserve") {
+				inPreserve = true
+				continue
+			}
+			if strings.HasPrefix(trimmed, "## ") && inPreserve {
+				inPreserve = false
+				continue
+			}
+			if !inPreserve {
+				continue
+			}
+			// Parse "- Message N:" or "- Messages N-M:"
+			parseMessageReferences(trimmed, indices)
+		}
+	}
+	return indices
+}
+
+// parseMessageReferences extracts message indices from a line like
+// "- Message 5: ..." or "- Messages 3-7: ..."
+func parseMessageReferences(line string, indices map[int]bool) {
+	// Look for "Message(s) N" or "Message(s) N-M" patterns
+	lower := strings.ToLower(line)
+
+	// Find all occurrences of "message" followed by numbers
+	for _, prefix := range []string{"messages ", "message "} {
+		idx := 0
+		for {
+			pos := strings.Index(lower[idx:], prefix)
+			if pos < 0 {
+				break
+			}
+			pos += idx + len(prefix)
+			idx = pos
+
+			// Parse the number(s) after "message(s) "
+			numStr := ""
+			for pos < len(lower) && (lower[pos] >= '0' && lower[pos] <= '9') {
+				numStr += string(lower[pos])
+				pos++
+			}
+			if numStr == "" {
+				continue
+			}
+			n := 0
+			for _, c := range numStr {
+				n = n*10 + int(c-'0')
+			}
+			indices[n] = true
+
+			// Check for range: "N-M"
+			if pos < len(lower) && lower[pos] == '-' {
+				pos++
+				numStr2 := ""
+				for pos < len(lower) && (lower[pos] >= '0' && lower[pos] <= '9') {
+					numStr2 += string(lower[pos])
+					pos++
+				}
+				if numStr2 != "" {
+					m := 0
+					for _, c := range numStr2 {
+						m = m*10 + int(c-'0')
+					}
+					for i := n + 1; i <= m; i++ {
+						indices[i] = true
+					}
+				}
+			}
+		}
+	}
+}
+
+// extractPreservedMessages returns the messages at the given indices.
+func extractPreservedMessages(msgs []providers.Message, indices map[int]bool) []providers.Message {
+	var preserved []providers.Message
+	for i, msg := range msgs {
+		if indices[i] {
+			preserved = append(preserved, msg)
+		}
+	}
+	return preserved
+}
+
+// describePreservedMessages creates a human-readable description of which
+// messages are being preserved, for Call 3's awareness.
+func describePreservedMessages(msgs []providers.Message, indices map[int]bool) string {
+	if len(indices) == 0 {
+		return "No messages being preserved verbatim."
+	}
+	var sb strings.Builder
+	for i := range msgs {
+		if !indices[i] {
+			continue
+		}
+		msg := msgs[i]
+		preview := messageText(msg)
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("- Message %d (%s): %s\n", i, msg.Role, preview))
+	}
+	return sb.String()
+}
+
+// ExtractCurrentObjective pulls the "## Current Objective" section from Call 1's output.
+// Exported for testing.
+func ExtractCurrentObjective(call1Output string) string {
+	lines := strings.Split(call1Output, "\n")
+	var result []string
+	inSection := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "## Current Objective" {
+			inSection = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "## ") && inSection {
+			break
+		}
+		if inSection {
+			result = append(result, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(result, "\n"))
 }
 
 // emitCompactionProgress sends a compaction progress message via the callback.
@@ -439,7 +636,6 @@ func (a *Agent) emitCompactionProgress(msg string) {
 // emitCompactionDebug sends intermediate compaction output via the diagnostic callback.
 func (a *Agent) emitCompactionDebug(label, content string) {
 	if a.diagnosticCallback != nil {
-		// Truncate for diagnostic display (full content is in the final handoff)
 		preview := content
 		if len(preview) > 500 {
 			preview = preview[:500] + "..."
@@ -486,28 +682,23 @@ func CaptureGitState() string {
 func captureGitStateStruct() GitState {
 	state := GitState{}
 
-	// Check if we're in a git repo
 	if err := exec.Command("git", "rev-parse", "--is-inside-work-tree").Run(); err != nil {
 		return state
 	}
 	state.IsRepo = true
 
-	// Branch
 	if out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
 		state.Branch = strings.TrimSpace(string(out))
 	}
 
-	// Commit SHA (short)
 	if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
 		state.CommitSHA = strings.TrimSpace(string(out))
 	}
 
-	// Commit message (first line)
 	if out, err := exec.Command("git", "log", "-1", "--format=%s").Output(); err == nil {
 		state.CommitMessage = strings.TrimSpace(string(out))
 	}
 
-	// Uncommitted changes
 	if out, err := exec.Command("git", "status", "--porcelain").Output(); err == nil {
 		state.HasChanges = len(strings.TrimSpace(string(out))) > 0
 	}
@@ -522,192 +713,6 @@ func captureGitStatus() string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// DefaultToolResultThreshold is the character count above which tool results
-// are intelligently summarized (rather than hard-truncated) during compaction.
-// Configurable via TOOL_RESULT_THRESHOLD in ~/.clyde/config.
-const DefaultToolResultThreshold = 2000
-
-// --- Message serialization helpers ---
-
-// SerializeMessages converts a slice of messages to a readable text format
-// for feeding into compaction phases. Uses hard truncation (no LLM).
-// Exported for testing.
-func SerializeMessages(msgs []providers.Message) string {
-	return serializeMessagesHard(msgs, DefaultToolResultThreshold)
-}
-
-// serializeMessagesWithSummarization converts messages to text, using the LLM
-// to intelligently summarize oversized tool results instead of hard-truncating.
-// Falls back to hard truncation if the LLM call fails.
-func (a *Agent) serializeMessagesWithSummarization(
-	msgs []providers.Message,
-	missionText string,
-	keptMessages []providers.Message,
-) string {
-	threshold := a.toolResultThreshold
-	if threshold == 0 {
-		threshold = DefaultToolResultThreshold
-	}
-
-	var sb strings.Builder
-	for _, msg := range msgs {
-		role := msg.Role
-		switch content := msg.Content.(type) {
-		case string:
-			sb.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, content))
-		case []providers.ContentBlock:
-			for _, block := range content {
-				switch block.Type {
-				case "text":
-					sb.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, block.Text))
-				case "tool_use":
-					sb.WriteString(fmt.Sprintf("**%s** [tool_use: %s]: %v\n\n", role, block.Name, block.Input))
-				case "tool_result":
-					resultText := ""
-					if s, ok := block.Content.(string); ok {
-						if len(s) > threshold {
-							// Attempt intelligent summarization
-							summarized, err := a.summarizeToolResult(s, missionText, keptMessages)
-							if err != nil {
-								// Fallback to hard truncation
-								if a.diagnosticCallback != nil {
-									a.diagnosticCallback(fmt.Sprintf("🗜️ Tool result summarization failed, falling back to truncation: %v", err))
-								}
-								resultText = hardTruncate(s, threshold)
-							} else {
-								resultText = summarized
-							}
-						} else {
-							resultText = s
-						}
-					}
-					sb.WriteString(fmt.Sprintf("**tool_result**: %s\n\n", resultText))
-				case "thinking":
-					// Skip thinking blocks
-				}
-			}
-		}
-	}
-	return sb.String()
-}
-
-// serializeMessagesHard converts messages to text with hard truncation only.
-// Used by the exported SerializeMessages and as a non-LLM fallback.
-func serializeMessagesHard(msgs []providers.Message, threshold int) string {
-	var sb strings.Builder
-	for _, msg := range msgs {
-		role := msg.Role
-		switch content := msg.Content.(type) {
-		case string:
-			sb.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, content))
-		case []providers.ContentBlock:
-			for _, block := range content {
-				switch block.Type {
-				case "text":
-					sb.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, block.Text))
-				case "tool_use":
-					sb.WriteString(fmt.Sprintf("**%s** [tool_use: %s]: %v\n\n", role, block.Name, block.Input))
-				case "tool_result":
-					resultText := ""
-					if s, ok := block.Content.(string); ok {
-						resultText = hardTruncate(s, threshold)
-					}
-					sb.WriteString(fmt.Sprintf("**tool_result**: %s\n\n", resultText))
-				case "thinking":
-					// Skip thinking blocks
-				}
-			}
-		}
-	}
-	return sb.String()
-}
-
-// hardTruncate truncates text to the given threshold with a marker.
-func hardTruncate(s string, threshold int) string {
-	if len(s) <= threshold {
-		return s
-	}
-	return s[:threshold] + "\n... (truncated)"
-}
-
-// summarizeToolResult uses an LLM call to intelligently summarize a large
-// tool output. The summarizer receives the original mission and recent kept
-// messages as anchoring context, then decides what to keep verbatim, condense,
-// or drop entirely.
-//
-// Returns the summarized text with a metadata note:
-//
-//	[Summarized: original N chars → M chars]
-func (a *Agent) summarizeToolResult(
-	toolOutput string,
-	missionText string,
-	keptMessages []providers.Message,
-) (string, error) {
-	// Build anchoring context from kept messages (last 2 turns max)
-	var anchorCtx strings.Builder
-	anchorMsgs := keptMessages
-	if len(anchorMsgs) > 4 {
-		anchorMsgs = anchorMsgs[len(anchorMsgs)-4:]
-	}
-	for _, msg := range anchorMsgs {
-		if text, ok := msg.Content.(string); ok {
-			anchorCtx.WriteString(fmt.Sprintf("**%s**: %s\n\n", msg.Role, text))
-		}
-	}
-
-	systemPrompt := "You are summarizing a large tool output for context compaction.\n\n" +
-		"Rules:\n" +
-		"- Decide what to keep verbatim (exact error messages, key values, paths)\n" +
-		"- Decide what to condense (repetitive output, verbose listings)\n" +
-		"- Decide what to drop (routine information, filler)\n" +
-		"- Do NOT enforce a fixed output length — use as much space as needed for important content\n" +
-		"- Preserve exact file paths, function names, error messages, and numeric values\n" +
-		"- For test output: preserve pass/fail counts, failing test names, and error details\n" +
-		"- For search results: preserve matched file paths and key matching lines\n" +
-		"- For file listings: summarize counts and highlight notable files\n" +
-		"- Output ONLY the summary, no preamble or explanation"
-
-	var userContent strings.Builder
-	userContent.WriteString("## Original Mission\n\n")
-	userContent.WriteString(missionText)
-	if anchorCtx.Len() > 0 {
-		userContent.WriteString("\n\n## Recent Context\n\n")
-		userContent.WriteString(anchorCtx.String())
-	}
-	userContent.WriteString("\n\n## Tool Output to Summarize\n\n")
-	userContent.WriteString(toolOutput)
-
-	messages := []providers.Message{
-		{Role: "user", Content: userContent.String()},
-	}
-
-	resp, err := a.apiClient.Call(systemPrompt, messages, nil)
-	if err != nil {
-		return "", fmt.Errorf("tool result summarization API call failed: %w", err)
-	}
-
-	var parts []string
-	for _, block := range resp.Content {
-		if block.Type == "text" && block.Text != "" {
-			parts = append(parts, block.Text)
-		}
-	}
-	if len(parts) == 0 {
-		return "", fmt.Errorf("tool result summarization returned empty response")
-	}
-
-	summarized := strings.Join(parts, "\n")
-
-	// Append metadata note
-	summarized += fmt.Sprintf("\n\n[Summarized: original %d chars → %d chars]", len(toolOutput), len(summarized))
-
-	if a.diagnosticCallback != nil {
-		a.diagnosticCallback(fmt.Sprintf("🗜️ Summarized tool result: %d chars → %d chars", len(toolOutput), len(summarized)))
-	}
-
-	return summarized, nil
 }
 
 // MessageText extracts plain text from a message. Exported for testing.

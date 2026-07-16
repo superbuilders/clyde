@@ -114,25 +114,6 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		reserveTokens = reserve
 	}
 
-	// Parse optional compact include recent context flag
-	var compactIncludeRecentContext *bool
-	if val := os.Getenv("COMPACT_INCLUDE_RECENT_CONTEXT"); val != "" {
-		b := val != "false" && val != "0"
-		compactIncludeRecentContext = &b
-	}
-
-	// Parse optional tool result summarization threshold
-	toolResultThreshold := 0
-	if trtStr := os.Getenv("TOOL_RESULT_THRESHOLD"); trtStr != "" {
-		trt, err := strconv.Atoi(trtStr)
-		if err != nil {
-			return agent.Config{}, fmt.Errorf("TOOL_RESULT_THRESHOLD must be a number, got %q: %w", trtStr, err)
-		}
-		if trt < 500 {
-			return agent.Config{}, fmt.Errorf("TOOL_RESULT_THRESHOLD must be >= 500, got %d", trt)
-		}
-		toolResultThreshold = trt
-	}
 
 	return agent.Config{
 		APIKey:            apiKey,
@@ -146,8 +127,7 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		MCPPlaywright:     os.Getenv("MCP_PLAYWRIGHT") == "true",
 		MCPPlaywrightArgs: os.Getenv("MCP_PLAYWRIGHT_ARGS"),
 		ReserveTokens:     reserveTokens,
-		CompactIncludeRecentContext: compactIncludeRecentContext,
-		ToolResultThreshold:        toolResultThreshold,
+
 	}, nil
 }
 

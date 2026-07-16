@@ -43,12 +43,7 @@ type Config struct {
 	// Compaction triggers when input exceeds (ContextWindowSize - ReserveTokens).
 	// 0 uses DefaultReserveTokens (16000).
 	ReserveTokens int
-	// CompactIncludeRecentContext controls whether recent kept messages are fed
-	// into compaction phases as extra context. Default true; set false for max token savings.
-	CompactIncludeRecentContext *bool
-	// ToolResultThreshold is the character count above which tool results are
-	// intelligently summarized during compaction. 0 uses DefaultToolResultThreshold (2000).
-	ToolResultThreshold int
+
 }
 
 // ProgressCallback receives tool progress lines (the → lines).
@@ -112,8 +107,7 @@ type Agent struct {
 	lastUsage          providers.Usage // Token usage from the most recent API response
 	contextWindowSize  int             // Model context window size in tokens (for diagnostic display)
 	reserveTokens      int             // Tokens to reserve for response; triggers compaction when exceeded
-	compactIncludeRecentContext bool   // Feed recent kept messages into compaction phases
-	toolResultThreshold        int    // Char threshold for intelligent tool-result summarization
+
 	mcpServer          *mcp.PlaywrightServer // MCP server (nil if not enabled)
 	skillsRegistry     *skills.Registry      // Agent Skills registry (nil if no skills found)
 }
@@ -238,11 +232,6 @@ func New(cfg Config, opts ...AgentOption) *Agent {
 	// Tool registration is handled by the blank import of agent/tools above,
 	// which triggers init() functions in each tool file. No action needed here.
 
-	// Determine compactIncludeRecentContext — default true unless explicitly set false
-	includeRecent := true
-	if cfg.CompactIncludeRecentContext != nil {
-		includeRecent = *cfg.CompactIncludeRecentContext
-	}
 
 	a := &Agent{
 		apiClient:                  client,
@@ -250,8 +239,7 @@ func New(cfg Config, opts ...AgentOption) *Agent {
 		history:                    []providers.Message{},
 		contextWindowSize:          cfg.ContextWindowSize,
 		reserveTokens:              cfg.ReserveTokens,
-		compactIncludeRecentContext: includeRecent,
-		toolResultThreshold:        cfg.ToolResultThreshold,
+
 	}
 
 	// Apply functional options

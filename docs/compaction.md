@@ -1,118 +1,270 @@
-**Proposed Improvements to Traditional Compaction for Our Go Coding Agent**
+# Compaction Design
 
-**Date:** March 26, 2026  
-**Authors:** Grok + team (AJ’s Go coding agent project)  
-**Status:** Pre-spec discussion document
+**Status:** Active design — replaces the CMP-2 five-phase pipeline  
+**Date:** July 2026
 
-### 1. Executive Summary
-Traditional compaction in coding agents is a necessary evil: it keeps long sessions alive inside finite context windows by summarizing old history. The current state of the art (Pi, OpenCode, Claude Code) all rely on the same basic pattern — **a single structured LLM call plus deterministic pruning** — which works but leaves a lot on the table.
+## Problem Statement
 
-We believe compaction can be dramatically better if we treat it as **an automated handoff document** written by one developer for the next (or for the same developer hours later). This document lays out:
+Compaction replaces conversation history with a smaller equivalent when the
+context window fills up. The current implementation has three critical problems:
 
-- What the three leading implementations actually do today (confirmed March 2026).
-- Our spiky philosophy for a serious coding agent.
-- Concrete improvements we want to ship in our Go agent and why they matter.
+1. **Variable, unbounded LLM calls.** Per-tool-result summarization makes one
+   LLM call for every oversized tool output. In a heavy tool-use session this
+   can be 50-100+ sequential API calls before the 5-phase pipeline even starts.
+   Compaction routinely takes 5-10 minutes.
 
-The result will be higher-quality, more reliable long-running sessions that feel closer to real engineering practice than to chat compression.
+2. **The current objective gets lost.** The 5-phase pipeline sends every phase
+   `## Original Mission` as the first section of input, followed by a
+   conversation that is 90%+ work on that original mission. The "current
+   objective" is a footnote instruction asking the LLM to override what 95% of
+   the content is about. In practice the handoff document restates the original
+   goal, the LLM sees "goal completed," and no-ops.
 
-### 2. State of the Art (March 2026)
+3. **Unnecessary truncation.** Tool results are hard-truncated at 2000 chars
+   before being fed to the pipeline. The full conversation already fit in the
+   context window moments before compaction triggered — there is no reason to
+   destroy information before the summarization calls can see it.
 
-We examined Pi, OpenCode, and Claude Code directly from their source/docs/gists/issues.
+## Philosophy (unchanged)
 
-| Aspect                        | **Pi Coding Agent**                                                                 | **OpenCode**                                                                 | **Claude Code**                                                              |
-|-------------------------------|-------------------------------------------------------------------------------------|------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| **Trigger**                   | Auto: > `contextWindow - reserveTokens` (default ~16k reserve)<br>Manual: `/compact` | Auto: ~75–95% utilization<br>Manual: `/compact`                             | Auto: early (~75–95%) for safety<br>Manual: `/compact`                      |
-| **Core Mechanism**            | Backward scan to `keepRecentTokens` cut → single LLM summary → append `CompactionEntry` → reload | Hidden “compaction” agent (single structured LLM call) + deterministic prune | Server-side single structured LLM summary; sometimes feels like “new session” |
-| **Summary Generation**        | One-shot Markdown template (Goal, Constraints, Progress, Decisions, Next Steps, Critical Context + file lists) | One-shot structured summary via dedicated agent prompt (customizable via env var + plugins) | One-shot structured summary (task overview, accomplishments, files, next steps) with optional custom instructions |
-| **Tool-Result Handling**      | Hard truncation (~2k chars per result)                                              | Deterministic prune of oldest tool outputs first (before summarization)      | Aggressive deterministic prune of old tool outputs                           |
-| **File/State Tracking**       | Accumulates raw diffs + read/modified files across every compaction                | Prunes tool outputs; keeps recent turns                                      | Prunes aggressively; relies on persistent files (e.g. CLAUDE.md)            |
-| **Preserved Content**         | Recent messages + cumulative file ops; full JSONL log on disk                      | Recent turns + injected summary                                              | Key decisions/files/current work; summary injected                           |
-| **Extensibility**             | Extremely high (extensions, custom summarizer model, code-aware logic)             | Good (plugins, experimental compaction prompt)                               | Medium (custom instructions on `/compact`, persistent rules file)            |
-| **Transparency / UX**         | Summary injected; full history viewable                                            | Shows the generated summary clearly                                          | Mentions “compacting”; context usage visible                                 |
+- Compaction is a **handoff**, not compression.
+- The original user request is **sacred** — pinned verbatim, never summarized.
+- Git is the source of truth for code state.
+- We optimize for long, high-stakes, largely autonomous missions.
+- A static, predictable number of LLM calls is required — never variable.
 
-**Crucial observation**: Even when OpenCode and Claude Code call it a “dedicated compaction agent,” it is still **one LLM call** with a carefully written prompt. There is no multi-turn reasoning, no tool use inside compaction itself, and no intelligence applied to pruning decisions.
+## Design: 3 LLM Calls + Deterministic Assembly
 
-### 3. Our Philosophy — Spiky Points of View
+The core idea: **don't summarize everything into a document. Triage the
+conversation — preserve critical messages verbatim, summarize the rest.**
 
-We are not building a general-purpose chat tool. We are building a **coding agent** that takes a prompt that could stand in for a complete Jira ticket and executes it end-to-end in long-running, largely autonomous 1-shot missions. This leads us to several non-negotiable stances:
+Post-compaction history becomes a mix of real messages and summary, not just a
+doc. Preserved messages carry full signal because the LLM sees them as genuine
+conversation history, not quoted text inside a summary.
 
-- **Compaction is a handoff, not compression.** It should read like a developer writing a concise, accurate status update for the next shift — structured, actionable, and trustworthy.
-- **Single-LLM-call compaction is the weakest link.** Real handoffs require multiple reasoning passes; we should make compaction agentic.
-- **Git is the single source of truth for code state.** We want 1 agent turn/run ≈ 1 commit ≈ 1 PR. Therefore we should stop accumulating raw diffs and let git do what it was designed for.
-- **The original user request is sacred.** In our use case the first message is often the entire mission statement; it should never be heavily summarized or dropped.
-- **The agent must be able to search its own history after compaction.** Keeping the full log on disk but making it invisible to the model is a missed opportunity.
-- **We optimize for long, high-stakes missions.** Spending a few extra tokens and LLM calls on compaction is not only acceptable — it is required — if it produces dramatically better results.
+### Why 3 calls
 
-These are deliberate trade-offs. We are willing to be slower or more verbose during compaction in exchange for far higher session quality and developer-like reliability.
+The 4 cases we must handle (from `compaction-2.txt`):
 
-### 4. Our Specific Recommendations & Reasoning
+- Conversations with 1 user message where the objective does not change
+- Conversations with 1 user message where the objective changes during LLM turns
+- Conversations with many user messages where the user changes the objective
+- Conversations with many user messages where the LLM changes the objective
 
-Each recommendation below includes a short “why it matters” followed by a bulleted list of concrete implementation guidance (still at the conceptual level — no code or Go structs yet).
+1 call is too few — a single prompt cannot reliably both triage a long
+conversation AND write a high-quality summary of the non-preserved parts.
 
-1. **Agentic Multi-Step Compaction**  
-   Turn compaction into a small internal workflow instead of one giant LLM call.  
-   *Why it matters*: Single prompts become brittle and hallucinate on long histories; multiple targeted passes produce far more consistent, higher-fidelity handoff documents. Because compaction quality is extremely valuable (analogous to paying $15+ for a single high-quality code review with Anthropic’s latest models), we deliberately spend maximum intelligence and tokens here.  
-   - Break the process into distinct phases: goal/constraint extraction, decision capture, file-state analysis, tool-result synthesis, and final handoff drafting.  
-   - Have each phase use a focused, high-quality prompt running on the strongest available model with a generous token budget.  
-   - Let the workflow optionally loop back or refine earlier phases if the final draft reveals gaps.  
-   - Output a single, well-structured Markdown handoff document that becomes the new summary message.  
-   - Log each intermediate step internally so we can debug or replay compaction quality later.
+2 calls is tempting (merge "identify pivots" and "identify tool results") but
+wrong. Identifying which tool results matter requires knowing the decision
+points first. This dependency must be **enforced sequentially** — if merged
+into one call, the LLM can cut corners and select tool results that aren't
+actually tied to the identified pivots.
 
-2. **Smarter Tool-Result Summarization**  
-   Replace hard cutoffs with intelligent, context-aware summarization of oversized tool outputs.  
-   *Why it matters*: Critical details often live in the tail of tool results; a deterministic 2000-char chop loses them forever.  
-   - For any tool output exceeding the size threshold, spin up a dedicated tiny-LLM summarizer pass (still using the high-intelligence model).  
-   - Give that summarizer the original user prompt + the two most recent kept messages as anchoring context.  
-   - Ask it to decide what to keep verbatim, what to condense, and what to drop entirely, rather than enforcing a fixed length.  
-   - Store the summarized version alongside a tiny metadata note (e.g., “original length X → summarized to Y”).  
-   - Make this step optional/configurable so we can fall back to truncation only during truly extreme token pressure.
+3 calls with enforced sequential dependency:
 
-3. **Git-Centric State Tracking**  
-   Treat git as the authoritative record of code state instead of accumulating raw diffs.  
-   *Why it matters*: Raw diffs go stale the instant the next edit happens; git gives us perfect, compact, always-current history that matches our “1 run = 1 commit = 1 PR” philosophy.  
-   - At every compaction point, capture only the current commit SHA (and short commit message if one exists).  
-   - Record a one-line “what changed since last compaction” note generated by the agent.  
-   - Drop all cumulative raw-diff and modified-files lists that existing agents carry forward.  
-   - When the handoff document needs to reference file state, instruct the summarizer to reference the latest commit SHA and let git handle the rest.  
-   - Add a post-compaction hook that can optionally run `git commit` or `git status` to keep the repo in a clean state.
+```
+Call 1: Identify decision/pivot points
+          ↓ (output feeds into Call 2)
+Call 2: Identify tool results relevant to those pivots
+          ↓ (outputs of 1 + 2 feed into Call 3)
+Call 3: Write summary covering everything NOT preserved
+          ↓
+Step 4: Deterministic assembly of new history
+```
 
-4. **Preserve the Initial User Message Verbatim**  
-   Never let the original mission statement get summarized away.  
-   *Why it matters*: In our Jira-style workflow the very first message is often the entire spec; losing its exact wording silently kills long-session coherence.  
-   - Keep the first user message in full, placed immediately after the system prompt and before any compaction summary.  
-   - Include it (verbatim) in every future summarization pass so the handoff document always knows the original ask.  
-   - Never truncate or rephrase it even under extreme token pressure.  
-   - Display it in any internal “full history” view with a special visual marker so the agent always sees the mission anchor.
+### No truncation
 
-5. **Add a History Search Tool**  
-   Give the agent (but not the human user) the ability to query the full raw conversation log even after compaction.  
-   *Why it matters*: All existing agents keep the complete log on disk but treat it as invisible after compaction; this turns lossy compression into queryable memory for our long-running autonomous agents.  
-   - Store the entire conversation as a flat, plaintext, append-only log (one entry per turn).  
-   - Expose an internal-only tool that the agent itself can call to query the log using ripgrep-style or git-grep semantics under the hood.  
-   - Let the tool accept natural-language queries that get turned into precise grep patterns or semantic filters.  
-   - Return results with timestamps, message IDs, and short context snippets so the agent can decide whether to pull full turns back into context if needed.
+The full conversation already fit in the context window — that is how we got
+here. Serializing messages to text produces roughly the same token count.
+Send the full conversation to each call with no truncation of tool results.
 
-6. **Feed Recent Context into the Summarizer**  
-   Let the summarizer peek at the messages that will stay in context.  
-   *Why it matters*: The handoff document becomes noticeably more coherent when it can reference what’s still “hot” in the session.  
-   - When launching the multi-step compaction workflow, include the last 1–2 full kept turns as extra context for every phase.  
-   - Instruct the final handoff drafter to explicitly call out any open threads or decisions that bridge the summary and the kept messages.  
-   - Keep this extra context small (just enough for continuity) so it does not meaningfully increase token usage.  
-   - Allow the system to toggle this behavior with a flag if maximum token savings are ever required.
+With only 3 calls (and each seeing the conversation once), total token spend is
+**less** than the old 5-phase design which sent the full conversation 5 times
+plus N tool-result summarization calls.
 
-7. **Trigger Strategy**  
-   Use only automatic, token-driven triggers with no user-facing commands.  
-   *Why it matters*: Our focus is long-running autonomous agents that 1-shot complete tasks; manual intervention or slash-command triggers are unnecessary and out of scope.  
-   - Trigger compaction automatically when context exceeds (contextWindow − reserveTokens).  
-   - Make the exact threshold values (reserveTokens, keepRecentTokens) configurable per-project and globally.  
-   - Keep the logic simple and predictable so the agent can anticipate and plan around upcoming compactions.
+Safety valve: if the serialized text exceeds the model's context window (rare
+edge case from serialization format inflation), fall back to truncating tool
+results at 10K chars. This is a fallback, not the default path.
 
-### 5. Expected Outcomes
+### Call 1: Identify Decision Points
 
-- Compaction quality that actually feels like a thoughtful developer handoff instead of a lossy summary.
-- Dramatically better long-running session reliability and fewer “I forgot what we were doing” moments.
-- Closer alignment with real software engineering workflows (git + handoffs).
-- A clear differentiation from Pi, OpenCode, and Claude Code — we will be the agent that gets *better* the longer you use it.
+**Input:** Numbered serialized conversation (full, no truncation).
 
-This is not a full implementation spec yet — it is the shared understanding we need before we write one. Once we align on these points, we can move to detailed pseudocode, Go struct designs, prompt templates, and testing plan.
+**Task:** Analyze the conversation and identify every point where the objective
+changes — whether initiated by the user or discovered by the LLM.
 
+**System prompt direction:**
+
+```
+Analyze this coding session and identify decision/pivot points — moments
+where the objective changes. This includes:
+
+- User explicitly redirecting work ("stop X, now do Y")
+- LLM discovering an approach won't work and pivoting
+- Scope changes, new requirements emerging
+- Completion of one objective and transition to the next
+
+For each pivot, identify the specific message pair (user + assistant 
+exchange, or single assistant message) where the change happens.
+
+Output:
+
+## Current Objective
+[What the session is actively working on RIGHT NOW — this is the
+most important output of this entire analysis]
+
+## Objective Timeline
+1. [Messages 1-N]: Original objective — [description]
+2. [Messages N-M]: Pivoted to — [description] — [reason]
+3. [Messages M-present]: Current — [description]
+
+## Preserve (message indices)
+- Messages X-Y: [which pivot this captures]
+- Messages A-B: [which pivot this captures]
+```
+
+**Output:** Current objective, timeline of objective evolution, specific message
+indices to preserve at each pivot point.
+
+### Call 2: Identify Tool Results to Preserve
+
+**Input:** Numbered serialized conversation + Call 1's full output.
+
+**Task:** For each decision point identified in Call 1, identify tool results
+that are critical evidence for that decision or for the current objective.
+
+**System prompt direction:**
+
+```
+A triage analysis of this coding session identified specific decision
+points (provided below). Now identify tool results that should be
+preserved verbatim because they are critical to those decisions or to
+the current objective.
+
+PRESERVE tool results that:
+- Directly caused or informed an identified pivot (e.g., test failure
+  that triggered a change in approach)
+- Are critical to the CURRENT objective (e.g., error output still
+  being debugged, test results validating current approach)
+- Contain information that would be lost and cannot be re-derived
+  (e.g., search results that guided a decision)
+
+DO NOT preserve:
+- Routine file reads, directory listings, successful command runs
+- Tool results from completed/superseded objectives (summarize instead)
+- Results that can trivially be re-run
+
+Output:
+
+## Preserve (message indices)
+- Message Z: [which decision point this supports, or "current objective"]
+- Message W: [reason]
+```
+
+**Output:** Specific tool-result message indices to preserve, each tied back to
+a decision point from Call 1 or to the current objective.
+
+### Call 3: Write Summary
+
+**Input:** Full conversation + outputs of Call 1 and Call 2 (so it knows what
+is being preserved and can avoid repeating it).
+
+**Task:** Write a concise summary covering everything NOT being preserved.
+
+**System prompt direction:**
+
+```
+You are writing a summary to fill the gaps between preserved messages
+in a compacted coding session. The triage analysis below shows which
+messages will be kept verbatim — do NOT repeat their content.
+
+Cover:
+- Work completed (that isn't captured in preserved messages)
+- Decisions made and their rationale
+- Errors encountered and how they were resolved
+- Current state of the codebase
+- Anything a future reader needs to continue the work
+
+Do NOT include a "Goal" or "Objective" section — the current objective
+is captured in the triage analysis and preserved messages. The original
+mission is preserved separately as a pinned message.
+
+Be concise. This summary exists to provide continuity between the
+preserved messages, not to replace them.
+```
+
+**Output:** Gap-filling summary narrative.
+
+### Step 4: Deterministic Assembly
+
+Build the new history from concrete pieces:
+
+```
+ 1. [user]       Pinned first user message (verbatim, always)
+ 2. [assistant]   Ack
+ 3. [user]       "[System: Compaction Summary]" + summary from Call 3
+                  + current objective from Call 1
+ 4. [assistant]   Ack
+ 5+  [user/asst]  Preserved message pairs from Calls 1 & 2 (chronological)
+ ... 
+ N.  [user/asst]  Recent kept messages (last ~4, as today)
+```
+
+Preserved messages are **real messages** with their original role and content.
+The LLM sees them as genuine conversation history, not as quoted text inside a
+document. This is the critical quality difference from the old approach — a
+real user message saying "now do Y" carries far more weight than a summary
+mentioning "the user redirected to Y."
+
+The current objective from Call 1 is included at the end of the summary message
+(message 3) so it appears prominently right before the preserved messages and
+recent context.
+
+Message alternation (user/assistant) must be maintained. If preserved messages
+create gaps in alternation, insert minimal bridging messages as needed.
+
+### Handling the 4 Cases
+
+| Case | Behavior |
+|------|----------|
+| 1 user msg, objective unchanged | Call 1 finds no pivots → no messages preserved → summary only (simple case) |
+| 1 user msg, LLM pivots | Call 1 preserves the assistant message where pivot was decided; Call 2 preserves the tool result that caused it |
+| Many user msgs, user changes objective | Call 1 preserves user messages with new instructions |
+| Many user msgs, LLM changes objective | Call 1 preserves the exchange where LLM explains the pivot |
+
+### What to Delete
+
+The following code is removed entirely:
+
+- `summarizeToolResult` — no per-tool-result LLM calls
+- `serializeMessagesWithSummarization` — replaced by flat serialization, no truncation
+- The 5-phase pipeline (`runCompactionWorkflow` phases 1-5) — replaced by 3-call design
+- `compactionPhaseCall` in its current form — replaced by new call functions
+- `DefaultToolResultThreshold` / `toolResultThreshold` — no truncation threshold
+
+### Performance Comparison
+
+|                        | Old (5-phase + tool summarization) | New (3-call)           |
+|------------------------|------------------------------------|------------------------|
+| LLM calls              | 5 + N (N = oversized tool results) | 3 (constant)           |
+| Full conversation sent | 5 times (each phase)               | 3 times (each call)    |
+| Tool result handling   | LLM summarization per result       | No truncation          |
+| Latency (typical)      | 1-10+ minutes (variable)           | ~30-45s (predictable)  |
+| Current objective      | Footnote, routinely lost           | Call 1's primary output |
+
+### Open Questions
+
+- **Preserved message budget:** Should there be a cap on how many messages
+  Calls 1 and 2 can preserve? Preserving too many defeats the purpose of
+  compaction. Likely needs a soft guidance ("preserve the minimum needed")
+  rather than a hard cap.
+
+- **Bridging message format:** When preserved messages create alternation gaps,
+  what should bridging messages say? Minimal filler ("Continuing...") or
+  something contextual?
+
+- **Interaction with session resume:** The session resume code
+  (`agent/session/resume.go`) reconstructs history from `*_system.md` after
+  compaction. The new design preserves real messages — these need to be
+  persisted individually (as `*_user.md`, `*_assistant.md`, etc.) after the
+  compaction marker, not just embedded in a single `*_system.md` file.
