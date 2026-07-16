@@ -184,16 +184,16 @@
           </div>
           <!-- Per-type view mode toggles -->
           <div class="flex gap-1 items-center">
-            <template x-for="t in [{key:'thinking',label:'think',icon:'💭'},{key:'tools',label:'tool',icon:'🔧'},{key:'compaction',label:'compact',icon:'📦'},{key:'diagnostic',label:'debug',icon:'🔬'}]" :key="t.key">
+            <template x-for="t in [{key:'thinking',icon:'💭'},{key:'tools',icon:'🔧'},{key:'compaction',icon:'📦'},{key:'diagnostic',icon:'🔬'}]" :key="t.key">
               <button @click="cycleTypeView(t.key)"
                       :class="{
                         'btn-primary': typeViewMode[t.key] === 'expanded',
                         'btn-soft': typeViewMode[t.key] === 'collapsed',
                         'btn-ghost opacity-30': typeViewMode[t.key] === 'hidden'
                       }"
-                      class="btn btn-xs gap-0.5 font-normal text-[11px]"
+                      class="btn btn-xs btn-square text-sm"
                       :title="t.key + ' — ' + typeViewMode[t.key] + ' (click to cycle)'"
-              ><span x-text="t.icon"></span><span x-text="t.label" :class="typeViewMode[t.key] === 'hidden' && 'line-through'"></span></button>
+                      x-text="t.icon"></button>
             </template>
           </div>
           <button x-show="selected.process_type === 'tmux'" @click="stopAgent()"
@@ -521,7 +521,7 @@ function sessionViewer() {
       if (!this.selected) return;
       if (!incremental) this.loadingMsgs = true;
       // Always load all types — view mode controls display, not fetching
-      const types = 'user,assistant,thinking,tool-use,tool-result,compaction';
+      const types = 'user,assistant,thinking,tool-use,tool-result,compaction,diagnostic';
       let url = `/api/sessions/${encodeURIComponent(this.selected.id)}/messages?cwd=${encodeURIComponent(this.selected.cwd)}&types=${types}`;
       if (incremental && this.lastFilename) url += `&after=${encodeURIComponent(this.lastFilename)}`;
       try {
@@ -547,7 +547,7 @@ function sessionViewer() {
     async loadOlderMessages() {
       if (!this.selected || this.loadingOlder || !this.hasOlder) return;
       this.loadingOlder = true;
-      const types = 'user,assistant,thinking,tool-use,tool-result,compaction';
+      const types = 'user,assistant,thinking,tool-use,tool-result,compaction,diagnostic';
       const first = this.messages[0]?.filename || '';
       let url = `/api/sessions/${encodeURIComponent(this.selected.id)}/messages?cwd=${encodeURIComponent(this.selected.cwd)}&types=${types}`;
       if (first) url += `&before=${encodeURIComponent(first)}`;
