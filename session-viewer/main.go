@@ -550,9 +550,9 @@ func backgroundScan() {
 				existing.Project = project
 				existing.Branch = branch
 				existing.User = user
-				if len(me) > existing.LastReadCount && existing.Read {
-					existing.Read = false
-				}
+				// Note: we do NOT mark sessions unread here based on message count.
+				// The frontend detects busy→idle transitions and marks unread only
+				// when the agent run is fully complete (not on intermediate files).
 				if existing.Preview == "" {
 					existing.Preview = getSessionPreview(sp)
 				}
@@ -566,8 +566,8 @@ func backgroundScan() {
 					MessageCount:  len(me),
 					LastModified:  lms,
 					Preview:       getSessionPreview(sp),
-					Read:          false,
-					LastReadCount: 0,
+					Read:          true,
+					LastReadCount: len(me),
 				}
 			}
 			cacheMu.Unlock()
