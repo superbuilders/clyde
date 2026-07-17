@@ -574,7 +574,7 @@ func ListSessions(sessionsRoot string) ([]SessionInfo, error) {
 		dirName := e.Name()
 		sessionPath := filepath.Join(sessionsRoot, dirName)
 
-		// Parse directory name: <timestamp>_<username> (also handles legacy _from_ directories)
+		// Parse directory name: <timestamp>_<username>
 		timestamp, username := parseDirName(dirName)
 
 		// Count message files (exclude diagnostic and compaction)
@@ -873,21 +873,14 @@ func extractSummary(content string) string {
 }
 
 // parseDirName parses a session directory name into timestamp and username.
-// Handles both "2026-07-14T09-32-00_aj" and legacy "2026-07-14T09-32-00_aj_from_..." directories.
+// Format: "2026-07-14T09-32-00_aj" → ("2026-07-14T09-32-00", "aj")
 func parseDirName(dirName string) (timestamp, username string) {
 	// Timestamp is always the first 19 characters
 	if len(dirName) < 20 {
 		return dirName, "unknown"
 	}
 	timestamp = dirName[:19]
-
-	rest := dirName[20:] // skip the underscore after timestamp
-	// Handle legacy _from_ suffix if present
-	if idx := strings.Index(rest, "_from_"); idx >= 0 {
-		username = rest[:idx]
-	} else {
-		username = rest
-	}
+	username = dirName[20:] // everything after the underscore
 
 	return timestamp, username
 }
