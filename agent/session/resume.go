@@ -500,29 +500,24 @@ type pendingMessage struct {
 	content []providers.ContentBlock
 }
 
-// FindMostRecentSession finds the most recent session directory for the given
-// username in the sessions root. Returns the full path to the session directory.
-func FindMostRecentSession(sessionsRoot, username string) (string, error) {
+// FindMostRecentSession finds the most recent session directory in the
+// sessions root, regardless of which user created it.
+// Returns the full path to the session directory.
+func FindMostRecentSession(sessionsRoot string) (string, error) {
 	entries, err := os.ReadDir(sessionsRoot)
 	if err != nil {
 		return "", fmt.Errorf("failed to read sessions directory: %w", err)
 	}
 
-	// Filter for directories belonging to this user, sorted reverse chronologically
 	var matches []string
-	suffix := "_" + username
 	for _, e := range entries {
-		if e.IsDir() && strings.HasSuffix(e.Name(), suffix) {
-			matches = append(matches, e.Name())
-		}
-		// Also match _from_ sessions (branched sessions)
-		if e.IsDir() && strings.Contains(e.Name(), "_"+username+"_from_") {
+		if e.IsDir() {
 			matches = append(matches, e.Name())
 		}
 	}
 
 	if len(matches) == 0 {
-		return "", fmt.Errorf("no sessions found for user '%s' in %s", username, sessionsRoot)
+		return "", fmt.Errorf("no sessions found in %s", sessionsRoot)
 	}
 
 	sort.Strings(matches)
@@ -579,7 +574,7 @@ func ListSessions(sessionsRoot string) ([]SessionInfo, error) {
 		dirName := e.Name()
 		sessionPath := filepath.Join(sessionsRoot, dirName)
 
-		// Parse directory name: <timestamp>_<username> or <timestamp>_<username>_from_<source>
+		// Parse directory name: <timestamp>_<username> (also handles legacy _from_ directories)
 		timestamp, username := parseDirName(dirName)
 
 		// Count message files (exclude diagnostic and compaction)
@@ -626,43 +621,7 @@ func ListSessions(sessionsRoot string) ([]SessionInfo, error) {
 	return sessions, nil
 }
 
-// CopyForResume copies a session directory for cross-user resume.
-// Creates a new directory: <timestamp>_<user>_from_<source-session-id>/
-// Returns the path to the new directory.
-func CopyForResume(sourceDir, sessionsRoot, username string) (string, error) {
-	sourceID := filepath.Base(sourceDir)
-	now := time.Now()
-	newDirName := FormatTimestampDir(now) + "_" + username + "_from_" + sourceID
-	newDir := filepath.Join(sessionsRoot, newDirName)
 
-	if err := os.MkdirAll(newDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create branch directory: %w", err)
-	}
-
-	// Copy all files from source to new directory
-	entries, err := os.ReadDir(sourceDir)
-	if err != nil {
-		return "", fmt.Errorf("failed to read source session: %w", err)
-	}
-
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		srcPath := filepath.Join(sourceDir, e.Name())
-		dstPath := filepath.Join(newDir, e.Name())
-
-		content, err := os.ReadFile(srcPath)
-		if err != nil {
-			return "", fmt.Errorf("failed to read %s: %w", e.Name(), err)
-		}
-		if err := os.WriteFile(dstPath, content, 0644); err != nil {
-			return "", fmt.Errorf("failed to write %s: %w", e.Name(), err)
-		}
-	}
-
-	return newDir, nil
-}
 
 // --- Content extraction helpers ---
 
@@ -914,7 +873,7 @@ func extractSummary(content string) string {
 }
 
 // parseDirName parses a session directory name into timestamp and username.
-// Handles both "2026-07-14T09-32-00_aj" and "2026-07-14T09-32-00_aj_from_2026-07-14T10-00-00_maria"
+// Handles both "2026-07-14T09-32-00_aj" and legacy "2026-07-14T09-32-00_aj_from_..." directories.
 func parseDirName(dirName string) (timestamp, username string) {
 	// Timestamp is always the first 19 characters
 	if len(dirName) < 20 {
@@ -923,7 +882,7 @@ func parseDirName(dirName string) (timestamp, username string) {
 	timestamp = dirName[:19]
 
 	rest := dirName[20:] // skip the underscore after timestamp
-	// Check for _from_ suffix (branched session)
+	// Handle legacy _from_ suffix if present
 	if idx := strings.Index(rest, "_from_"); idx >= 0 {
 		username = rest[:idx]
 	} else {
@@ -933,11 +892,7 @@ func parseDirName(dirName string) (timestamp, username string) {
 	return timestamp, username
 }
 
-// SessionOwner extracts the username from a session directory name.
-func SessionOwner(dirName string) string {
-	_, username := parseDirName(dirName)
-	return username
-}
+
 
 // InferToolNameExported is the exported version of inferToolName for testing.
 func InferToolNameExported(displayLine string) string {
