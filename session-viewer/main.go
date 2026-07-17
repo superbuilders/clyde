@@ -595,7 +595,10 @@ func shellQuote(s string) string {
 }
 
 func getUsername() string {
-	out, err := exec.Command("git", "config", "user.name").Output()
+	// Use --global to avoid picking up a local repo config from the SV's working directory.
+	// The session viewer can be launched from any repo — we want the user's identity,
+	// not whatever local config happens to be in that repo.
+	out, err := exec.Command("git", "config", "--global", "user.name").Output()
 	if err == nil {
 		name := strings.TrimSpace(string(out))
 		if name != "" {
@@ -765,6 +768,27 @@ func backgroundScan() {
 			cacheMu.Unlock()
 		}
 	}
+
+	// ── Fix cross-user resume tmux name mismatch ──
+	// When CopyForResume creates a new _from_ directory, the tmux session still
+	// has the old name. Detect this and rename the tmux session to match.
+	cacheMu.RLock()
+	for _, s := range cache.Sessions {
+		if !strings.Contains(s.ID, "_from_") {
+			continue
+		}
+		if idx := strings.Index(s.ID, "_from_"); idx >= 0 {
+			sourceID := s.ID[idx+len("_from_"):]
+			oldTmux := tmuxName(sourceID)
+			newTmux := tmuxName(s.ID)
+			if isTmuxRunning(oldTmux) && !isTmuxRunning(newTmux) {
+				exec.Command("tmux", "rename-session", "-t", oldTmux, newTmux).Run()
+				_tmuxCacheTime = time.Time{} // invalidate tmux cache
+				fmt.Printf("🔄 Renamed tmux session %s → %s (cross-user resume)\n", oldTmux, newTmux)
+			}
+		}
+	}
+	cacheMu.RUnlock()
 
 	// Prune deleted sessions
 	cacheMu.Lock()
