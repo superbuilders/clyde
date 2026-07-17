@@ -83,58 +83,158 @@
       </div>
     </div>
 
-    <!-- Session list grouped by project -->
+    <!-- Session list grouped by project (WT-7: two-level for worktree groups) -->
     <div class="flex-1 overflow-y-auto nice-scroll">
-      <template x-for="group in groupedSessions" :key="group.project">
+      <template x-for="group in groupedSessions" :key="group.key">
         <div>
-          <!-- Project header -->
-          <div class="flex items-center gap-1.5 px-3 py-1.5 bg-base-300/50 cursor-pointer hover:bg-base-300/80 sticky top-0 z-10 border-b border-base-300">
-            <span @click="toggleProjectCollapse(group.project)" class="text-xs opacity-50 transition-transform" :class="collapsedProjects[group.project] && '-rotate-90'">▼</span>
-            <span @click="toggleProjectCollapse(group.project)" class="text-xs font-semibold flex-1" x-text="group.project"></span>
-            <button @click.stop="createSessionForProject(group.sessions[0].cwd)" class="btn btn-xs btn-ghost opacity-40 hover:opacity-100 px-1" title="New session">+</button>
-            <span @click="toggleProjectCollapse(group.project)" class="text-xs opacity-40" x-text="group.sessions.length"></span>
-          </div>
-          <!-- Sessions in group -->
-          <template x-if="!collapsedProjects[group.project]">
+          <!-- ── Worktree group parent header (WT-7) ── -->
+          <template x-if="group.isWorktreeGroup">
             <div>
-              <template x-for="s in group.sessions" :key="s.id + s.cwd">
-                <div @click="selectSession(s)"
-                     :class="{'bg-primary/15 border-l-2 border-primary': selected?.id === s.id && selected?.cwd === s.cwd}"
-                     class="relative px-3 py-2 border-b border-base-300/50 cursor-pointer hover:bg-base-300/30 transition-colors group/card">
-                  <div class="flex items-center gap-1.5">
-                    <!-- Process type indicator -->
-                    <span x-show="s.process_type === 'tmux'" class="text-blue-400 text-xs" title="tmux">⬤</span>
-                    <span x-show="s.process_type === 'sh'" class="text-green-400 text-xs" title="terminal">⬤</span>
-                    <span x-show="!s.process_type" class="text-base-content/20 text-xs">○</span>
-                    <!-- Name or preview -->
-                    <span class="text-sm flex-1 truncate"
-                          :class="s.unread ? 'font-bold' : 'opacity-80'"
-                          x-text="s.name || s.preview || s.id.substring(0, 19).replace('T', ' ')"></span>
-                    <!-- Busy indicator -->
-                    <span x-show="s.busy" class="loading loading-spinner loading-xs text-warning"></span>
-                    <!-- Unread dot -->
-                    <span x-show="s.unread" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
-                    <!-- Hamburger menu -->
-                    <div class="relative" x-data="{ menuOpen: false }" @click.stop>
-                      <button @click="menuOpen = !menuOpen"
-                              class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 text-xs px-1 transition-opacity"
-                              title="Session options">⋮</button>
-                      <div x-show="menuOpen" @click.outside="menuOpen = false" x-transition
-                           class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-40 text-sm"
-                           style="background-color: var(--color-base-100, #1d232a)">
-                        <button @click="toggleReadState(s); menuOpen = false"
-                                class="w-full text-left px-3 py-1.5 hover:bg-base-300/50"
-                                x-text="s.unread ? 'Mark read' : 'Mark unread'"></button>
-                        <button x-show="s.process_type === 'tmux' || s.process_type === 'sh'"
-                                @click="killSession(s); menuOpen = false"
-                                class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
-                        <button @click="renameSession(s); menuOpen = false"
-                                class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
-                      </div>
-                    </div>
+              <div class="flex items-center gap-1.5 px-3 py-1.5 bg-base-300/50 cursor-pointer hover:bg-base-300/80 sticky top-0 z-10 border-b border-base-300">
+                <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-50 transition-transform" :class="collapsedProjects[group.key] && '-rotate-90'">▼</span>
+                <span @click="toggleProjectCollapse(group.key)" class="text-xs font-semibold flex-1" x-text="group.project"></span>
+                <!-- WT-8: "+" dropdown for worktree groups -->
+                <div class="relative" x-data="{ wtMenuOpen: false }" @click.stop>
+                  <button @click="wtMenuOpen = !wtMenuOpen" class="btn btn-xs btn-ghost opacity-40 hover:opacity-100 px-1" title="New session or worktree">+</button>
+                  <div x-show="wtMenuOpen" @click.outside="wtMenuOpen = false" x-transition
+                       class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
+                       style="background-color: var(--color-base-100, #1d232a)">
+                    <button @click="createSessionForProject(group.parentPath); wtMenuOpen = false"
+                            class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📝 New Session</button>
+                    <button @click="openWorktreeModal(group.parentPath, group.project); wtMenuOpen = false"
+                            class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🌿 New Worktree</button>
                   </div>
-                  <div class="text-xs opacity-40 mt-0.5 pl-5"
-                       x-text="[s.branch, formatTime(s.last_modified), s.message_count + ' msgs'].filter(Boolean).join(' · ')"></div>
+                </div>
+                <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-40" x-text="group.totalSessions"></span>
+              </div>
+              <!-- Expanded content: parent sessions + worktree children -->
+              <template x-if="!collapsedProjects[group.key]">
+                <div>
+                  <!-- Parent-level sessions -->
+                  <template x-for="s in group.parentSessions" :key="s.id + s.cwd">
+                    <div @click="selectSession(s)"
+                         :class="{'bg-primary/15 border-l-2 border-primary': selected?.id === s.id && selected?.cwd === s.cwd}"
+                         class="relative px-3 py-2 border-b border-base-300/50 cursor-pointer hover:bg-base-300/30 transition-colors group/card">
+                      <div class="flex items-center gap-1.5">
+                        <span x-show="s.process_type === 'tmux'" class="text-blue-400 text-xs">⬤</span>
+                        <span x-show="s.process_type === 'sh'" class="text-green-400 text-xs">⬤</span>
+                        <span x-show="!s.process_type" class="text-base-content/20 text-xs">○</span>
+                        <span class="text-sm flex-1 truncate" :class="s.unread ? 'font-bold' : 'opacity-80'"
+                              x-text="s.name || s.preview || s.id.substring(0, 19).replace('T', ' ')"></span>
+                        <span x-show="s.busy" class="loading loading-spinner loading-xs text-warning"></span>
+                        <span x-show="s.unread" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
+                        <div class="relative" x-data="{ menuOpen: false }" @click.stop>
+                          <button @click="menuOpen = !menuOpen" class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
+                          <div x-show="menuOpen" @click.outside="menuOpen = false" x-transition
+                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-40 text-sm"
+                               style="background-color: var(--color-base-100, #1d232a)">
+                            <button @click="toggleReadState(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50" x-text="s.unread ? 'Mark read' : 'Mark unread'"></button>
+                            <button x-show="s.process_type" @click="killSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
+                            <button @click="renameSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="text-xs opacity-40 mt-0.5 pl-5"
+                           x-text="[s.branch, formatTime(s.last_modified), s.message_count + ' msgs'].filter(Boolean).join(' · ')"></div>
+                    </div>
+                  </template>
+                  <!-- Worktree children -->
+                  <template x-for="child in group.children" :key="child.name">
+                    <div>
+                      <!-- Worktree child sub-header -->
+                      <div class="flex items-center gap-1.5 px-3 py-1 bg-base-300/25 cursor-pointer hover:bg-base-300/50 border-b border-base-300/50 ml-3">
+                        <span @click="toggleProjectCollapse(group.key + '/' + child.name)" class="text-xs opacity-40 transition-transform" :class="collapsedProjects[group.key + '/' + child.name] && '-rotate-90'">▼</span>
+                        <span @click="toggleProjectCollapse(group.key + '/' + child.name)" class="text-xs flex-1 opacity-70" x-text="child.branch || child.name"></span>
+                        <button @click.stop="createSessionForProject(child.cwd)" class="btn btn-xs btn-ghost opacity-30 hover:opacity-100 px-1" title="New session in worktree">+</button>
+                        <span @click="toggleProjectCollapse(group.key + '/' + child.name)" class="text-xs opacity-30" x-text="child.sessions.length"></span>
+                      </div>
+                      <!-- Worktree child sessions -->
+                      <template x-if="!collapsedProjects[group.key + '/' + child.name]">
+                        <div>
+                          <template x-for="s in child.sessions" :key="s.id + s.cwd">
+                            <div @click="selectSession(s)"
+                                 :class="{'bg-primary/15 border-l-2 border-primary': selected?.id === s.id && selected?.cwd === s.cwd}"
+                                 class="relative px-3 py-2 border-b border-base-300/50 cursor-pointer hover:bg-base-300/30 transition-colors group/card ml-3">
+                              <div class="flex items-center gap-1.5">
+                                <span x-show="s.process_type === 'tmux'" class="text-blue-400 text-xs">⬤</span>
+                                <span x-show="s.process_type === 'sh'" class="text-green-400 text-xs">⬤</span>
+                                <span x-show="!s.process_type" class="text-base-content/20 text-xs">○</span>
+                                <span class="text-sm flex-1 truncate" :class="s.unread ? 'font-bold' : 'opacity-80'"
+                                      x-text="s.name || s.preview || s.id.substring(0, 19).replace('T', ' ')"></span>
+                                <span x-show="s.busy" class="loading loading-spinner loading-xs text-warning"></span>
+                                <span x-show="s.unread" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
+                                <div class="relative" x-data="{ menuOpen: false }" @click.stop>
+                                  <button @click="menuOpen = !menuOpen" class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
+                                  <div x-show="menuOpen" @click.outside="menuOpen = false" x-transition
+                                       class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-40 text-sm"
+                                       style="background-color: var(--color-base-100, #1d232a)">
+                                    <button @click="toggleReadState(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50" x-text="s.unread ? 'Mark read' : 'Mark unread'"></button>
+                                    <button x-show="s.process_type" @click="killSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
+                                    <button @click="renameSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
+                                  </div>
+                                </div>
+                              </div>
+                              <div class="text-xs opacity-40 mt-0.5 pl-5"
+                                   x-text="[formatTime(s.last_modified), s.message_count + ' msgs'].filter(Boolean).join(' · ')"></div>
+                            </div>
+                          </template>
+                          <div x-show="child.sessions.length === 0" class="text-xs opacity-30 italic px-6 py-1 ml-3">No sessions yet</div>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- ── Normal (non-worktree) project header ── -->
+          <template x-if="!group.isWorktreeGroup">
+            <div>
+              <div class="flex items-center gap-1.5 px-3 py-1.5 bg-base-300/50 cursor-pointer hover:bg-base-300/80 sticky top-0 z-10 border-b border-base-300">
+                <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-50 transition-transform" :class="collapsedProjects[group.key] && '-rotate-90'">▼</span>
+                <span @click="toggleProjectCollapse(group.key)" class="text-xs font-semibold flex-1" x-text="group.project"></span>
+                <button @click.stop="createSessionForProject(group.sessions[0]?.cwd)" class="btn btn-xs btn-ghost opacity-40 hover:opacity-100 px-1" title="New session">+</button>
+                <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-40" x-text="group.sessions.length"></span>
+              </div>
+              <!-- Sessions in group -->
+              <template x-if="!collapsedProjects[group.key]">
+                <div>
+                  <template x-for="s in group.sessions" :key="s.id + s.cwd">
+                    <div @click="selectSession(s)"
+                         :class="{'bg-primary/15 border-l-2 border-primary': selected?.id === s.id && selected?.cwd === s.cwd}"
+                         class="relative px-3 py-2 border-b border-base-300/50 cursor-pointer hover:bg-base-300/30 transition-colors group/card">
+                      <div class="flex items-center gap-1.5">
+                        <span x-show="s.process_type === 'tmux'" class="text-blue-400 text-xs" title="tmux">⬤</span>
+                        <span x-show="s.process_type === 'sh'" class="text-green-400 text-xs" title="terminal">⬤</span>
+                        <span x-show="!s.process_type" class="text-base-content/20 text-xs">○</span>
+                        <span class="text-sm flex-1 truncate"
+                              :class="s.unread ? 'font-bold' : 'opacity-80'"
+                              x-text="s.name || s.preview || s.id.substring(0, 19).replace('T', ' ')"></span>
+                        <span x-show="s.busy" class="loading loading-spinner loading-xs text-warning"></span>
+                        <span x-show="s.unread" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
+                        <div class="relative" x-data="{ menuOpen: false }" @click.stop>
+                          <button @click="menuOpen = !menuOpen"
+                                  class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 text-xs px-1 transition-opacity"
+                                  title="Session options">⋮</button>
+                          <div x-show="menuOpen" @click.outside="menuOpen = false" x-transition
+                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-40 text-sm"
+                               style="background-color: var(--color-base-100, #1d232a)">
+                            <button @click="toggleReadState(s); menuOpen = false"
+                                    class="w-full text-left px-3 py-1.5 hover:bg-base-300/50"
+                                    x-text="s.unread ? 'Mark read' : 'Mark unread'"></button>
+                            <button x-show="s.process_type === 'tmux' || s.process_type === 'sh'"
+                                    @click="killSession(s); menuOpen = false"
+                                    class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
+                            <button @click="renameSession(s); menuOpen = false"
+                                    class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="text-xs opacity-40 mt-0.5 pl-5"
+                           x-text="[s.branch, formatTime(s.last_modified), s.message_count + ' msgs'].filter(Boolean).join(' · ')"></div>
+                    </div>
+                  </template>
                 </div>
               </template>
             </div>
@@ -336,6 +436,34 @@
       </div>
     </div>
   </div>
+
+  <!-- WT-9: Worktree creation modal -->
+  <div x-show="worktreeModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @keydown.escape.window="closeWorktreeModal()">
+    <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full mx-4 p-6" @click.outside="closeWorktreeModal()">
+      <div class="text-lg font-bold mb-4">🌿 New Worktree</div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-sm font-semibold opacity-70 mb-1 block">Branch name</label>
+          <input type="text" x-model="worktreeBranch" x-ref="worktreeBranchInput"
+                 @keydown.enter="createWorktree()" @keydown.escape="closeWorktreeModal()"
+                 placeholder="my-feature"
+                 class="input input-bordered w-full" />
+        </div>
+        <div x-show="worktreeBranch" class="text-sm opacity-60 bg-base-200 rounded-lg px-3 py-2 font-mono">
+          <div>Branch: <span class="text-info" x-text="worktreeBranch"></span></div>
+          <div>Path: <span class="text-info" x-text="worktreeParentPath + '/' + worktreeBranch.replace(/\//g, '-')"></span></div>
+        </div>
+        <div x-show="worktreeError" class="text-error text-sm" x-text="worktreeError"></div>
+      </div>
+      <div class="flex justify-end gap-2 mt-4">
+        <button @click="closeWorktreeModal()" class="btn btn-sm btn-ghost">Cancel</button>
+        <button @click="createWorktree()" class="btn btn-sm btn-primary" :disabled="!worktreeBranch.trim() || worktreeCreating">
+          <span x-show="!worktreeCreating">Create</span>
+          <span x-show="worktreeCreating" class="loading loading-spinner loading-xs"></span>
+        </button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -360,12 +488,17 @@ function sessionViewer() {
     editingName: false, editNameValue: '',
     // Takeover modal state
     takeoverModal: false, takeoverPid: null, takeoverTty: '',
+    // WT-9: Worktree creation modal state
+    worktreeModal: false, worktreeParentPath: '', worktreeParentName: '', worktreeBranch: '',
+    worktreeError: '', worktreeCreating: false,
     // Per-type view modes: 'expanded' | 'hidden' | 'collapsed'
     typeViewMode: { thinking: 'collapsed', tools: 'expanded', compaction: 'expanded', diagnostic: 'hidden' },
 
     async init() {
       await this.loadSessions();
+      await this.loadWorktreeProjects();
       setInterval(() => this.loadSessions(), 15000);
+      setInterval(() => this.loadWorktreeProjects(), 60000);
     },
 
     async loadSessions() {
@@ -426,15 +559,98 @@ function sessionViewer() {
     },
 
     get groupedSessions() {
-      const groups = {};
+      const normalGroups = {};
+      const worktreeGroups = {};  // parentName → { ... }
+
       for (const s of this.visibleSessions) {
-        if (!groups[s.project]) groups[s.project] = { latest: '', sessions: [] };
-        groups[s.project].sessions.push(s);
-        if ((s.last_modified || '') > groups[s.project].latest) groups[s.project].latest = s.last_modified || '';
+        if (s.worktree_parent_name) {
+          // This session belongs to a worktree group
+          const wpn = s.worktree_parent_name;
+          if (!worktreeGroups[wpn]) {
+            worktreeGroups[wpn] = {
+              key: 'wt::' + s.worktree_parent,
+              project: wpn,
+              parentPath: s.worktree_parent,
+              isWorktreeGroup: true,
+              parentSessions: [],
+              childMap: {},
+              totalSessions: 0,
+              latest: ''
+            };
+          }
+          const wg = worktreeGroups[wpn];
+          if ((s.last_modified || '') > wg.latest) wg.latest = s.last_modified || '';
+          wg.totalSessions++;
+          if (s.cwd === s.worktree_parent) {
+            wg.parentSessions.push(s);
+          } else {
+            const childKey = s.project;
+            if (!wg.childMap[childKey]) {
+              wg.childMap[childKey] = { name: s.project, branch: s.branch, cwd: s.cwd, sessions: [] };
+            }
+            wg.childMap[childKey].sessions.push(s);
+          }
+        } else {
+          // Normal project
+          if (!normalGroups[s.project]) normalGroups[s.project] = { latest: '', sessions: [] };
+          normalGroups[s.project].sessions.push(s);
+          if ((s.last_modified || '') > normalGroups[s.project].latest) normalGroups[s.project].latest = s.last_modified || '';
+        }
       }
-      return Object.keys(groups)
-        .sort((a, b) => (groups[b].latest || '').localeCompare(groups[a].latest || ''))
-        .map(p => ({ project: p, sessions: groups[p].sessions }));
+
+      // Also discover worktree children with 0 sessions from the projects API (loaded async)
+      // We handle this by checking _worktreeProjects cache
+      if (this._worktreeProjects) {
+        for (const p of this._worktreeProjects) {
+          if (p.parent_name && p.worktrees) {
+            const wpn = p.parent_name;
+            if (!worktreeGroups[wpn]) {
+              worktreeGroups[wpn] = {
+                key: 'wt::' + p.parent_path,
+                project: wpn,
+                parentPath: p.parent_path,
+                isWorktreeGroup: true,
+                parentSessions: [],
+                childMap: {},
+                totalSessions: 0,
+                latest: ''
+              };
+            }
+            const wg = worktreeGroups[wpn];
+            for (const wt of p.worktrees) {
+              if (!wg.childMap[wt.name]) {
+                wg.childMap[wt.name] = { name: wt.name, branch: wt.branch, cwd: wt.path, sessions: [] };
+              } else if (!wg.childMap[wt.name].branch) {
+                wg.childMap[wt.name].branch = wt.branch;
+              }
+            }
+          }
+        }
+      }
+
+      // Convert worktree groups: childMap → children array
+      const result = [];
+      for (const wpn of Object.keys(worktreeGroups)) {
+        const wg = worktreeGroups[wpn];
+        wg.children = Object.values(wg.childMap).sort((a, b) => a.name.localeCompare(b.name));
+        delete wg.childMap;
+        result.push(wg);
+      }
+
+      // Add normal groups
+      for (const p of Object.keys(normalGroups)) {
+        result.push({
+          key: p,
+          project: p,
+          isWorktreeGroup: false,
+          sessions: normalGroups[p].sessions,
+          latest: normalGroups[p].latest
+        });
+      }
+
+      // Sort all groups by latest activity
+      result.sort((a, b) => (b.latest || '').localeCompare(a.latest || ''));
+      return result;
     },
 
     toggleProjectVisibility(project) {
@@ -670,6 +886,59 @@ function sessionViewer() {
       this.takeoverModal = false;
       this.takeoverPid = null;
       this.takeoverTty = '';
+    },
+
+    // ── WT-8/9: Worktree modal ──
+    openWorktreeModal(parentPath, parentName) {
+      this.worktreeParentPath = parentPath;
+      this.worktreeParentName = parentName;
+      this.worktreeBranch = '';
+      this.worktreeError = '';
+      this.worktreeCreating = false;
+      this.worktreeModal = true;
+      this.$nextTick(() => this.$refs.worktreeBranchInput?.focus());
+    },
+
+    closeWorktreeModal() {
+      this.worktreeModal = false;
+      this.worktreeBranch = '';
+      this.worktreeError = '';
+    },
+
+    async createWorktree() {
+      if (!this.worktreeBranch.trim() || this.worktreeCreating) return;
+      this.worktreeCreating = true;
+      this.worktreeError = '';
+      try {
+        const r = await fetch('/api/worktrees', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ parent_path: this.worktreeParentPath, branch_name: this.worktreeBranch.trim() })
+        });
+        const data = await r.json();
+        if (r.ok) {
+          this.closeWorktreeModal();
+          // Wait for rescan then reload
+          setTimeout(async () => {
+            await this.loadSessions();
+            await this.loadWorktreeProjects();
+          }, 2000);
+        } else {
+          this.worktreeError = data.error || 'Failed to create worktree';
+        }
+      } catch(e) {
+        this.worktreeError = e.message;
+      }
+      this.worktreeCreating = false;
+    },
+
+    // Cache worktree project info for sidebar rendering
+    _worktreeProjects: null,
+    async loadWorktreeProjects() {
+      try {
+        const r = await fetch('/api/projects');
+        const data = await r.json();
+        this._worktreeProjects = (data || []).filter(p => p.is_worktree_group || p.parent_name);
+      } catch(e) {}
     },
 
     async stopAgent() {
