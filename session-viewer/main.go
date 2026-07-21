@@ -1370,6 +1370,223 @@ func createSession(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok", "session_id": dirName, "cwd": body.CWD})
 }
 
+// ── Message & session management handlers ──
+
+// deleteSessionMessage hard-deletes a message file from disk.
+// Only allowed for stopped sessions (no tmux or terminal process).
+func deleteSessionMessage(c echo.Context) error {
+	sid := c.Param("id")
+	filename := c.Param("filename")
+	cwd := c.QueryParam("cwd")
+	if sid == "" || filename == "" || cwd == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "id, filename, and cwd required"})
+	}
+
+	// Validate filename (prevent path traversal)
+	if strings.Contains(filename, "/") || strings.Contains(filename, "..") {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid filename"})
+	}
+
+	// Check session is not running
+	tName := tmuxName(sid)
+	if isTmuxRunning(tName) {
+		return c.JSON(http.StatusConflict, map[string]string{"error": "cannot delete messages from a running session"})
+	}
+	if proc := findTerminalProcess(cwd, sid); proc != nil {
+		return c.JSON(http.StatusConflict, map[string]string{"error": "cannot delete messages from a running session"})
+	}
+
+	filePath := filepath.Join(cwd, ".clyde", "sessions", sid, filename)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "message not found"})
+	}
+
+	if err := os.Remove(filePath); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to delete: " + err.Error()})
+	}
+
+	// Update message count in cache
+	key := cacheKey(cwd, sid)
+	cacheMu.Lock()
+	if s := cache.Sessions[key]; s != nil {
+		if s.MessageCount > 0 {
+			s.MessageCount--
+		}
+	}
+	cacheMu.Unlock()
+
+	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// markAllRead marks sessions as read at the given scope.
+func markAllRead(c echo.Context) error {
+	var body struct {
+		Scope          string `json:"scope"`           // "all", "cwd", "worktree"
+		CWD            string `json:"cwd"`             // for scope="cwd"
+		WorktreeParent string `json:"worktree_parent"` // for scope="worktree"
+	}
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
+
+	cacheMu.Lock()
+	count := 0
+	for _, s := range cache.Sessions {
+		if s.Read {
+			continue
+		}
+		switch body.Scope {
+		case "cwd":
+			if s.CWD != body.CWD {
+				continue
+			}
+		case "worktree":
+			if s.WorktreeParent != body.WorktreeParent {
+				continue
+			}
+			// "all" or default: mark everything
+		}
+		s.Read = true
+		s.LastReadCount = s.MessageCount
+		count++
+	}
+	cacheMu.Unlock()
+
+	go saveCache()
+	return c.JSON(http.StatusOK, map[string]interface{}{"status": "ok", "count": count})
+}
+
+// deleteWorktreeHandler deletes a git worktree and moves its sessions to the primary worktree.
+func deleteWorktreeHandler(c echo.Context) error {
+	var body struct {
+		WorktreePath string `json:"worktree_path"`
+		ParentPath   string `json:"parent_path"`
+	}
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
+	if body.WorktreePath == "" || body.ParentPath == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "worktree_path and parent_path required"})
+	}
+
+	// Detect the worktree group
+	group := detectWorktreeGroup(body.WorktreePath)
+	if group == nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "not part of a worktree group"})
+	}
+	if len(group.Worktrees) <= 1 {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cannot delete the last worktree"})
+	}
+
+	// Find the primary worktree (main/master, or first non-deleted)
+	primaryDir := ""
+	for _, wt := range group.Worktrees {
+		if wt.Path == body.WorktreePath {
+			continue
+		}
+		if wt.Branch == "main" || wt.Branch == "master" {
+			primaryDir = wt.Path
+			break
+		}
+	}
+	if primaryDir == "" {
+		for _, wt := range group.Worktrees {
+			if wt.Path != body.WorktreePath {
+				primaryDir = wt.Path
+				break
+			}
+		}
+	}
+	if primaryDir == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "no target worktree to move sessions to"})
+	}
+
+	// Move .clyde/sessions from worktree to primary
+	srcSessions := filepath.Join(body.WorktreePath, ".clyde", "sessions")
+	dstSessions := filepath.Join(primaryDir, ".clyde", "sessions")
+	movedCount := 0
+	if entries, err := os.ReadDir(srcSessions); err == nil {
+		os.MkdirAll(dstSessions, 0755)
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			src := filepath.Join(srcSessions, e.Name())
+			dst := filepath.Join(dstSessions, e.Name())
+			if err := os.Rename(src, dst); err == nil {
+				movedCount++
+				cacheMu.Lock()
+				oldKey := cacheKey(body.WorktreePath, e.Name())
+				newKey := cacheKey(primaryDir, e.Name())
+				if s, ok := cache.Sessions[oldKey]; ok {
+					s.CWD = primaryDir
+					s.Project = filepath.Base(primaryDir)
+					cache.Sessions[newKey] = s
+					delete(cache.Sessions, oldKey)
+				}
+				cacheMu.Unlock()
+			}
+		}
+	}
+
+	// Remove the git worktree
+	cmd := exec.Command("git", "-C", primaryDir, "worktree", "remove", body.WorktreePath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Try force remove
+		cmd = exec.Command("git", "-C", primaryDir, "worktree", "remove", "--force", body.WorktreePath)
+		output, err = cmd.CombinedOutput()
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "failed to remove worktree: " + strings.TrimSpace(string(output)),
+			})
+		}
+	}
+
+	go backgroundScan()
+	go saveCache()
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"status":         "ok",
+		"moved_sessions": movedCount,
+		"moved_to":       primaryDir,
+	})
+}
+
+// openInTerminal opens a macOS Terminal window attached to the tmux session for a clyde session.
+func openInTerminal(c echo.Context) error {
+	sid := c.Param("id")
+	cwd := c.QueryParam("cwd")
+	if sid == "" || cwd == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "id and cwd required"})
+	}
+
+	name := tmuxName(sid)
+
+	// Start tmux session if not running
+	if !isTmuxRunning(name) {
+		if err := startClyde(cwd, sid); err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to start clyde: " + err.Error()})
+		}
+		time.Sleep(500 * time.Millisecond)
+		if !isTmuxRunning(name) {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "tmux session failed to start"})
+		}
+	}
+
+	// Open Terminal.app and attach to the tmux session
+	script := fmt.Sprintf(`tell application "Terminal"
+	activate
+	do script "tmux attach-session -t %s"
+end tell`, name)
+
+	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to open terminal: " + err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"status": "ok", "tmux_session": name})
+}
+
 // ── Main ──
 
 func main() {
@@ -1392,6 +1609,10 @@ func main() {
 	api.POST("/upload", uploadFile)
 	api.GET("/projects", getProjects)
 	api.POST("/worktrees", createWorktree)
+	api.POST("/worktrees/delete", deleteWorktreeHandler)
+	api.DELETE("/sessions/:id/messages/:filename", deleteSessionMessage)
+	api.POST("/sessions/mark-all-read", markAllRead)
+	api.POST("/sessions/:id/open-terminal", openInTerminal)
 	api.GET("/preferences", func(c echo.Context) error {
 		cacheMu.RLock()
 		defer cacheMu.RUnlock()

@@ -28,6 +28,9 @@
     .nice-scroll::-webkit-scrollbar { width: 5px; }
     .nice-scroll::-webkit-scrollbar-track { background: transparent; }
     .nice-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 3px; }
+    /* Toast animation */
+    @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .toast-anim { animation: toast-in .2s ease-out; }
   </style>
 </head>
 <body class="min-h-screen bg-base-300">
@@ -56,6 +59,12 @@
                 <span x-text="p"></span>
               </label>
             </template>
+            <div class="border-t border-base-300 mt-2 pt-2">
+              <button @click="markAllReadForScope('all'); open = false"
+                      class="w-full text-left text-xs px-1 py-1 hover:bg-base-200 rounded opacity-70 hover:opacity-100">
+                ✓ Mark all as read
+              </button>
+            </div>
           </div>
         </div>
         <button class="btn btn-xs btn-ghost" @click="triggerScan()" title="Rescan">⟳</button>
@@ -75,10 +84,35 @@
           <option value="90">90d</option>
           <option value="0">All</option>
         </select>
-        <label class="flex items-center gap-1 cursor-pointer" title="Show only live sessions">
-          <input type="checkbox" x-model="liveOnly" class="toggle toggle-xs toggle-info" />
-          <span class="text-xs" :class="liveOnly ? 'text-info font-semibold' : 'opacity-50'">Live</span>
-        </label>
+        <!-- Status filter dropdown (replaces old liveOnly toggle) -->
+        <div class="relative" x-data="{ filterOpen: false }">
+          <button @click="filterOpen = !filterOpen"
+                  class="btn btn-xs"
+                  :class="hasActiveFilters ? 'btn-info' : 'btn-ghost'"
+                  title="Filter by status">
+            <span>Filter</span>
+            <span x-show="hasActiveFilters" class="badge badge-xs badge-neutral" x-text="activeFilterCount"></span>
+          </button>
+          <div x-show="filterOpen" @click.outside="filterOpen = false" x-transition
+               class="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-xl p-2 w-40 border border-base-300"
+               style="background-color: var(--color-base-100, #1d232a)">
+            <label class="flex items-center gap-2 py-1 cursor-pointer hover:bg-base-200 px-1.5 rounded text-sm">
+              <input type="checkbox" class="checkbox checkbox-xs checkbox-info"
+                     :checked="statusFilters.live" @change="statusFilters.live = !statusFilters.live" />
+              <span class="text-blue-400 text-xs">⬤</span> Live
+            </label>
+            <label class="flex items-center gap-2 py-1 cursor-pointer hover:bg-base-200 px-1.5 rounded text-sm">
+              <input type="checkbox" class="checkbox checkbox-xs checkbox-success"
+                     :checked="statusFilters.sh" @change="statusFilters.sh = !statusFilters.sh" />
+              <span class="text-green-400 text-xs">⬤</span> Terminal
+            </label>
+            <label class="flex items-center gap-2 py-1 cursor-pointer hover:bg-base-200 px-1.5 rounded text-sm">
+              <input type="checkbox" class="checkbox checkbox-xs checkbox-error"
+                     :checked="statusFilters.unread" @change="statusFilters.unread = !statusFilters.unread" />
+              <span class="text-red-500 text-xs">⬤</span> Unread
+            </label>
+          </div>
+        </div>
         <div class="flex-1 text-right text-xs opacity-50 self-center" x-text="visibleSessions.length + ' sessions'"></div>
       </div>
     </div>
@@ -93,9 +127,9 @@
               <div class="flex items-center gap-1.5 px-3 py-1.5 bg-base-300/50 cursor-pointer hover:bg-base-300/80 sticky top-0 z-10 border-b border-base-300">
                 <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-50 transition-transform" :class="collapsedProjects[group.key] && '-rotate-90'">▼</span>
                 <span @click="toggleProjectCollapse(group.key)" class="text-xs font-semibold flex-1" x-text="group.project"></span>
-                <!-- WT-8: "+" dropdown for worktree groups -->
+                <!-- Worktree group hamburger menu -->
                 <div class="relative" x-data="{ wtMenuOpen: false }" @click.stop>
-                  <button @click="wtMenuOpen = !wtMenuOpen" class="btn btn-xs btn-ghost opacity-40 hover:opacity-100 px-1" title="New session or worktree">+</button>
+                  <button @click="wtMenuOpen = !wtMenuOpen" class="btn btn-xs btn-ghost opacity-40 hover:opacity-100 px-1" title="Options">⋮</button>
                   <div x-show="wtMenuOpen" @click.outside="wtMenuOpen = false" x-transition
                        class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
                        style="background-color: var(--color-base-100, #1d232a)">
@@ -103,6 +137,8 @@
                             class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📝 New Session</button>
                     <button @click="openWorktreeModal(group.parentPath, group.project); wtMenuOpen = false"
                             class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🌿 New Worktree</button>
+                    <button @click="markAllReadForScope('worktree', null, group.parentPath); wtMenuOpen = false"
+                            class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">✓ Mark all read</button>
                   </div>
                 </div>
                 <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-40" x-text="group.totalSessions"></span>
@@ -126,10 +162,11 @@
                         <div class="relative" x-data="{ menuOpen: false }" @click.stop>
                           <button @click="menuOpen = !menuOpen" class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
                           <div x-show="menuOpen" @click.outside="menuOpen = false" x-transition
-                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-40 text-sm"
+                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
                                style="background-color: var(--color-base-100, #1d232a)">
                             <button @click="toggleReadState(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50" x-text="s.unread ? 'Mark read' : 'Mark unread'"></button>
                             <button x-show="s.process_type" @click="killSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
+                            <button @click="openInTerminal(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🖥 Open in terminal</button>
                             <button @click="renameSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
                           </div>
                         </div>
@@ -145,7 +182,20 @@
                       <div class="flex items-center gap-1.5 px-3 py-1 bg-base-300/25 cursor-pointer hover:bg-base-300/50 border-b border-base-300/50 ml-3">
                         <span @click="toggleProjectCollapse(group.key + '/' + child.name)" class="text-xs opacity-40 transition-transform" :class="collapsedProjects[group.key + '/' + child.name] && '-rotate-90'">▼</span>
                         <span @click="toggleProjectCollapse(group.key + '/' + child.name)" class="text-xs flex-1 opacity-70" x-text="child.branch || child.name"></span>
-                        <button @click.stop="createSessionForProject(child.cwd)" class="btn btn-xs btn-ghost opacity-30 hover:opacity-100 px-1" title="New session in worktree">+</button>
+                        <!-- Worktree child hamburger -->
+                        <div class="relative" x-data="{ wtChildMenu: false }" @click.stop>
+                          <button @click="wtChildMenu = !wtChildMenu" class="btn btn-xs btn-ghost opacity-30 hover:opacity-100 px-1" title="Options">⋮</button>
+                          <div x-show="wtChildMenu" @click.outside="wtChildMenu = false" x-transition
+                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
+                               style="background-color: var(--color-base-100, #1d232a)">
+                            <button @click="createSessionForProject(child.cwd); wtChildMenu = false"
+                                    class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📝 New Session</button>
+                            <button @click="markAllReadForScope('cwd', child.cwd); wtChildMenu = false"
+                                    class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">✓ Mark all read</button>
+                            <button @click="deleteWorktree(child.cwd, group.parentPath); wtChildMenu = false"
+                                    class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete worktree</button>
+                          </div>
+                        </div>
                         <span @click="toggleProjectCollapse(group.key + '/' + child.name)" class="text-xs opacity-30" x-text="child.sessions.length"></span>
                       </div>
                       <!-- Worktree child sessions -->
@@ -166,10 +216,11 @@
                                 <div class="relative" x-data="{ menuOpen: false }" @click.stop>
                                   <button @click="menuOpen = !menuOpen" class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
                                   <div x-show="menuOpen" @click.outside="menuOpen = false" x-transition
-                                       class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-40 text-sm"
+                                       class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
                                        style="background-color: var(--color-base-100, #1d232a)">
                                     <button @click="toggleReadState(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50" x-text="s.unread ? 'Mark read' : 'Mark unread'"></button>
                                     <button x-show="s.process_type" @click="killSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
+                                    <button @click="openInTerminal(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🖥 Open in terminal</button>
                                     <button @click="renameSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
                                   </div>
                                 </div>
@@ -194,7 +245,18 @@
               <div class="flex items-center gap-1.5 px-3 py-1.5 bg-base-300/50 cursor-pointer hover:bg-base-300/80 sticky top-0 z-10 border-b border-base-300">
                 <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-50 transition-transform" :class="collapsedProjects[group.key] && '-rotate-90'">▼</span>
                 <span @click="toggleProjectCollapse(group.key)" class="text-xs font-semibold flex-1" x-text="group.project"></span>
-                <button @click.stop="createSessionForProject(group.sessions[0]?.cwd)" class="btn btn-xs btn-ghost opacity-40 hover:opacity-100 px-1" title="New session">+</button>
+                <!-- Project hamburger menu -->
+                <div class="relative" x-data="{ projectMenu: false }" @click.stop>
+                  <button @click="projectMenu = !projectMenu" class="btn btn-xs btn-ghost opacity-40 hover:opacity-100 px-1" title="Options">⋮</button>
+                  <div x-show="projectMenu" @click.outside="projectMenu = false" x-transition
+                       class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
+                       style="background-color: var(--color-base-100, #1d232a)">
+                    <button @click="createSessionForProject(group.sessions[0]?.cwd); projectMenu = false"
+                            class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📝 New Session</button>
+                    <button @click="markAllReadForScope('cwd', group.sessions[0]?.cwd); projectMenu = false"
+                            class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">✓ Mark all read</button>
+                  </div>
+                </div>
                 <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-40" x-text="group.sessions.length"></span>
               </div>
               <!-- Sessions in group -->
@@ -218,7 +280,7 @@
                                   class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 text-xs px-1 transition-opacity"
                                   title="Session options">⋮</button>
                           <div x-show="menuOpen" @click.outside="menuOpen = false" x-transition
-                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-40 text-sm"
+                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
                                style="background-color: var(--color-base-100, #1d232a)">
                             <button @click="toggleReadState(s); menuOpen = false"
                                     class="w-full text-left px-3 py-1.5 hover:bg-base-300/50"
@@ -226,6 +288,8 @@
                             <button x-show="s.process_type === 'tmux' || s.process_type === 'sh'"
                                     @click="killSession(s); menuOpen = false"
                                     class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
+                            <button @click="openInTerminal(s); menuOpen = false"
+                                    class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🖥 Open in terminal</button>
                             <button @click="renameSession(s); menuOpen = false"
                                     class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
                           </div>
@@ -296,6 +360,8 @@
                       x-text="t.icon"></button>
             </template>
           </div>
+          <!-- Open in terminal button -->
+          <button @click="openInTerminal()" class="btn btn-xs btn-ghost" title="Open in terminal">🖥</button>
           <button x-show="selected.process_type === 'tmux'" @click="stopAgent()"
                   class="btn btn-xs btn-error btn-outline" title="Stop">⏹</button>
         </div>
@@ -320,57 +386,109 @@
               </template>
               <!-- Tool-use -->
               <template x-if="msg.type === 'tool-use' && modeFor('tool-use') !== 'hidden'">
-                <details :open="modeFor('tool-use') === 'expanded'" class="bg-yellow-900/10 rounded-lg my-1 group border-l-2 border-yellow-500/40 ml-2">
-                  <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-yellow-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
-                    <span class="transition-transform group-open:rotate-90">▶</span>
-                    <span class="text-yellow-400 font-bold">🔧 Tool Call</span>
-                    <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
-                  </summary>
-                  <div class="px-3 pb-2 border-t border-yellow-500/20">
-                    <div class="msg-content text-xs mt-2 text-yellow-100/80" x-html="renderMarkdown(msg.content)"></div>
+                <div class="group/msg relative">
+                  <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                      <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
+                      <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
+                    </div>
                   </div>
-                </details>
+                  <details :open="modeFor('tool-use') === 'expanded'" class="bg-yellow-900/10 rounded-lg my-1 group border-l-2 border-yellow-500/40 ml-2">
+                    <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-yellow-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                      <span class="transition-transform group-open:rotate-90">▶</span>
+                      <span class="text-yellow-400 font-bold">🔧 Tool Call</span>
+                      <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
+                    </summary>
+                    <div class="px-3 pb-2 border-t border-yellow-500/20">
+                      <div class="msg-content text-xs mt-2 text-yellow-100/80" x-html="renderMarkdown(msg.content)"></div>
+                    </div>
+                  </details>
+                </div>
               </template>
               <!-- Tool-result -->
               <template x-if="msg.type === 'tool-result' && modeFor('tool-result') !== 'hidden'">
-                <details :open="modeFor('tool-result') === 'expanded'" class="bg-blue-900/10 rounded-lg my-1 group border-l-2 border-blue-400/40 ml-2">
-                  <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-blue-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
-                    <span class="transition-transform group-open:rotate-90">▶</span>
-                    <span class="text-blue-400 font-bold">📋 Result</span>
-                    <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
-                  </summary>
-                  <div class="px-3 pb-2 border-t border-blue-400/20">
-                    <pre class="text-xs mt-2 whitespace-pre-wrap break-words font-mono text-blue-100/70" x-text="cleanToolResult(msg.content)"></pre>
+                <div class="group/msg relative">
+                  <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                      <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
+                      <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
+                    </div>
                   </div>
-                </details>
+                  <details :open="modeFor('tool-result') === 'expanded'" class="bg-blue-900/10 rounded-lg my-1 group border-l-2 border-blue-400/40 ml-2">
+                    <summary class="flex items-center gap-2 px-3 py-2 text-xs font-mono cursor-pointer select-none hover:bg-blue-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                      <span class="transition-transform group-open:rotate-90">▶</span>
+                      <span class="text-blue-400 font-bold">📋 Result</span>
+                      <span class="opacity-50 truncate" x-text="toolPreview(msg.content)"></span>
+                    </summary>
+                    <div class="px-3 pb-2 border-t border-blue-400/20">
+                      <pre class="text-xs mt-2 whitespace-pre-wrap break-words font-mono text-blue-100/70" x-text="cleanToolResult(msg.content)"></pre>
+                    </div>
+                  </details>
+                </div>
               </template>
               <!-- Thinking -->
               <template x-if="msg.type === 'thinking' && modeFor('thinking') !== 'hidden'">
-                <details :open="modeFor('thinking') === 'expanded'" class="bg-purple-900/10 rounded-lg my-1 group border-l-2 border-purple-400/40">
-                  <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-purple-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
-                    <span class="transition-transform group-open:rotate-90">▶</span>
-                    <span class="text-purple-400 font-bold">💭 Thinking</span>
-                    <span class="opacity-50 truncate" x-text="cleanThinking(msg.content).substring(0, 80) + '…'"></span>
-                  </summary>
-                  <div class="px-3 pb-2 border-t border-purple-400/20">
-                    <div class="msg-content text-sm mt-2 text-purple-200/70" x-html="renderMarkdown(cleanThinking(msg.content))"></div>
+                <div class="group/msg relative">
+                  <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                      <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
+                      <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
+                    </div>
                   </div>
-                </details>
+                  <details :open="modeFor('thinking') === 'expanded'" class="bg-purple-900/10 rounded-lg my-1 group border-l-2 border-purple-400/40">
+                    <summary class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer select-none hover:bg-purple-900/20 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                      <span class="transition-transform group-open:rotate-90">▶</span>
+                      <span class="text-purple-400 font-bold">💭 Thinking</span>
+                      <span class="opacity-50 truncate" x-text="cleanThinking(msg.content).substring(0, 80) + '…'"></span>
+                    </summary>
+                    <div class="px-3 pb-2 border-t border-purple-400/20">
+                      <div class="msg-content text-sm mt-2 text-purple-200/70" x-html="renderMarkdown(cleanThinking(msg.content))"></div>
+                    </div>
+                  </details>
+                </div>
               </template>
               <!-- Compaction -->
               <template x-if="msg.type === 'compaction' && modeFor('compaction') !== 'hidden'">
-                <div class="bg-accent/10 border border-accent/20 rounded-lg my-2 px-4 py-3">
-                  <div class="text-xs font-semibold text-accent mb-2">📦 Compaction Summary</div>
-                  <div class="msg-content text-sm" x-html="renderMarkdown(msg.content)"></div>
+                <div class="group/msg relative">
+                  <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                      <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
+                      <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
+                    </div>
+                  </div>
+                  <div class="bg-accent/10 border border-accent/20 rounded-lg my-2 px-4 py-3">
+                    <div class="text-xs font-semibold text-accent mb-2">📦 Compaction Summary</div>
+                    <div class="msg-content text-sm" x-html="renderMarkdown(msg.content)"></div>
+                  </div>
                 </div>
               </template>
               <!-- Diagnostic -->
               <template x-if="msg.type === 'diagnostic' && modeFor('diagnostic') !== 'hidden'">
-                <div class="text-xs opacity-40 font-mono px-2 py-1" x-text="msg.content.substring(0, 200)"></div>
+                <div class="group/msg relative">
+                  <div class="absolute top-0 right-0 z-10" x-data="{m:false}" @click.stop>
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                      <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
+                      <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
+                    </div>
+                  </div>
+                  <div class="text-xs opacity-40 font-mono px-2 py-1" x-text="msg.content.substring(0, 200)"></div>
+                </div>
               </template>
               <!-- User -->
               <template x-if="msg.type === 'user'">
-                <div class="my-2">
+                <div class="my-2 group/msg relative">
+                  <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                      <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
+                      <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
+                    </div>
+                  </div>
                   <div class="font-bold text-cyan-400 text-sm mb-1">You:</div>
                   <div class="chat chat-end">
                     <div class="chat-bubble chat-bubble-primary">
@@ -381,7 +499,14 @@
               </template>
               <!-- Assistant -->
               <template x-if="msg.type === 'assistant'">
-                <div class="my-2">
+                <div class="my-2 group/msg relative">
+                  <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                      <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
+                      <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
+                    </div>
+                  </div>
                   <div class="font-bold text-green-400 text-sm mb-1">Clyde:</div>
                   <div class="chat chat-start">
                     <div class="chat-bubble chat-bubble-neutral max-w-4xl">
@@ -404,9 +529,11 @@
             <input type="file" class="hidden" x-ref="fileInput" @change="handleFileUpload($event)" multiple />
             <button @click="$refs.fileInput.click()" class="btn btn-ghost btn-sm self-end px-2" title="Upload file" :disabled="!selected || sending">📎</button>
             <textarea x-model="replyText" @keydown.meta.enter="sendReply()" @keydown.ctrl.enter="sendReply()"
-                      @input="saveDraft()"
-                      placeholder="Send a message… (⌘+Enter)" class="textarea textarea-bordered flex-1 min-h-[3rem] max-h-32 text-sm"
-                      :disabled="sending" rows="2"></textarea>
+                      @input="saveDraft(); autoResize($event.target)"
+                      placeholder="Send a message… (⌘+Enter)" class="textarea textarea-bordered flex-1 min-h-[3rem] text-sm"
+                      style="max-height: 50vh; overflow-y: auto;"
+                      :disabled="sending" rows="2"
+                      x-ref="replyTextarea"></textarea>
             <button @click="sendReply()" class="btn btn-primary self-end" :disabled="!replyText.trim() || sending">
               <span x-show="!sending">Send</span>
               <span x-show="sending" class="loading loading-spinner loading-sm"></span>
@@ -416,6 +543,11 @@
         </div>
       </div>
     </template>
+  </div>
+
+  <!-- Toast notification -->
+  <div x-show="toast" x-transition class="fixed bottom-6 right-6 z-50 toast-anim">
+    <div class="bg-base-100 border border-base-300 rounded-lg shadow-xl px-4 py-2 text-sm" x-text="toast"></div>
   </div>
 
   <!-- Takeover confirmation modal -->
@@ -477,10 +609,13 @@ function sessionViewer() {
     search: '',
     sortBy: 'recent',
     filterDays: '30',
-    liveOnly: false,
+    // Status filters (replaces old liveOnly toggle)
+    statusFilters: { live: false, sh: false, unread: false },
     hiddenProjects: {},
     collapsedProjects: {},
-    
+    toast: '',
+    _toastTimer: null,
+
     replyText: '', sending: false, sendError: '',
     pollTimer: null, statusTimer: null,
     lastFilename: '', hasOlder: false, loadingOlder: false,
@@ -501,6 +636,12 @@ function sessionViewer() {
       setInterval(() => this.loadWorktreeProjects(), 60000);
     },
 
+    showToast(msg) {
+      this.toast = msg;
+      if (this._toastTimer) clearTimeout(this._toastTimer);
+      this._toastTimer = setTimeout(() => { this.toast = ''; }, 2000);
+    },
+
     async loadSessions() {
       this.loading = true;
       try {
@@ -512,11 +653,8 @@ function sessionViewer() {
         for (const ns of newSessions) {
           const prev = this.sessions.find(s => s.id === ns.id && s.cwd === ns.cwd);
           if (prev && prev.busy && !ns.busy) {
-            // Agent was busy, now idle (showing "You: " prompt) → mark unread
-            // But only if we're not currently viewing this session
             if (!(this.selected?.id === ns.id && this.selected?.cwd === ns.cwd)) {
               ns.unread = true;
-              // Persist to backend
               fetch(`/api/sessions/${encodeURIComponent(ns.id)}?cwd=${encodeURIComponent(ns.cwd)}`, {
                 method: 'PATCH', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ read: false })
@@ -534,14 +672,30 @@ function sessionViewer() {
       this.loading = false;
     },
 
+    // ── Status filter helpers ──
+    get hasActiveFilters() {
+      return this.statusFilters.live || this.statusFilters.sh || this.statusFilters.unread;
+    },
+    get activeFilterCount() {
+      return [this.statusFilters.live, this.statusFilters.sh, this.statusFilters.unread].filter(Boolean).length;
+    },
+
     get allProjects() {
-      return [...new Set(this.sessions.map(s => s.project))].sort();
+      // For worktree sessions, group by parent name; otherwise by project name
+      return [...new Set(this.sessions.map(s => s.worktree_parent_name || s.project))].sort();
     },
 
     get visibleSessions() {
-      let list = this.sessions.filter(s => !this.hiddenProjects[s.project]);
-      if (this.liveOnly) {
-        list = list.filter(s => s.process_type === 'tmux' || s.process_type === 'sh');
+      // Filter by project visibility (use worktree parent name for worktree sessions)
+      let list = this.sessions.filter(s => !this.hiddenProjects[s.worktree_parent_name || s.project]);
+      // Status filters (union semantics: show if ANY selected filter matches)
+      if (this.hasActiveFilters) {
+        list = list.filter(s => {
+          if (this.statusFilters.live && s.process_type === 'tmux') return true;
+          if (this.statusFilters.sh && s.process_type === 'sh') return true;
+          if (this.statusFilters.unread && s.unread) return true;
+          return false;
+        });
       }
       if (this.search) {
         const q = this.search.toLowerCase();
@@ -560,11 +714,10 @@ function sessionViewer() {
 
     get groupedSessions() {
       const normalGroups = {};
-      const worktreeGroups = {};  // parentName → { ... }
+      const worktreeGroups = {};
 
       for (const s of this.visibleSessions) {
         if (s.worktree_parent_name) {
-          // This session belongs to a worktree group
           const wpn = s.worktree_parent_name;
           if (!worktreeGroups[wpn]) {
             worktreeGroups[wpn] = {
@@ -591,15 +744,13 @@ function sessionViewer() {
             wg.childMap[childKey].sessions.push(s);
           }
         } else {
-          // Normal project
           if (!normalGroups[s.project]) normalGroups[s.project] = { latest: '', sessions: [] };
           normalGroups[s.project].sessions.push(s);
           if ((s.last_modified || '') > normalGroups[s.project].latest) normalGroups[s.project].latest = s.last_modified || '';
         }
       }
 
-      // Also discover worktree children with 0 sessions from the projects API (loaded async)
-      // We handle this by checking _worktreeProjects cache
+      // Also discover worktree children with 0 sessions from the projects API
       if (this._worktreeProjects) {
         for (const p of this._worktreeProjects) {
           if (p.parent_name && p.worktrees) {
@@ -628,7 +779,6 @@ function sessionViewer() {
         }
       }
 
-      // Convert worktree groups: childMap → children array
       const result = [];
       for (const wpn of Object.keys(worktreeGroups)) {
         const wg = worktreeGroups[wpn];
@@ -637,7 +787,6 @@ function sessionViewer() {
         result.push(wg);
       }
 
-      // Add normal groups
       for (const p of Object.keys(normalGroups)) {
         result.push({
           key: p,
@@ -648,7 +797,6 @@ function sessionViewer() {
         });
       }
 
-      // Sort all groups by latest activity
       result.sort((a, b) => (b.latest || '').localeCompare(a.latest || ''));
       return result;
     },
@@ -689,8 +837,13 @@ function sessionViewer() {
       return localStorage.getItem(this._draftKey(s)) || '';
     },
 
+    // ── Textarea auto-resize ──
+    autoResize(el) {
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, window.innerHeight * 0.5) + 'px';
+    },
+
     async selectSession(s) {
-      // Save draft for the session we're leaving
       if (this.selected) this.saveDraft();
       this.selected = s;
       this.messages = [];
@@ -700,7 +853,6 @@ function sessionViewer() {
       this.sendError = '';
       this.replyText = this.loadDraft(s);
       this.editingName = false;
-      // Mark as read
       if (s.unread) {
         s.unread = false;
         fetch(`/api/sessions/${encodeURIComponent(s.id)}?cwd=${encodeURIComponent(s.cwd)}`, {
@@ -710,7 +862,12 @@ function sessionViewer() {
       }
       await this.loadMessages(false);
       this.startPolling();
-      this.$nextTick(() => this.scrollToBottom());
+      this.$nextTick(() => {
+        this.scrollToBottom();
+        // Reset textarea height for new session
+        const ta = this.$refs.replyTextarea;
+        if (ta) { ta.style.height = 'auto'; this.autoResize(ta); }
+      });
     },
 
     startEditName() {
@@ -724,7 +881,6 @@ function sessionViewer() {
       if (!this.selected) return;
       const newName = this.editNameValue.trim();
       this.selected.name = newName;
-      // Update in sessions list too
       const match = this.sessions.find(s => s.id === this.selected.id && s.cwd === this.selected.cwd);
       if (match) match.name = newName;
       await fetch(`/api/sessions/${encodeURIComponent(this.selected.id)}?cwd=${encodeURIComponent(this.selected.cwd)}`, {
@@ -736,7 +892,6 @@ function sessionViewer() {
     async loadMessages(incremental) {
       if (!this.selected) return;
       if (!incremental) this.loadingMsgs = true;
-      // Always load all types — view mode controls display, not fetching
       const types = 'user,assistant,thinking,tool-use,tool-result,compaction,diagnostic';
       let url = `/api/sessions/${encodeURIComponent(this.selected.id)}/messages?cwd=${encodeURIComponent(this.selected.cwd)}&types=${types}`;
       if (incremental && this.lastFilename) url += `&after=${encodeURIComponent(this.lastFilename)}`;
@@ -811,13 +966,12 @@ function sessionViewer() {
       this.typeViewMode[type] = order[(idx + 1) % order.length];
     },
 
-    // Returns the view mode for a given message type
     modeFor(msgType) {
       if (msgType === 'tool-use' || msgType === 'tool-result') return this.typeViewMode.tools || 'collapsed';
       if (msgType === 'thinking') return this.typeViewMode.thinking || 'collapsed';
       if (msgType === 'compaction') return this.typeViewMode.compaction || 'expanded';
       if (msgType === 'diagnostic') return this.typeViewMode.diagnostic || 'hidden';
-      return 'expanded'; // user, assistant always expanded
+      return 'expanded';
     },
 
     async handleFileUpload(event) {
@@ -832,7 +986,6 @@ function sessionViewer() {
           const r = await fetch('/api/upload', { method: 'POST', body: fd });
           const data = await r.json();
           if (r.ok && data.filename) {
-            // Immediately prepend include directive to textarea
             const inc = 'include ./' + data.filename + '\n';
             this.replyText = inc + this.replyText;
             this.saveDraft();
@@ -841,7 +994,6 @@ function sessionViewer() {
           }
         } catch(e) { this.sendError = 'Upload error: ' + e.message; }
       }
-      // Reset file input so the same file can be selected again
       event.target.value = '';
     },
 
@@ -858,7 +1010,6 @@ function sessionViewer() {
         const data = await r.json();
         if (!r.ok) {
           if (data.error === 'terminal_process_running') {
-            // Show takeover confirmation modal
             this.takeoverPid = data.pid;
             this.takeoverTty = data.tty || '?';
             this.takeoverModal = true;
@@ -868,9 +1019,12 @@ function sessionViewer() {
           this.sendError = data.error || 'Send failed';
         } else {
           this.replyText = '';
-          this.saveDraft(); // clear localStorage draft
+          this.saveDraft();
           this.selected.process_type = 'tmux';
           this.agentBusy = true;
+          // Reset textarea height
+          const ta = this.$refs.replyTextarea;
+          if (ta) ta.style.height = 'auto';
           setTimeout(() => this.loadMessages(true), 1500);
         }
       } catch(e) { this.sendError = e.message; }
@@ -886,6 +1040,100 @@ function sessionViewer() {
       this.takeoverModal = false;
       this.takeoverPid = null;
       this.takeoverTty = '';
+    },
+
+    // ── Message actions ──
+    async copyMessage(msg) {
+      try {
+        await navigator.clipboard.writeText(msg.content);
+        this.showToast('Copied to clipboard');
+      } catch(e) {
+        // Fallback for older browsers / non-HTTPS
+        const ta = document.createElement('textarea');
+        ta.value = msg.content;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        this.showToast('Copied to clipboard');
+      }
+    },
+
+    async deleteMessage(msg) {
+      if (!confirm('Delete this message permanently?')) return;
+      if (!this.selected) return;
+      try {
+        const r = await fetch(`/api/sessions/${encodeURIComponent(this.selected.id)}/messages/${encodeURIComponent(msg.filename)}?cwd=${encodeURIComponent(this.selected.cwd)}`, {
+          method: 'DELETE'
+        });
+        const data = await r.json();
+        if (r.ok) {
+          this.messages = this.messages.filter(m => m.filename !== msg.filename);
+          this.showToast('Message deleted');
+        } else {
+          alert(data.error || 'Failed to delete message');
+        }
+      } catch(e) { alert('Error: ' + e.message); }
+    },
+
+    // ── Open in terminal ──
+    async openInTerminal(s) {
+      const session = s || this.selected;
+      if (!session) return;
+      try {
+        const r = await fetch(`/api/sessions/${encodeURIComponent(session.id)}/open-terminal?cwd=${encodeURIComponent(session.cwd)}`, {
+          method: 'POST'
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          alert(data.error || 'Failed to open terminal');
+        }
+      } catch(e) { alert('Error: ' + e.message); }
+    },
+
+    // ── Mark all read ──
+    async markAllReadForScope(scope, cwd, worktreeParent) {
+      try {
+        const body = { scope };
+        if (cwd) body.cwd = cwd;
+        if (worktreeParent) body.worktree_parent = worktreeParent;
+        const r = await fetch('/api/sessions/mark-all-read', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body)
+        });
+        if (r.ok) {
+          for (const s of this.sessions) {
+            let match = false;
+            if (scope === 'all') match = true;
+            else if (scope === 'cwd' && s.cwd === cwd) match = true;
+            else if (scope === 'worktree' && s.worktree_parent === worktreeParent) match = true;
+            if (match) s.unread = false;
+          }
+          const data = await r.json();
+          this.showToast(`Marked ${data.count || 0} session(s) as read`);
+        }
+      } catch(e) { console.error(e); }
+    },
+
+    // ── Delete worktree ──
+    async deleteWorktree(worktreePath, parentPath) {
+      if (!confirm('Delete this worktree? Sessions will be moved to the primary worktree.')) return;
+      try {
+        const r = await fetch('/api/worktrees/delete', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ worktree_path: worktreePath, parent_path: parentPath })
+        });
+        const data = await r.json();
+        if (r.ok) {
+          this.showToast(`Worktree deleted, ${data.moved_sessions} session(s) moved`);
+          await this.loadSessions();
+          await this.loadWorktreeProjects();
+        } else {
+          alert(data.error || 'Failed to delete worktree');
+        }
+      } catch(e) { alert('Error: ' + e.message); }
     },
 
     // ── WT-8/9: Worktree modal ──
@@ -917,7 +1165,6 @@ function sessionViewer() {
         const data = await r.json();
         if (r.ok) {
           this.closeWorktreeModal();
-          // Wait for rescan then reload
           setTimeout(async () => {
             await this.loadSessions();
             await this.loadWorktreeProjects();
@@ -931,7 +1178,6 @@ function sessionViewer() {
       this.worktreeCreating = false;
     },
 
-    // Cache worktree project info for sidebar rendering
     _worktreeProjects: null,
     async loadWorktreeProjects() {
       try {
@@ -973,7 +1219,7 @@ function sessionViewer() {
 
     renameSession(s) {
       const newName = prompt('Rename session:', s.name || '');
-      if (newName === null) return; // cancelled
+      if (newName === null) return;
       s.name = newName.trim();
       if (this.selected?.id === s.id && this.selected?.cwd === s.cwd) {
         this.selected.name = s.name;
@@ -1018,8 +1264,6 @@ function sessionViewer() {
 
     get displayMessages() {
       const result = [];
-      // Group consecutive messages of the same normalized type that are 'hidden'
-      // into per-type-run summary lines
       let runType = null;
       let runCount = 0;
       let runFile = null;
@@ -1035,6 +1279,10 @@ function sessionViewer() {
       };
 
       for (const msg of this.messages) {
+        // Truly hidden diagnostics: completely invisible, no summary, no chain interruption
+        if (msg.type === 'diagnostic' && this.modeFor('diagnostic') === 'hidden') {
+          continue;
+        }
         if (msg.type === 'user' || msg.type === 'assistant') {
           flushRun();
           result.push(msg);

@@ -289,6 +289,10 @@ func setupEcho() *echo.Echo {
 	api.POST("/upload", uploadFile)
 	api.GET("/projects", getProjects)
 	api.POST("/worktrees", createWorktree)
+	api.POST("/worktrees/delete", deleteWorktreeHandler)
+	api.DELETE("/sessions/:id/messages/:filename", deleteSessionMessage)
+	api.POST("/sessions/mark-all-read", markAllRead)
+	api.POST("/sessions/:id/open-terminal", openInTerminal)
 	api.GET("/preferences", func(c echo.Context) error {
 		cacheMu.RLock()
 		defer cacheMu.RUnlock()
