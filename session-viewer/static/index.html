@@ -439,7 +439,7 @@
 
   <!-- WT-9: Worktree creation modal -->
   <div x-show="worktreeModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @keydown.escape.window="closeWorktreeModal()">
-    <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full mx-4 p-6" @click.outside="closeWorktreeModal()">
+    <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full mx-4 p-6" style="background-color: var(--color-base-100);" @click.outside="closeWorktreeModal()">
       <div class="text-lg font-bold mb-4">🌿 New Worktree</div>
       <div class="space-y-3">
         <div>

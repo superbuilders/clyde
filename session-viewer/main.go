@@ -1345,10 +1345,19 @@ func createSession(c echo.Context) error {
 	if body.CWD == home {
 		project = "~"
 	}
+	// WT: Detect worktree group so the session is grouped correctly from the start
+	wtParent := ""
+	wtParentName := ""
+	if group := detectWorktreeGroup(body.CWD); group != nil {
+		wtParent = group.ParentDir
+		wtParentName = group.ParentName
+	}
 	cacheMu.Lock()
 	cache.Sessions[key] = &CachedSession{
 		ID: dirName, CWD: body.CWD, Project: project, User: getUsername(),
-		LastModified: time.Now().Format(time.RFC3339),
+		LastModified:       time.Now().Format(time.RFC3339),
+		WorktreeParent:     wtParent,
+		WorktreeParentName: wtParentName,
 	}
 	cacheMu.Unlock()
 	go saveCache()
