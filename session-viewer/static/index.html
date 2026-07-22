@@ -99,7 +99,7 @@
             </template>
           </div>
         </div>
-        <button @click="markAllReadForScope('all')" class="btn btn-xs btn-ghost opacity-60 hover:opacity-100" title="Mark all as read">✓ Read</button>
+        <button @click="markAllReadForScope('all')" class="btn btn-xs btn-ghost opacity-60 hover:opacity-100" title="Mark all as read">✉️</button>
       </div>
     </div>
 
@@ -316,15 +316,8 @@
         <div class="px-4 py-2.5 border-b border-base-300 bg-base-200 flex items-center gap-2">
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2">
-              <!-- Editable session name -->
-              <template x-if="!editingName">
-                <span @dblclick="startEditName()" class="font-bold cursor-pointer" title="Double-click to rename"
-                      x-text="selected.name || selected.project + ' — ' + (selected.preview || selected.id).substring(0, 40)"></span>
-              </template>
-              <template x-if="editingName">
-                <input type="text" x-model="editNameValue" @blur="saveName()" @keydown.enter="saveName()" @keydown.escape="editingName = false"
-                       x-ref="nameInput" class="input input-sm input-bordered font-bold" />
-              </template>
+              <span class="font-bold truncate"
+                    x-text="selected.name || selected.project + ' — ' + (selected.preview || selected.id).substring(0, 40)"></span>
               <span x-show="selected.branch" class="badge badge-sm badge-outline" x-text="selected.branch"></span>
               <span x-show="selected.process_type === 'tmux' && agentBusy" class="badge badge-sm badge-warning animate-pulse">⚡ busy</span>
               <span x-show="selected.process_type === 'tmux' && !agentBusy" class="badge badge-sm badge-info">tmux</span>
@@ -332,24 +325,48 @@
             </div>
             <div class="text-xs opacity-50 truncate" x-text="selected.cwd + ' · ' + selected.id"></div>
           </div>
-          <!-- Per-type view mode toggles -->
-          <div class="flex gap-1 items-center">
-            <template x-for="t in [{key:'thinking',icon:'💭'},{key:'tools',icon:'🔧'},{key:'compaction',icon:'📦'},{key:'diagnostic',icon:'🔬'}]" :key="t.key">
-              <button @click="cycleTypeView(t.key)"
-                      :class="{
-                        'btn-primary': typeViewMode[t.key] === 'expanded',
-                        'btn-soft': typeViewMode[t.key] === 'collapsed',
-                        'btn-ghost opacity-30': typeViewMode[t.key] === 'hidden'
-                      }"
-                      class="btn btn-xs btn-square text-sm"
-                      :title="t.key + ' — ' + typeViewMode[t.key] + ' (click to cycle)'"
-                      x-text="t.icon"></button>
-            </template>
+          <!-- Session hamburger menu -->
+          <div class="relative" x-data="{ topMenu: false }" @click.stop>
+            <button @click="topMenu = !topMenu" class="btn btn-xs btn-ghost" title="Session options">☰</button>
+            <div x-show="topMenu" @click.outside="topMenu = false" x-transition
+                 class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-52 text-sm"
+                 style="background-color: var(--color-base-100, #1d232a)">
+              <!-- Actions -->
+              <button x-show="selected.process_type" @click="stopAgent(); topMenu = false"
+                      class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
+              <button @click="renameSession(selected); topMenu = false"
+                      class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
+              <button @click="openInTerminal(); topMenu = false"
+                      class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Open in terminal</button>
+              <button @click="collapseAll(); topMenu = false"
+                      class="w-full text-left px-3 py-1.5 hover:bg-base-300/50"
+                      x-text="typeViewMode.tools === 'collapsed' && typeViewMode.thinking === 'collapsed' ? 'Expand all' : 'Collapse all'"></button>
+              <!-- Filter section -->
+              <div class="border-t border-base-300 mt-1 pt-1 px-3">
+                <div class="text-xs font-semibold opacity-50 mb-1">Show</div>
+                <label class="flex items-center gap-2 py-0.5 cursor-pointer text-sm">
+                  <input type="checkbox" class="checkbox checkbox-xs"
+                         :checked="typeViewMode.thinking !== 'hidden'" @change="toggleTypeVisibility('thinking')" />
+                  Thinking
+                </label>
+                <label class="flex items-center gap-2 py-0.5 cursor-pointer text-sm">
+                  <input type="checkbox" class="checkbox checkbox-xs"
+                         :checked="typeViewMode.tools !== 'hidden'" @change="toggleTypeVisibility('tools')" />
+                  Tools
+                </label>
+                <label class="flex items-center gap-2 py-0.5 cursor-pointer text-sm">
+                  <input type="checkbox" class="checkbox checkbox-xs"
+                         :checked="typeViewMode.compaction !== 'hidden'" @change="toggleTypeVisibility('compaction')" />
+                  Compaction
+                </label>
+                <label class="flex items-center gap-2 py-0.5 cursor-pointer text-sm mb-1">
+                  <input type="checkbox" class="checkbox checkbox-xs"
+                         :checked="typeViewMode.diagnostic !== 'hidden'" @change="toggleTypeVisibility('diagnostic')" />
+                  Debug
+                </label>
+              </div>
+            </div>
           </div>
-          <!-- Open in terminal button -->
-          <button @click="openInTerminal()" class="btn btn-xs btn-ghost" title="Open in terminal">🖥</button>
-          <button x-show="selected.process_type === 'tmux'" @click="stopAgent()"
-                  class="btn btn-xs btn-error btn-outline" title="Stop">⏹</button>
         </div>
 
         <!-- Messages -->
@@ -949,6 +966,17 @@ function sessionViewer() {
       const cur = this.typeViewMode[type] || 'collapsed';
       const idx = order.indexOf(cur);
       this.typeViewMode[type] = order[(idx + 1) % order.length];
+    },
+
+    toggleTypeVisibility(type) {
+      this.typeViewMode[type] = this.typeViewMode[type] === 'hidden' ? 'collapsed' : 'hidden';
+    },
+
+    collapseAll() {
+      const allCollapsed = this.typeViewMode.tools === 'collapsed' && this.typeViewMode.thinking === 'collapsed';
+      const target = allCollapsed ? 'expanded' : 'collapsed';
+      this.typeViewMode.tools = target;
+      this.typeViewMode.thinking = target;
     },
 
     modeFor(msgType) {
