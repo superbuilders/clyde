@@ -73,11 +73,6 @@
       <input type="text" x-model="search" placeholder="Search…"
              class="input input-sm input-bordered w-full" />
       <div class="flex gap-1.5 items-center">
-        <select x-model="sortBy" class="select select-xs select-bordered">
-          <option value="recent">Recent</option>
-          <option value="messages">Most msgs</option>
-          <option value="unread">Unread first</option>
-        </select>
         <select x-model="filterDays" @change="loadSessions()" class="select select-xs select-bordered">
           <option value="7">7d</option>
           <option value="30">30d</option>
@@ -607,8 +602,7 @@ function sessionViewer() {
     loading: false,
     loadingMsgs: false,
     search: '',
-    sortBy: 'recent',
-    filterDays: '30',
+    filterDays: '7',
     // Status filters (replaces old liveOnly toggle)
     statusFilters: { live: false, sh: false, unread: false },
     hiddenProjects: {},
@@ -707,8 +701,8 @@ function sessionViewer() {
           (s.id || '').toLowerCase().includes(q)
         );
       }
-      if (this.sortBy === 'messages') list.sort((a,b) => b.message_count - a.message_count);
-      else if (this.sortBy === 'unread') list.sort((a,b) => (b.unread?1:0) - (a.unread?1:0) || (b.last_modified||'').localeCompare(a.last_modified||''));
+      // Always sort: unreads first, then by most recent
+      list.sort((a,b) => (b.unread?1:0) - (a.unread?1:0) || (b.last_modified||'').localeCompare(a.last_modified||''));
       return list;
     },
 
