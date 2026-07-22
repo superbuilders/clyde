@@ -44,32 +44,9 @@
     <div class="p-3 border-b border-base-300 space-y-2">
       <div class="flex items-center gap-2">
         <h1 class="text-lg font-bold flex-1">Sessions</h1>
-        <!-- Project visibility popover -->
-        <div class="relative" x-data="{ open: false }">
-          <button @click="open = !open" class="btn btn-xs btn-ghost" title="Filter projects">⚙</button>
-          <div x-show="open" @click.outside="open = false" x-transition
-               class="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-xl p-3 w-56 border border-base-300"
-               style="background-color: var(--color-base-100, #1d232a)">
-            <div class="text-xs font-semibold mb-2 opacity-60">Show projects</div>
-            <template x-for="p in allProjects" :key="p">
-              <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-base-200 px-1 rounded text-sm">
-                <input type="checkbox" class="checkbox checkbox-xs"
-                       :checked="!hiddenProjects[p]"
-                       @change="toggleProjectVisibility(p)" />
-                <span x-text="p"></span>
-              </label>
-            </template>
-            <div class="border-t border-base-300 mt-2 pt-2">
-              <button @click="markAllReadForScope('all'); open = false"
-                      class="w-full text-left text-xs px-1 py-1 hover:bg-base-200 rounded opacity-70 hover:opacity-100">
-                ✓ Mark all as read
-              </button>
-            </div>
-          </div>
-        </div>
         <button class="btn btn-xs btn-ghost" @click="triggerScan()" title="Rescan">⟳</button>
       </div>
-      <!-- Search + sort -->
+      <!-- Search -->
       <input type="text" x-model="search" placeholder="Search…"
              class="input input-sm input-bordered w-full" />
       <div class="flex gap-1.5 items-center">
@@ -79,36 +56,50 @@
           <option value="90">90d</option>
           <option value="0">All</option>
         </select>
-        <!-- Status filter dropdown (replaces old liveOnly toggle) -->
+        <!-- Combined filter dropdown: status + project visibility -->
         <div class="relative" x-data="{ filterOpen: false }">
           <button @click="filterOpen = !filterOpen"
                   class="btn btn-xs"
-                  :class="hasActiveFilters ? 'btn-info' : 'btn-ghost'"
-                  title="Filter by status">
+                  :class="(hasActiveFilters || Object.keys(hiddenProjects).length) ? 'btn-info' : 'btn-ghost'"
+                  title="Filter">
             <span>Filter</span>
-            <span x-show="hasActiveFilters" class="badge badge-xs badge-neutral" x-text="activeFilterCount"></span>
+            <span x-show="hasActiveFilters || Object.keys(hiddenProjects).length"
+                  class="badge badge-xs badge-neutral"
+                  x-text="activeFilterCount + Object.keys(hiddenProjects).length"></span>
           </button>
           <div x-show="filterOpen" @click.outside="filterOpen = false" x-transition
-               class="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-xl p-2 w-40 border border-base-300"
+               class="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-xl p-3 w-56 border border-base-300"
                style="background-color: var(--color-base-100, #1d232a)">
-            <label class="flex items-center gap-2 py-1 cursor-pointer hover:bg-base-200 px-1.5 rounded text-sm">
+            <!-- Status filters -->
+            <div class="text-xs font-semibold mb-1.5 opacity-60">Status</div>
+            <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-base-200 px-1 rounded text-sm">
               <input type="checkbox" class="checkbox checkbox-xs checkbox-info"
                      :checked="statusFilters.live" @change="statusFilters.live = !statusFilters.live" />
               <span class="text-blue-400 text-xs">⬤</span> Live
             </label>
-            <label class="flex items-center gap-2 py-1 cursor-pointer hover:bg-base-200 px-1.5 rounded text-sm">
+            <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-base-200 px-1 rounded text-sm">
               <input type="checkbox" class="checkbox checkbox-xs checkbox-success"
                      :checked="statusFilters.sh" @change="statusFilters.sh = !statusFilters.sh" />
               <span class="text-green-400 text-xs">⬤</span> Terminal
             </label>
-            <label class="flex items-center gap-2 py-1 cursor-pointer hover:bg-base-200 px-1.5 rounded text-sm">
+            <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-base-200 px-1 rounded text-sm">
               <input type="checkbox" class="checkbox checkbox-xs checkbox-error"
                      :checked="statusFilters.unread" @change="statusFilters.unread = !statusFilters.unread" />
               <span class="text-red-500 text-xs">⬤</span> Unread
             </label>
+            <!-- Project visibility -->
+            <div class="text-xs font-semibold mt-3 mb-1.5 opacity-60">Projects</div>
+            <template x-for="p in allProjects" :key="p">
+              <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-base-200 px-1 rounded text-sm">
+                <input type="checkbox" class="checkbox checkbox-xs"
+                       :checked="!hiddenProjects[p]"
+                       @change="toggleProjectVisibility(p)" />
+                <span x-text="p"></span>
+              </label>
+            </template>
           </div>
         </div>
-        <div class="flex-1 text-right text-xs opacity-50 self-center" x-text="visibleSessions.length + ' sessions'"></div>
+        <button @click="markAllReadForScope('all')" class="btn btn-xs btn-ghost opacity-60 hover:opacity-100" title="Mark all as read">✓ Read</button>
       </div>
     </div>
 
