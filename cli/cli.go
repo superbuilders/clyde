@@ -115,10 +115,22 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 	}
 
 
+	// Allow optional overrides for API URL and model ID.
+	// This lets users point at a compatible proxy (e.g. Cloudflare AI Gateway)
+	// without any code changes — just set the env vars in the config file.
+	apiURL := os.Getenv("TS_AGENT_API_URL")
+	if apiURL == "" {
+		apiURL = "https://api.anthropic.com/v1/messages"
+	}
+	modelID := os.Getenv("TS_AGENT_MODEL_ID")
+	if modelID == "" {
+		modelID = "claude-opus-4-6"
+	}
+
 	return agent.Config{
 		APIKey:            apiKey,
-		APIURL:            "https://api.anthropic.com/v1/messages",
-		ModelID:           "claude-opus-4-6",
+		APIURL:            apiURL,
+		ModelID:           modelID,
 		MaxTokens:         64000,
 		ContextWindowSize: 200000, // Claude Opus 4.6 context window
 		ThinkingBudget:    thinkingBudget,
