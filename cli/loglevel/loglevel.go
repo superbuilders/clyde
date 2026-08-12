@@ -9,7 +9,10 @@
 //   - Debug:   Additional harness diagnostics (token counts, latency, etc.).
 package loglevel
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Level represents a verbosity level for Clyde's output.
 type Level int
@@ -42,6 +45,26 @@ func (l Level) String() string {
 		return "debug"
 	default:
 		return fmt.Sprintf("Level(%d)", int(l))
+	}
+}
+
+// FromString parses a log level name string into a Level.
+// Returns the level and true if recognized, or (Normal, false) if not.
+// Matching is case-insensitive.
+func FromString(s string) (Level, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "silent":
+		return Silent, true
+	case "quiet", "q":
+		return Quiet, true
+	case "normal", "n":
+		return Normal, true
+	case "verbose", "v":
+		return Verbose, true
+	case "debug", "d":
+		return Debug, true
+	default:
+		return Normal, false
 	}
 }
 

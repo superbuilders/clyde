@@ -219,12 +219,24 @@ func (r *Reader) ReadLine() (string, error) {
 
 		case keyLeft:
 			if r.activeIdx < len(r.lines) {
-				r.lines[r.activeIdx].moveLeft()
+				if r.lines[r.activeIdx].cursor == 0 && r.multiline && r.activeIdx > 0 {
+					// Cross to end of previous line
+					r.activeIdx--
+					r.lines[r.activeIdx].moveEnd()
+				} else {
+					r.lines[r.activeIdx].moveLeft()
+				}
 			}
 
 		case keyRight:
 			if r.activeIdx < len(r.lines) {
-				r.lines[r.activeIdx].moveRight()
+				if r.lines[r.activeIdx].cursor >= r.lines[r.activeIdx].Len() && r.multiline && r.activeIdx < len(r.lines)-1 {
+					// Cross to start of next line
+					r.activeIdx++
+					r.lines[r.activeIdx].moveHome()
+				} else {
+					r.lines[r.activeIdx].moveRight()
+				}
 			}
 
 		case keyHome:
