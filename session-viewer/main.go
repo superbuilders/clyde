@@ -47,6 +47,9 @@ type CachedSession struct {
 	Preview       string `json:"preview"`
 	Read          bool   `json:"read"`
 	LastReadCount int    `json:"last_read_count"` // message count when last marked read
+
+	WorktreeParent     string `json:"worktree_parent,omitempty"`      // parent folder path, if part of a worktree group
+	WorktreeParentName string `json:"worktree_parent_name,omitempty"` // parent folder basename (for display)
 }
 
 type Preferences struct {
@@ -68,6 +71,9 @@ type SessionResponse struct {
 	Unread       bool   `json:"unread"`
 	ProcessType  string `json:"process_type"` // "sh", "tmux", ""
 	Busy         bool   `json:"busy"`
+
+	WorktreeParent     string `json:"worktree_parent,omitempty"`      // parent folder path
+	WorktreeParentName string `json:"worktree_parent_name,omitempty"` // parent folder basename (for display)
 }
 
 type MessageFile struct {
@@ -78,9 +84,132 @@ type MessageFile struct {
 }
 
 type ProjectInfo struct {
-	Path   string `json:"path"`
-	Name   string `json:"name"`
-	Branch string `json:"branch"`
+	Path            string          `json:"path"`
+	Name            string          `json:"name"`
+	Branch          string          `json:"branch"`
+	IsWorktreeGroup bool            `json:"is_worktree_group,omitempty"`
+	ParentPath      string          `json:"parent_path,omitempty"`
+	ParentName      string          `json:"parent_name,omitempty"`
+	Worktrees       []WorktreeEntry `json:"worktrees,omitempty"`
+}
+
+// ── Worktree types and detection (WT-2) ──
+
+// WorktreeGroup represents a set of sibling git worktrees sharing a parent folder.
+type WorktreeGroup struct {
+	ParentDir  string          // the container folder path
+	ParentName string          // basename of container folder
+	Worktrees  []WorktreeEntry // all worktrees in the group
+}
+
+// WorktreeEntry represents a single git worktree.
+type WorktreeEntry struct {
+	Path   string `json:"path"`   // worktree root path
+	Branch string `json:"branch"` // branch name
+	Name   string `json:"name"`   // basename of worktree dir
+}
+
+// parseWorktreeList parses the output of `git worktree list --porcelain` into entries.
+func parseWorktreeList(output string) []WorktreeEntry {
+	var entries []WorktreeEntry
+	var current *WorktreeEntry
+
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if current != nil {
+				entries = append(entries, *current)
+				current = nil
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "worktree ") {
+			path := strings.TrimPrefix(line, "worktree ")
+			current = &WorktreeEntry{
+				Path: path,
+				Name: filepath.Base(path),
+			}
+		} else if strings.HasPrefix(line, "branch ") && current != nil {
+			branch := strings.TrimPrefix(line, "branch ")
+			// Strip refs/heads/ prefix
+			branch = strings.TrimPrefix(branch, "refs/heads/")
+			current.Branch = branch
+		}
+		// Ignore HEAD, bare, detached, etc.
+	}
+	// Flush last entry if no trailing blank line
+	if current != nil {
+		entries = append(entries, *current)
+	}
+	return entries
+}
+
+// detectWorktreeGroup checks if dir is part of a git worktree group where all
+// worktrees are siblings (same parent directory). Returns nil if not applicable.
+func detectWorktreeGroup(dir string) *WorktreeGroup {
+	// Resolve symlinks for consistent path comparison (macOS /var → /private/var)
+	dir, _ = filepath.EvalSymlinks(dir)
+
+	// Step 1: Is this inside a git repo?
+	gitDirOut, err := exec.Command("git", "-C", dir, "rev-parse", "--git-dir").Output()
+	if err != nil {
+		return nil // not a git repo at all
+	}
+	gitDir := strings.TrimSpace(string(gitDirOut))
+
+	commonDirOut, err := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		return nil
+	}
+	commonDir := strings.TrimSpace(string(commonDirOut))
+
+	// Resolve relative paths against dir
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(dir, gitDir)
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(dir, commonDir)
+	}
+	gitDir = filepath.Clean(gitDir)
+	commonDir = filepath.Clean(commonDir)
+	// Resolve symlinks
+	gitDir, _ = filepath.EvalSymlinks(gitDir)
+	commonDir, _ = filepath.EvalSymlinks(commonDir)
+
+	// Step 2: Get worktree list
+	wtOut, err := exec.Command("git", "-C", dir, "worktree", "list", "--porcelain").Output()
+	if err != nil {
+		return nil
+	}
+	worktrees := parseWorktreeList(string(wtOut))
+	if len(worktrees) <= 1 {
+		return nil // no linked worktrees, normal repo
+	}
+
+	// Resolve symlinks in worktree paths
+	for i := range worktrees {
+		if resolved, err := filepath.EvalSymlinks(worktrees[i].Path); err == nil {
+			worktrees[i].Path = resolved
+			worktrees[i].Name = filepath.Base(resolved)
+		}
+	}
+
+	// Step 3: Check if all worktrees are siblings (same parent dir)
+	// The main worktree root is the parent of commonDir (commonDir points to .git)
+	mainWorktreeRoot := filepath.Dir(commonDir)
+	parentFolder := filepath.Dir(mainWorktreeRoot)
+
+	for _, wt := range worktrees {
+		if filepath.Dir(wt.Path) != parentFolder {
+			return nil // non-sibling layout — don't group
+		}
+	}
+
+	return &WorktreeGroup{
+		ParentDir:  parentFolder,
+		ParentName: filepath.Base(parentFolder),
+		Worktrees:  worktrees,
+	}
 }
 
 type RunningProcess struct {
@@ -422,13 +551,22 @@ func discoverProjectDirs() map[string]bool {
 	home, _ := os.UserHomeDir()
 	s[home] = true
 	cwd, _ := os.Getwd()
+	// Resolve symlinks for consistent path comparison (macOS /tmp → /private/tmp)
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
 	s[cwd] = true
 	for _, d := range []string{filepath.Join(home, "code"), filepath.Join(home, "Downloads")} {
 		out, err := exec.Command("find", d, "-maxdepth", "4", "-name", ".clyde", "-type", "d").Output()
 		if err == nil {
 			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 				if line = strings.TrimSpace(line); line != "" {
-					s[filepath.Dir(line)] = true
+					dir := filepath.Dir(line)
+					// Resolve symlinks for consistent path comparison
+					if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+						dir = resolved
+					}
+					s[dir] = true
 				}
 			}
 		}
@@ -457,7 +595,10 @@ func shellQuote(s string) string {
 }
 
 func getUsername() string {
-	out, err := exec.Command("git", "config", "user.name").Output()
+	// Use --global to avoid picking up a local repo config from the SV's working directory.
+	// The session viewer can be launched from any repo — we want the user's identity,
+	// not whatever local config happens to be in that repo.
+	out, err := exec.Command("git", "config", "--global", "user.name").Output()
 	if err == nil {
 		name := strings.TrimSpace(string(out))
 		if name != "" {
@@ -501,12 +642,54 @@ func backgroundScan() {
 	home, _ := os.UserHomeDir()
 	bc := make(map[string]string)
 
+	// ── WT-2/3/4: Detect worktree groups and expand discovery set ──
+	// Map from dir → *WorktreeGroup for annotation during session scan
+	worktreeGroupForDir := make(map[string]*WorktreeGroup)
+	// Track which commonDirs we've already processed to avoid redundant git calls
+	processedCommonDirs := make(map[string]bool)
+
+	// First pass: detect worktree groups from initially discovered dirs
+	for dir := range cwdSet {
+		group := detectWorktreeGroup(dir)
+		if group == nil {
+			continue
+		}
+		// Deduplicate: compute commonDir key for this group
+		commonDirOut, err := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir").Output()
+		commonKey := dir
+		if err == nil {
+			cd := strings.TrimSpace(string(commonDirOut))
+			if !filepath.IsAbs(cd) {
+				cd = filepath.Join(dir, cd)
+			}
+			commonKey = filepath.Clean(cd)
+		}
+		if processedCommonDirs[commonKey] {
+			// Already found this group from another sibling — just record the mapping
+			worktreeGroupForDir[dir] = group
+			continue
+		}
+		processedCommonDirs[commonKey] = true
+
+		// WT-4: Add ALL worktree paths from the group to the discovery set
+		for _, wt := range group.Worktrees {
+			cwdSet[wt.Path] = true
+			worktreeGroupForDir[wt.Path] = group
+		}
+		// Also add the parent folder to the discovery set
+		cwdSet[group.ParentDir] = true
+		worktreeGroupForDir[group.ParentDir] = group
+	}
+
 	found := make(map[string]bool)
 
 	for dir := range cwdSet {
 		sessDir := filepath.Join(dir, ".clyde", "sessions")
 		entries, err := os.ReadDir(sessDir)
 		if err != nil {
+			// WT-4: If this dir is part of a worktree group but has no .clyde/sessions/,
+			// we still want it discoverable via the API (0 sessions).
+			// It will appear via getProjects; no sessions to add here.
 			continue
 		}
 		project := filepath.Base(dir)
@@ -514,6 +697,14 @@ func backgroundScan() {
 			project = "~"
 		}
 		branch := getBranch(dir, bc)
+
+		// WT-3: Determine worktree parent info for this dir
+		wtParent := ""
+		wtParentName := ""
+		if group, ok := worktreeGroupForDir[dir]; ok {
+			wtParent = group.ParentDir
+			wtParentName = group.ParentName
+		}
 
 		for _, e := range entries {
 			if !e.IsDir() {
@@ -550,6 +741,8 @@ func backgroundScan() {
 				existing.Project = project
 				existing.Branch = branch
 				existing.User = user
+				existing.WorktreeParent = wtParent
+				existing.WorktreeParentName = wtParentName
 				// Note: we do NOT mark sessions unread here based on message count.
 				// The frontend detects busy→idle transitions and marks unread only
 				// when the agent run is fully complete (not on intermediate files).
@@ -558,16 +751,18 @@ func backgroundScan() {
 				}
 			} else {
 				cache.Sessions[key] = &CachedSession{
-					ID:            sid,
-					CWD:           dir,
-					Project:       project,
-					Branch:        branch,
-					User:          user,
-					MessageCount:  len(me),
-					LastModified:  lms,
-					Preview:       getSessionPreview(sp),
-					Read:          true,
-					LastReadCount: len(me),
+					ID:                 sid,
+					CWD:                dir,
+					Project:            project,
+					Branch:             branch,
+					User:               user,
+					MessageCount:       len(me),
+					LastModified:       lms,
+					Preview:            getSessionPreview(sp),
+					Read:               true,
+					LastReadCount:      len(me),
+					WorktreeParent:     wtParent,
+					WorktreeParentName: wtParentName,
 				}
 			}
 			cacheMu.Unlock()
@@ -643,18 +838,20 @@ func getSessions(c echo.Context) error {
 
 		st := statuses[key]
 		result = append(result, SessionResponse{
-			ID:           s.ID,
-			CWD:          s.CWD,
-			Project:      s.Project,
-			Branch:       s.Branch,
-			User:         s.User,
-			Name:         s.Name,
-			MessageCount: s.MessageCount,
-			LastModified: s.LastModified,
-			Preview:      s.Preview,
-			Unread:       !s.Read,
-			ProcessType:  st.processType,
-			Busy:         st.busy,
+			ID:                 s.ID,
+			CWD:                s.CWD,
+			Project:            s.Project,
+			Branch:             s.Branch,
+			User:               s.User,
+			Name:               s.Name,
+			MessageCount:       s.MessageCount,
+			LastModified:       s.LastModified,
+			Preview:            s.Preview,
+			Unread:             !s.Read,
+			ProcessType:        st.processType,
+			Busy:               st.busy,
+			WorktreeParent:     s.WorktreeParent,
+			WorktreeParentName: s.WorktreeParentName,
 		})
 	}
 
@@ -932,19 +1129,148 @@ func getProjects(c echo.Context) error {
 	cwdSet := discoverProjectDirs()
 	home, _ := os.UserHomeDir()
 	bc := make(map[string]string)
-	var projects []ProjectInfo
+
+	// WT-6: Detect worktree groups from discovered dirs
+	type wtGroupInfo struct {
+		group *WorktreeGroup
+	}
+	worktreeGroupForDir := make(map[string]*WorktreeGroup)
+	processedCommonDirs := make(map[string]bool)
+
 	for dir := range cwdSet {
-		if _, err := os.Stat(filepath.Join(dir, ".clyde", "sessions")); os.IsNotExist(err) {
+		group := detectWorktreeGroup(dir)
+		if group == nil {
 			continue
 		}
+		commonDirOut, err := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir").Output()
+		commonKey := dir
+		if err == nil {
+			cd := strings.TrimSpace(string(commonDirOut))
+			if !filepath.IsAbs(cd) {
+				cd = filepath.Join(dir, cd)
+			}
+			commonKey = filepath.Clean(cd)
+		}
+		if processedCommonDirs[commonKey] {
+			worktreeGroupForDir[dir] = group
+			continue
+		}
+		processedCommonDirs[commonKey] = true
+		for _, wt := range group.Worktrees {
+			cwdSet[wt.Path] = true
+			worktreeGroupForDir[wt.Path] = group
+		}
+		cwdSet[group.ParentDir] = true
+		worktreeGroupForDir[group.ParentDir] = group
+	}
+
+	// Track which worktree groups have been fully emitted
+	emittedGroups := make(map[string]bool)
+
+	var projects []ProjectInfo
+	for dir := range cwdSet {
+		hasSessions := true
+		if _, err := os.Stat(filepath.Join(dir, ".clyde", "sessions")); os.IsNotExist(err) {
+			// For worktree group members without .clyde/sessions/, still include them
+			if _, ok := worktreeGroupForDir[dir]; !ok {
+				continue
+			}
+			hasSessions = false
+		}
+		_ = hasSessions
 		name := filepath.Base(dir)
 		if dir == home {
 			name = "~"
 		}
-		projects = append(projects, ProjectInfo{Path: dir, Name: name, Branch: getBranch(dir, bc)})
+		pi := ProjectInfo{Path: dir, Name: name, Branch: getBranch(dir, bc)}
+
+		if group, ok := worktreeGroupForDir[dir]; ok {
+			pi.ParentPath = group.ParentDir
+			pi.ParentName = group.ParentName
+			// Emit full worktree list once per group
+			if !emittedGroups[group.ParentDir] {
+				pi.IsWorktreeGroup = true
+				pi.Worktrees = group.Worktrees
+				emittedGroups[group.ParentDir] = true
+			}
+		}
+
+		projects = append(projects, pi)
 	}
 	sort.Slice(projects, func(i, j int) bool { return projects[i].Name < projects[j].Name })
 	return c.JSON(http.StatusOK, projects)
+}
+
+// ── WT-5: POST /api/worktrees — create a new git worktree ──
+
+func createWorktree(c echo.Context) error {
+	var body struct {
+		ParentPath string `json:"parent_path"`
+		BranchName string `json:"branch_name"`
+	}
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	}
+	if body.ParentPath == "" || body.BranchName == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "parent_path and branch_name are required"})
+	}
+
+	// Validate branch name: no spaces, no .., no ~, no ^, no :, no backslash, no control chars
+	branchInvalid := strings.ContainsAny(body.BranchName, " \t\n~^:\\*?[") || strings.Contains(body.BranchName, "..")
+	if branchInvalid {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid branch name: contains forbidden characters"})
+	}
+
+	// Find an existing git worktree child dir to run commands against
+	gitDir := ""
+	entries, err := os.ReadDir(body.ParentPath)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cannot read parent directory: " + err.Error()})
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		childDir := filepath.Join(body.ParentPath, e.Name())
+		// Check for .git file or directory
+		gitPath := filepath.Join(childDir, ".git")
+		if _, err := os.Stat(gitPath); err == nil {
+			gitDir = childDir
+			break
+		}
+	}
+	if gitDir == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "no git worktree found in parent directory"})
+	}
+
+	// Sanitize directory name: replace "/" with "-" so branch "feature/payments"
+	// creates directory "feature-payments" as a flat sibling (not nested subdirs).
+	// The git branch name is preserved as-is — only the filesystem path changes.
+	dirName := strings.ReplaceAll(body.BranchName, "/", "-")
+
+	// Create the worktree
+	worktreePath := filepath.Join(body.ParentPath, dirName)
+	cmd := exec.Command("git", "-C", gitDir, "worktree", "add", "-b", body.BranchName, worktreePath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		errMsg := strings.TrimSpace(string(output))
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+		return c.JSON(http.StatusConflict, map[string]string{"error": errMsg})
+	}
+
+	// Create .clyde/sessions/ so the viewer discovers it
+	os.MkdirAll(filepath.Join(worktreePath, ".clyde", "sessions"), 0755)
+
+	// Trigger rescan
+	go backgroundScan()
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"status": "ok",
+		"path":   worktreePath,
+		"branch": body.BranchName,
+	})
 }
 
 // uploadFile saves an uploaded file to the project root (session CWD) and returns the filename.
@@ -1019,10 +1345,19 @@ func createSession(c echo.Context) error {
 	if body.CWD == home {
 		project = "~"
 	}
+	// WT: Detect worktree group so the session is grouped correctly from the start
+	wtParent := ""
+	wtParentName := ""
+	if group := detectWorktreeGroup(body.CWD); group != nil {
+		wtParent = group.ParentDir
+		wtParentName = group.ParentName
+	}
 	cacheMu.Lock()
 	cache.Sessions[key] = &CachedSession{
 		ID: dirName, CWD: body.CWD, Project: project, User: getUsername(),
-		LastModified: time.Now().Format(time.RFC3339),
+		LastModified:       time.Now().Format(time.RFC3339),
+		WorktreeParent:     wtParent,
+		WorktreeParentName: wtParentName,
 	}
 	cacheMu.Unlock()
 	go saveCache()
@@ -1033,6 +1368,223 @@ func createSession(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok", "session_id": dirName, "cwd": body.CWD})
+}
+
+// ── Message & session management handlers ──
+
+// deleteSessionMessage hard-deletes a message file from disk.
+// Only allowed for stopped sessions (no tmux or terminal process).
+func deleteSessionMessage(c echo.Context) error {
+	sid := c.Param("id")
+	filename := c.Param("filename")
+	cwd := c.QueryParam("cwd")
+	if sid == "" || filename == "" || cwd == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "id, filename, and cwd required"})
+	}
+
+	// Validate filename (prevent path traversal)
+	if strings.Contains(filename, "/") || strings.Contains(filename, "..") {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid filename"})
+	}
+
+	// Check session is not running
+	tName := tmuxName(sid)
+	if isTmuxRunning(tName) {
+		return c.JSON(http.StatusConflict, map[string]string{"error": "cannot delete messages from a running session"})
+	}
+	if proc := findTerminalProcess(cwd, sid); proc != nil {
+		return c.JSON(http.StatusConflict, map[string]string{"error": "cannot delete messages from a running session"})
+	}
+
+	filePath := filepath.Join(cwd, ".clyde", "sessions", sid, filename)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "message not found"})
+	}
+
+	if err := os.Remove(filePath); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to delete: " + err.Error()})
+	}
+
+	// Update message count in cache
+	key := cacheKey(cwd, sid)
+	cacheMu.Lock()
+	if s := cache.Sessions[key]; s != nil {
+		if s.MessageCount > 0 {
+			s.MessageCount--
+		}
+	}
+	cacheMu.Unlock()
+
+	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// markAllRead marks sessions as read at the given scope.
+func markAllRead(c echo.Context) error {
+	var body struct {
+		Scope          string `json:"scope"`           // "all", "cwd", "worktree"
+		CWD            string `json:"cwd"`             // for scope="cwd"
+		WorktreeParent string `json:"worktree_parent"` // for scope="worktree"
+	}
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
+
+	cacheMu.Lock()
+	count := 0
+	for _, s := range cache.Sessions {
+		if s.Read {
+			continue
+		}
+		switch body.Scope {
+		case "cwd":
+			if s.CWD != body.CWD {
+				continue
+			}
+		case "worktree":
+			if s.WorktreeParent != body.WorktreeParent {
+				continue
+			}
+			// "all" or default: mark everything
+		}
+		s.Read = true
+		s.LastReadCount = s.MessageCount
+		count++
+	}
+	cacheMu.Unlock()
+
+	go saveCache()
+	return c.JSON(http.StatusOK, map[string]interface{}{"status": "ok", "count": count})
+}
+
+// deleteWorktreeHandler deletes a git worktree and moves its sessions to the primary worktree.
+func deleteWorktreeHandler(c echo.Context) error {
+	var body struct {
+		WorktreePath string `json:"worktree_path"`
+		ParentPath   string `json:"parent_path"`
+	}
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
+	if body.WorktreePath == "" || body.ParentPath == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "worktree_path and parent_path required"})
+	}
+
+	// Detect the worktree group
+	group := detectWorktreeGroup(body.WorktreePath)
+	if group == nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "not part of a worktree group"})
+	}
+	if len(group.Worktrees) <= 1 {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cannot delete the last worktree"})
+	}
+
+	// Find the primary worktree (main/master, or first non-deleted)
+	primaryDir := ""
+	for _, wt := range group.Worktrees {
+		if wt.Path == body.WorktreePath {
+			continue
+		}
+		if wt.Branch == "main" || wt.Branch == "master" {
+			primaryDir = wt.Path
+			break
+		}
+	}
+	if primaryDir == "" {
+		for _, wt := range group.Worktrees {
+			if wt.Path != body.WorktreePath {
+				primaryDir = wt.Path
+				break
+			}
+		}
+	}
+	if primaryDir == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "no target worktree to move sessions to"})
+	}
+
+	// Move .clyde/sessions from worktree to primary
+	srcSessions := filepath.Join(body.WorktreePath, ".clyde", "sessions")
+	dstSessions := filepath.Join(primaryDir, ".clyde", "sessions")
+	movedCount := 0
+	if entries, err := os.ReadDir(srcSessions); err == nil {
+		os.MkdirAll(dstSessions, 0755)
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			src := filepath.Join(srcSessions, e.Name())
+			dst := filepath.Join(dstSessions, e.Name())
+			if err := os.Rename(src, dst); err == nil {
+				movedCount++
+				cacheMu.Lock()
+				oldKey := cacheKey(body.WorktreePath, e.Name())
+				newKey := cacheKey(primaryDir, e.Name())
+				if s, ok := cache.Sessions[oldKey]; ok {
+					s.CWD = primaryDir
+					s.Project = filepath.Base(primaryDir)
+					cache.Sessions[newKey] = s
+					delete(cache.Sessions, oldKey)
+				}
+				cacheMu.Unlock()
+			}
+		}
+	}
+
+	// Remove the git worktree
+	cmd := exec.Command("git", "-C", primaryDir, "worktree", "remove", body.WorktreePath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Try force remove
+		cmd = exec.Command("git", "-C", primaryDir, "worktree", "remove", "--force", body.WorktreePath)
+		output, err = cmd.CombinedOutput()
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "failed to remove worktree: " + strings.TrimSpace(string(output)),
+			})
+		}
+	}
+
+	go backgroundScan()
+	go saveCache()
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"status":         "ok",
+		"moved_sessions": movedCount,
+		"moved_to":       primaryDir,
+	})
+}
+
+// openInTerminal opens a macOS Terminal window attached to the tmux session for a clyde session.
+func openInTerminal(c echo.Context) error {
+	sid := c.Param("id")
+	cwd := c.QueryParam("cwd")
+	if sid == "" || cwd == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "id and cwd required"})
+	}
+
+	name := tmuxName(sid)
+
+	// Start tmux session if not running
+	if !isTmuxRunning(name) {
+		if err := startClyde(cwd, sid); err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to start clyde: " + err.Error()})
+		}
+		time.Sleep(500 * time.Millisecond)
+		if !isTmuxRunning(name) {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "tmux session failed to start"})
+		}
+	}
+
+	// Open Terminal.app and attach to the tmux session
+	script := fmt.Sprintf(`tell application "Terminal"
+	activate
+	do script "tmux attach-session -t %s"
+end tell`, name)
+
+	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to open terminal: " + err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"status": "ok", "tmux_session": name})
 }
 
 // ── Main ──
@@ -1056,6 +1608,11 @@ func main() {
 	api.POST("/sessions/new", createSession)
 	api.POST("/upload", uploadFile)
 	api.GET("/projects", getProjects)
+	api.POST("/worktrees", createWorktree)
+	api.POST("/worktrees/delete", deleteWorktreeHandler)
+	api.DELETE("/sessions/:id/messages/:filename", deleteSessionMessage)
+	api.POST("/sessions/mark-all-read", markAllRead)
+	api.POST("/sessions/:id/open-terminal", openInTerminal)
 	api.GET("/preferences", func(c echo.Context) error {
 		cacheMu.RLock()
 		defer cacheMu.RUnlock()

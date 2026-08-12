@@ -595,53 +595,9 @@ func TestListSessions(t *testing.T) {
 	}
 }
 
-// --- Unit Tests: Cross-User Resume ---
-
-// TestCrossUserResume verifies that resuming another user's session
-// copies the directory with provenance.
-func TestCrossUserResume(t *testing.T) {
-	root := t.TempDir()
-
-	// Create maria's session
-	mariaDir := filepath.Join(root, "2026-07-15T10-00-00_maria")
-	os.MkdirAll(mariaDir, 0755)
-	writeFile(t, mariaDir, "2026-07-15T10-00-00.000_user.md", "**You:**\n\nImplement CMP-1\n")
-	writeFile(t, mariaDir, "2026-07-15T10-00-05.000_assistant.md", "**Claude:**\n\nOK\n")
-
-	// AJ resumes Maria's session
-	newDir, err := session.CopyForResume(mariaDir, root, "aj")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify new directory name contains provenance
-	dirName := filepath.Base(newDir)
-	if !strings.Contains(dirName, "_aj_from_") {
-		t.Errorf("Expected provenance in dir name, got %s", dirName)
-	}
-	if !strings.Contains(dirName, "2026-07-15T10-00-00_maria") {
-		t.Errorf("Expected source session ID in dir name, got %s", dirName)
-	}
-
-	// Verify files were copied
-	entries, err := os.ReadDir(newDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 2 {
-		t.Fatalf("Expected 2 copied files, got %d", len(entries))
-	}
-
-	// Verify copied files have same content
-	content, _ := os.ReadFile(filepath.Join(newDir, "2026-07-15T10-00-00.000_user.md"))
-	if !strings.Contains(string(content), "Implement CMP-1") {
-		t.Error("Copied file content mismatch")
-	}
-}
-
 // --- Unit Tests: Find Session ---
 
-// TestFindMostRecentSession verifies finding the most recent session for a user.
+// TestFindMostRecentSession verifies finding the most recent session.
 func TestFindMostRecentSession(t *testing.T) {
 	root := t.TempDir()
 
@@ -649,20 +605,22 @@ func TestFindMostRecentSession(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, "2026-07-15T10-00-00_aj"), 0755)
 	os.MkdirAll(filepath.Join(root, "2026-07-16T14-00-00_maria"), 0755)
 
-	dir, err := session.FindMostRecentSession(root, "aj")
+	// Should return the most recent session regardless of user
+	dir, err := session.FindMostRecentSession(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	expected := filepath.Join(root, "2026-07-15T10-00-00_aj")
+	expected := filepath.Join(root, "2026-07-16T14-00-00_maria")
 	if dir != expected {
 		t.Errorf("Expected %s, got %s", expected, dir)
 	}
 
-	// Test user with no sessions
-	_, err = session.FindMostRecentSession(root, "charlie")
+	// Test empty sessions root
+	emptyRoot := t.TempDir()
+	_, err = session.FindMostRecentSession(emptyRoot)
 	if err == nil {
-		t.Error("Expected error for user with no sessions")
+		t.Error("Expected error for empty sessions root")
 	}
 }
 
@@ -1008,24 +966,6 @@ func TestMessageTypeFromFilename(t *testing.T) {
 	}
 }
 
-// TestSessionOwner verifies session owner extraction.
-func TestSessionOwner(t *testing.T) {
-	tests := []struct {
-		dirName  string
-		expected string
-	}{
-		{"2026-07-14T09-32-00_aj", "aj"},
-		{"2026-07-15T10-00-00_maria", "maria"},
-		{"2026-07-16T09-00-00_aj_from_2026-07-15T10-00-00_maria", "aj"},
-	}
-
-	for _, tt := range tests {
-		result := session.SessionOwner(tt.dirName)
-		if result != tt.expected {
-			t.Errorf("SessionOwner(%q) = %q, want %q", tt.dirName, result, tt.expected)
-		}
-	}
-}
 
 // --- Unit Tests: Agent SetHistory ---
 

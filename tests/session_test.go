@@ -570,6 +570,50 @@ func TestSessionFindSessionsRoot(t *testing.T) {
 	}
 }
 
+// WT-1: findSessionsRoot respects existing .clyde/sessions/ in non-git dir
+func TestWT1_FindSessionsRoot_WithExistingClydeDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Resolve symlinks for macOS /var → /private/var
+	tmpDir, _ = filepath.EvalSymlinks(tmpDir)
+
+	// Create .clyde/sessions/ in the temp dir (not a git repo)
+	sessDir := filepath.Join(tmpDir, ".clyde", "sessions")
+	os.MkdirAll(sessDir, 0755)
+
+	// Save & override cwd
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	root, inGitRepo := session.FindSessionsRoot()
+	if inGitRepo {
+		t.Skip("Test dir unexpectedly inside a git repo")
+	}
+	if root != sessDir {
+		t.Errorf("FindSessionsRoot() = %q, want %q", root, sessDir)
+	}
+}
+
+func TestWT1_FindSessionsRoot_NoClydeDirFallsBackToHome(t *testing.T) {
+	tmpDir := t.TempDir()
+	// No .clyde/sessions/ in tmpDir — should fall back to ~/.clyde/sessions/
+
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	root, inGitRepo := session.FindSessionsRoot()
+	if inGitRepo {
+		t.Skip("Test dir unexpectedly inside a git repo")
+	}
+
+	homeDir, _ := os.UserHomeDir()
+	expected := filepath.Join(homeDir, ".clyde", "sessions")
+	if root != expected {
+		t.Errorf("FindSessionsRoot() = %q, want %q", root, expected)
+	}
+}
+
 // TestSessionGetUsername verifies username detection.
 func TestSessionGetUsername(t *testing.T) {
 	username := session.GetUsername()

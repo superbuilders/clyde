@@ -385,28 +385,9 @@ Compaction is visible in the file listing as a type transition — a `compaction
 - For resume, the latest `*_system.md` file is the compaction context; load it plus all subsequent files. If no `*_system.md` exists, load all files.
 - A session with no compaction events has no `compaction` or `system` files — just `user`, `assistant`, `thinking`, `tool-use`, `tool-result`, and `diagnostic` files.
 
-### Branching
+### Resuming
 
-When resuming from another user's session (or an older session), the entire session directory is copied to a new directory:
-
-```
-# Maria's session
-.clyde/sessions/2026-07-15T10-00-12_maria/
-├── 2026-07-15T10-00-12.000_user.md
-├── ...
-└── 2026-07-15T11-30-45.000_system.md
-
-# AJ resumes from Maria's session → full copy
-.clyde/sessions/2026-07-16T09-00-00_aj_from_2026-07-15T10-00-12_maria/
-├── 2026-07-15T10-00-12.000_user.md     # copied
-├── ...
-├── 2026-07-15T11-30-45.000_system.md   # copied
-└── 2026-07-16T09-00-00.000_user.md     # AJ's continuation
-```
-
-The new directory name encodes the provenance: `<new-start-time>_<user>_from_<source-session-id>`. The copied files are untouched — AJ's new files have later timestamps and naturally sort after the copied ones.
-
-When resuming your own most recent session, no copy is needed — you continue writing new message files to the same directory.
+Any session can be resumed by any user with `--resume <id>`. The session is continued in-place — new message files are appended to the same directory. There is no copying or forking.
 
 ---
 
@@ -645,7 +626,7 @@ These will become user stories in `docs/todos.md` after review:
 
 3. **Terminal output additions**: Tool use IDs on `→` lines. Compaction summary as `**System:**` message. Ensure all meaningful info is in the permanent log (not just the spinner).
 
-4. **Session resume**: `--resume` and `--resume <id>`. Read message files, sort, group by type, reconstruct `a.history` per the reconstruction rules. Handle compaction-based resume (load from latest `system` file). Handle crash recovery (skip malformed last file). Handle cross-user resume (copy + branch).
+4. **Session resume**: `--resume` and `--resume <id>`. Read message files, sort, group by type, reconstruct `a.history` per the reconstruction rules. Handle compaction-based resume (load from latest `system` file). Handle crash recovery (skip malformed last file).
 
 5. **Session listing**: `--sessions` flag. Derive all info from files on disk.
 

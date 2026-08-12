@@ -16,7 +16,7 @@ Agent fixes:
   - clyde keeps taking screenshots with playwright and then commiting them to repositories that it works on - we need to prevent this either in code or in the system prompt
   - **impl:** `RedirectScreenshotPath()` in `agent/mcp/register.go` intercepts `browser_take_screenshot` calls and redirects relative filenames to `.clyde/screenshots/` (added to `.gitignore`). Absolute paths left untouched. Directory auto-created. 6 unit tests in `tests/screenshot_redirect_test.go`.
 
-Session Viewer
+Session Viewer Fixes
 - [x] Save entered text when changing tabs
   - localstorage should be used to preserve text state in the text entry area so tht it persists when it is navigated away from for any reason; it should be scoped to chat though
 - [x] Image input
@@ -41,6 +41,32 @@ Session Viewer
     - mark un/read (toggles read state, uses appropriate verb depending on status)
     - kill (only for running sessions, stops them, kills tmux)
     - rename (presents a popup to rename the session)
+- [x] Copy message
+  - there should be a hamburger menu on each message in the session; one of the options should be "copy message" copies the message content to clipboard (as plaintext/.md)
+  - **impl:** Added hamburger menu on every message type (user, assistant, thinking, tool-use, tool-result, compaction, diagnostic) with "Copy" option. Uses `navigator.clipboard.writeText()` with fallback. Shows toast confirmation.
+- [x] delete message
+  - there should be a hamburger menu on each message in the session; one of the options should be "delete message" which hard deletes from disk; this should only be available for stopped sessions
+  - **impl:** `DELETE /api/sessions/:id/messages/:filename` endpoint validates path traversal, checks session not running (tmux or terminal), removes file from disk, decrements cache count. Delete option only shown when `!selected.process_type`. 4 e2e tests.
+- [x] Filter by all of: live, sh, unread
+  - instead of just a checkbox for 'live' there should be a dropdown (similar to what we have for projects), where i should be able to toggle a filter for 'live' (blue dot), 'sh' (green dot), or unread; non selected should show all, one selected=>just tht one, and multiple selected => the union of selected statuses (NOT intersection)
+  - **impl:** Replaced `liveOnly` toggle with `statusFilters: { live, sh, unread }` multi-checkbox dropdown. Union semantics: no selection=show all, any combo=union of matches. Filter button shows active count badge.
+- [x] Mark all as 'read' button
+  - i should be able to 'mark all as read' from a hambuger/dropdown menu at any context level (worktree, project, or globally)
+  - **impl:** `POST /api/sessions/mark-all-read` with `scope` ("all", "cwd", "worktree"). Added to settings dropdown (global), project hamburger (by CWD), worktree group hamburger (by parent), worktree child hamburger (by CWD). 3 e2e tests.
+- [x] Truly hidden diagnostics
+  - when diagnostic-level messages are hidden they should show up nowhere, they should not even have '3 diagnostics as text' AND - nor should they interrupt chains of other message types (e.g. if a thread has '2 tool calls \n 3 diagnostics \n 3 tool calls' in part of its history, then that *whole* section should just show as '5 tool calls' when tools and diagnostics are hidden and '2 tool calls \n <the actual diagnostic logs> \n 3 tool calls', when tools are hidden and diagnostics unhidden)
+  - **impl:** In `displayMessages`, hidden diagnostics `continue` before any run tracking — they produce no summary and adjacent hidden tool runs merge through them seamlessly.
+- [x] Ability to Delete/archive worktrees
+  - in the hamburger menu for worktrees i should be able to delete them, if i do the .clyde/sessions from that worktree should be moved to the ./clyde/session under main/master (or whatever the primary worktree is)
+  - **impl:** `POST /api/worktrees/delete` moves `.clyde/sessions/` to primary worktree (prefers main/master branch), updates cache, then `git worktree remove`. Confirmation dialog in worktree child hamburger. 3 e2e tests.
+- [x] Unchecking projects does not work if they are worktree based projects
+  - projects with worktrees should respect the project level toggle for visibilty (we don't need a worktree level toggle though)
+  - **impl:** `allProjects` now returns `s.worktree_parent_name || s.project` so worktree sessions group by parent name in the settings dropdown. `visibleSessions` checks `hiddenProjects[s.worktree_parent_name || s.project]`. E2e test verifies preference persistence.
+- [x] "Open in terminal" button => direct to tmux
+  - in the hamburger menu for sessions (both in the sidebar AND in the top right corner of the detail view) there should be an option for 'open in terminal'; if there is a running tmux session we should open a new mac terminal and attach to that session; if there is none, we should create one first 
+  - **impl:** `POST /api/sessions/:id/open-terminal` starts tmux if needed, then opens Terminal.app via osascript `tmux attach-session`. Added to all 3 sidebar session hamburgers + button in detail header bar. Validation e2e test.
+- [x] Multiline text + many chars bug (Reproduce?)
+  - **impl:** Textarea auto-resizes on input via `autoResize()` — dynamically adjusts height up to 50vh. Removed fixed `max-h-32` cap. Height resets on session switch or send.
 
 - Tui fixes
 - [ ] Back cursor movement with multiple lines

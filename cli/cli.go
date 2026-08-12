@@ -668,14 +668,13 @@ func runSessionsMode() {
 // runResumeMode loads a previous session and starts the REPL.
 func runResumeMode(target string, level loglevel.Level, noThink bool) {
 	sessionsRoot, _ := session.FindSessionsRoot()
-	currentUser := session.GetUsername()
 
 	var sessionDir string
 	var err error
 
 	if target == "" {
-		// --resume with no argument: find most recent session for current user
-		sessionDir, err = session.FindMostRecentSession(sessionsRoot, currentUser)
+		// --resume with no argument: find most recent session
+		sessionDir, err = session.FindMostRecentSession(sessionsRoot)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			fmt.Fprintln(os.Stderr, "Use --sessions to list available sessions.")
@@ -687,18 +686,6 @@ func runResumeMode(target string, level loglevel.Level, noThink bool) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			fmt.Fprintln(os.Stderr, "Use --sessions to list available sessions.")
-			os.Exit(1)
-		}
-	}
-
-	// Check if cross-user resume is needed
-	sessionOwner := session.SessionOwner(filepath.Base(sessionDir))
-	if sessionOwner != currentUser {
-		// Cross-user resume: copy directory
-		fmt.Fprintf(os.Stderr, "Branching from %s's session...\n", sessionOwner)
-		sessionDir, err = session.CopyForResume(sessionDir, sessionsRoot, currentUser)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error branching session: %v\n", err)
 			os.Exit(1)
 		}
 	}

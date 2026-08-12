@@ -162,6 +162,11 @@ func FindSessionsRoot() (string, bool) {
 
 // findSessionsRoot determines where sessions should be stored.
 // Returns (path, inGitRepo).
+//
+// Resolution order:
+//  1. git rev-parse --show-toplevel → <repo>/.clyde/sessions/ (inside a git repo)
+//  2. If cwd/.clyde/sessions/ exists on disk → use it (non-git dir with pre-existing sessions)
+//  3. Fallback to ~/.clyde/sessions/
 func findSessionsRoot() (string, bool) {
 	// Try git repo root first
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
@@ -170,6 +175,17 @@ func findSessionsRoot() (string, bool) {
 		repoRoot := strings.TrimSpace(string(output))
 		if repoRoot != "" {
 			return filepath.Join(repoRoot, ".clyde", "sessions"), true
+		}
+	}
+
+	// Check if cwd has a pre-existing .clyde/sessions/ directory.
+	// This handles the worktree parent folder case: the session viewer
+	// creates .clyde/sessions/ there, so the TUI can find it even though
+	// the directory is not a git repo.
+	if cwd, err := os.Getwd(); err == nil {
+		localSessions := filepath.Join(cwd, ".clyde", "sessions")
+		if info, err := os.Stat(localSessions); err == nil && info.IsDir() {
+			return localSessions, false
 		}
 	}
 
