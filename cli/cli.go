@@ -547,6 +547,25 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 			break
 		}
 
+		// Handle /verbosity command — changes verbosity and replays chat
+		if strings.HasPrefix(userInput, "/verbosity") {
+			newLevel, ok := parseVerbosityCommand(userInput)
+			if !ok {
+				fmt.Println("Usage: /verbosity <level>")
+				fmt.Println("Levels: silent, quiet, normal, verbose, debug")
+				continue
+			}
+			level = newLevel
+			// Clear screen and replay entire session at new verbosity
+			fmt.Print("\033[2J\033[H") // clear screen
+			if sess != nil {
+				fmt.Printf("Clyde - AI Coding Agent - Verbosity: %s\n", level)
+				fmt.Println("==========================================================")
+				ReplaySession(sess.Dir, level)
+			}
+			continue
+		}
+
 		response, handleErr := agentInstance.HandleMessage(userInput)
 
 		// Ensure spinner is stopped before printing the response
@@ -893,6 +912,11 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 	fmt.Println("             or end a line with \\ to continue")
 	fmt.Println("==========================================================")
 
+	// Replay session history to terminal (respecting verbosity level)
+	if sess != nil && len(history) > 0 {
+		ReplaySession(sess.Dir, level)
+	}
+
 	// Create rich text input reader
 	homeDir, _ := os.UserHomeDir()
 	historyFile := ""
@@ -938,6 +962,25 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 		if userInput == "exit" || userInput == "quit" {
 			printGoodbye(sess)
 			break
+		}
+
+		// Handle /verbosity command — changes verbosity and replays chat
+		if strings.HasPrefix(userInput, "/verbosity") {
+			newLevel, ok := parseVerbosityCommand(userInput)
+			if !ok {
+				fmt.Println("Usage: /verbosity <level>")
+				fmt.Println("Levels: silent, quiet, normal, verbose, debug")
+				continue
+			}
+			level = newLevel
+			// Clear screen and replay entire session at new verbosity
+			fmt.Print("\033[2J\033[H") // clear screen
+			if sess != nil {
+				fmt.Printf("Clyde - AI Coding Agent - Verbosity: %s\n", level)
+				fmt.Println("==========================================================")
+				ReplaySession(sess.Dir, level)
+			}
+			continue
 		}
 
 		response, handleErr := agentInstance.HandleMessage(userInput)
@@ -1044,6 +1087,22 @@ func readPromptFromStdin() (string, error) {
 		return "", fmt.Errorf("failed to read from stdin: %w", err)
 	}
 	return string(content), nil
+}
+
+// ParseVerbosityCommand parses a "/verbosity <level>" command string.
+// Returns the parsed level and true if valid, or (Normal, false) if not.
+func ParseVerbosityCommand(input string) (loglevel.Level, bool) {
+	return parseVerbosityCommand(input)
+}
+
+// parseVerbosityCommand parses a "/verbosity <level>" command string.
+// Returns the parsed level and true if valid, or (Normal, false) if not.
+func parseVerbosityCommand(input string) (loglevel.Level, bool) {
+	parts := strings.Fields(input)
+	if len(parts) != 2 {
+		return loglevel.Normal, false
+	}
+	return loglevel.FromString(parts[1])
 }
 
 // getConfigPath determines the config file path for the production app

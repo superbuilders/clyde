@@ -69,10 +69,13 @@ Session Viewer Fixes
   - **impl:** Textarea auto-resizes on input via `autoResize()` — dynamically adjusts height up to 50vh. Removed fixed `max-h-32` cap. Height resets on session switch or send.
 
 - Tui fixes
-- [ ] Back cursor movement with multiple lines
+- [x] Back cursor movement with multiple lines
     - when we use multiple lines in the text entry and then go back so far that we go to a previous line, the redraw function appears to "delete" 1 to many lines - that is to say, the last line of output *above* the text entry prompt gets deleted upon every subsequent backcurosr (e.g. type 3 lines, move to the beginning of the 3rd line => works great, press back from the beginning of the 3rd line => moves to end of line 2 and deletes the last output line, press back 5 more times => now we are on the len-5 char of line 2 and the last 6 output lines have been deleted from the terminal)
-- [ ] Redraw chat on -r
+    - **impl:** Left/right arrows now cross line boundaries in multiline mode: left at position 0 wraps to end of previous line; right at end wraps to start of next line (`cli/input/input.go`). The `redraw()` function pre-computes the editing block's total physical rows and clamps the upward cursor movement to prevent overshooting past the block (`cli/input/display.go`). 7 unit tests in `tests/tui_fixes_test.go`.
+- [x] Redraw chat on -r
     - when we resume a chat with -r the entire previous message history shgould be output to the terminal with verbosity level respected
-- [ ] Redraw chat on verbosity change
+    - **impl:** `ReplaySession()` in `cli/replay.go` reads session files chronologically and displays them with verbosity-aware formatting (user/assistant always shown; thinking at Normal+; tool use at Quiet+; tool results at Normal+; diagnostics at Debug). Called automatically in `runREPLModeWithSession()` when history is present. Respects compaction boundaries. 9 unit tests in `tests/tui_fixes_test.go`.
+- [x] Redraw chat on verbosity change
     - just like when we resume a chat, we should be able to use a command to change verbosity in the TUI; it should be imlemented so that "/verbosity <level>" has the same effect as: killing the chat, then calling 'clyde -r' with the new verbosity level passed in (*including* that the entire chat gets reemitted in the new verbosity)
+    - **impl:** `/verbosity <level>` command in both REPL loops (`runREPLMode` and `runREPLModeWithSession`). Parses level via `loglevel.FromString()` (case-insensitive, supports short aliases q/n/v/d). Clears the screen and calls `ReplaySession()` with the new level. `ParseVerbosityCommand()` exported for testing. 6 unit tests in `tests/tui_fixes_test.go`.
 

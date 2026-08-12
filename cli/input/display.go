@@ -22,20 +22,41 @@ func (r *Reader) redraw() {
 
 	var buf []byte
 
-	// Move to the first line of our block (cursorRow is physical rows)
-	if r.cursorRow > 0 {
-		buf = append(buf, fmt.Sprintf("\033[%dA", r.cursorRow)...)
-	}
-	buf = append(buf, '\r')
-
-	// Clear from cursor to end of screen — handles any wrapped content
-	buf = append(buf, "\033[J"...)
-
 	// Determine total logical lines to display (including virtual new-line position)
 	n := len(r.lines)
 	if r.activeIdx >= n {
 		n = r.activeIdx + 1
 	}
+
+	// Pre-compute the editing block's total physical rows so we can clamp
+	// the upward cursor movement. This prevents overshooting past the
+	// editing block if cursorRow is stale (e.g., after terminal resize).
+	prePhysRows := 0
+	for i := 0; i < n; i++ {
+		pp := r.contPrompt
+		if i == 0 {
+			pp = r.prompt
+		}
+		var pc string
+		if i < len(r.lines) {
+			pc = r.lines[i].String()
+		}
+		prePhysRows += physRowCount(visibleLen(pp)+len([]rune(pc)), r.termWidth)
+	}
+	moveUp := r.cursorRow
+	if moveUp >= prePhysRows {
+		moveUp = prePhysRows - 1
+	}
+	if moveUp < 0 {
+		moveUp = 0
+	}
+	if moveUp > 0 {
+		buf = append(buf, fmt.Sprintf("\033[%dA", moveUp)...)
+	}
+	buf = append(buf, '\r')
+
+	// Clear from cursor to end of screen — handles any wrapped content
+	buf = append(buf, "\033[J"...)
 
 	activeRow := min(r.activeIdx, n-1)
 	totalPhysRows := 0
