@@ -29,9 +29,18 @@ type Config struct {
 	MaxTokens int
 	// ContextWindowSize is the model's context window in tokens (for diagnostic display).
 	ContextWindowSize int
-	// ThinkingBudget configures extended thinking. 0 = adaptive (default), >0 = manual budget.
+	// ThinkingBudget is DEPRECATED. It maps to the legacy
+	// thinking.budget_tokens field, which Opus 5 and newer reject with a 400.
+	// It is now translated to an equivalent ThinkingEffort level.
+	// Prefer ThinkingEffort.
 	ThinkingBudget int
-	// NoThink disables extended thinking entirely when true.
+	// ThinkingEffort sets reasoning depth: low | medium | high | xhigh | max.
+	// Empty uses providers.DefaultEffort, which is calibrated to match
+	// Opus 4.6's default thinking volume.
+	ThinkingEffort string
+	// NoThink disables extended thinking entirely when true. This sends
+	// thinking={type:"disabled"} explicitly — omitting the field is not enough
+	// on models that think by default.
 	NoThink bool
 	// BraveSearchAPIKey is the optional Brave Search API key for the web_search tool.
 	BraveSearchAPIKey string
@@ -215,18 +224,28 @@ func New(cfg Config, opts ...AgentOption) *Agent {
 	// Create API client
 	client := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
 
-	// Configure thinking
-	if !cfg.NoThink {
-		thinking := &providers.ThinkingConfig{
-			Type: "adaptive",
+	// Configure thinking.
+	//
+	// Both branches set the thinking field EXPLICITLY. Never leave it unset:
+	// Opus 5 / Sonnet 5 enable thinking by default, so an omitted field means
+	// --no-think silently does nothing.
+	if cfg.NoThink {
+		// nil => client sends {type: "disabled"}
+		client = client.WithThinking(nil)
+	} else {
+		client = client.WithThinking(&providers.ThinkingConfig{
+			Type:    providers.DefaultThinkingType,
+			Display: providers.DefaultThinkingDisplay,
+		})
+		effort := cfg.ThinkingEffort
+		if effort == "" && cfg.ThinkingBudget > 0 {
+			// Legacy budget_tokens -> effort translation, so old configs keep
+			// working instead of hard-failing with a 400 on Opus 5+.
+			effort = providers.EffortForBudget(cfg.ThinkingBudget)
 		}
-		if cfg.ThinkingBudget > 0 {
-			thinking = &providers.ThinkingConfig{
-				Type:         "enabled",
-				BudgetTokens: cfg.ThinkingBudget,
-			}
+		if effort != "" {
+			client = client.WithEffort(effort)
 		}
-		client = client.WithThinking(thinking)
 	}
 
 	// Tool registration is handled by the blank import of agent/tools above,
@@ -354,6 +373,30 @@ type ContentBlock = providers.ContentBlock
 // who should not need to import agent/providers directly.
 type Usage = providers.Usage
 
+// Reasoning effort levels, re-exported from providers so the CLI can validate
+// user input without importing agent/providers directly.
+const (
+	EffortLow    = providers.EffortLow
+	EffortMedium = providers.EffortMedium
+	EffortHigh   = providers.EffortHigh
+	EffortXHigh  = providers.EffortXHigh
+	EffortMax    = providers.EffortMax
+
+	// DefaultEffort is the harness-pinned reasoning depth, calibrated against
+	// Claude Opus 4.6's observed default thinking volume.
+	DefaultEffort = providers.DefaultEffort
+)
+
+// ValidEfforts lists every accepted reasoning effort level.
+var ValidEfforts = providers.ValidEfforts
+
+// IsValidEffort reports whether e is an accepted effort level.
+func IsValidEffort(e string) bool { return providers.IsValidEffort(e) }
+
+// EffortForBudget translates a legacy thinking budget in tokens to the nearest
+// effort level. Used to keep deprecated THINKING_BUDGET_TOKENS configs working.
+func EffortForBudget(budget int) string { return providers.EffortForBudget(budget) }
+
 // LastUsage returns the token usage from the most recent API response.
 // Returns a zero-value Usage if no API call has been made yet.
 func (a *Agent) LastUsage() Usage {
@@ -461,8 +504,20 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 				toolUseBlocks = append(toolUseBlocks, block)
 			case "thinking":
 				// Emit full thinking trace unconditionally
-				if block.Thinking != "" && a.thinkingCallback != nil {
-					a.thinkingCallback(block.Thinking, block.Signature)
+				if block.Thinking != "" {
+					if a.thinkingCallback != nil {
+						a.thinkingCallback(block.Thinking, block.Signature)
+					}
+				} else if block.Signature != "" {
+					// Signed but empty: the model DID think, but the API returned
+					// no text because thinking.display resolved to "omitted".
+					// This must never be silent — it is exactly the failure that
+					// made reasoning vanish when we moved to Opus 5.
+					if a.diagnosticCallback != nil {
+						a.diagnosticCallback("⚠️  Thinking block had no text — " +
+							"thinking.display resolved to \"omitted\" for this model. " +
+							"Reasoning happened but was not returned.")
+					}
 				}
 			case "redacted_thinking":
 				// Redacted thinking — note it via diagnostics
