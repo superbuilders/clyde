@@ -100,6 +100,19 @@ func (b ContentBlock) MarshalJSON() ([]byte, error) {
 			Input: inputVal,
 		})
 	}
+	if b.Type == "thinking" {
+		// For thinking: always include the "thinking" field, even when empty.
+		// The API may return thinking blocks with empty text but a valid
+		// signature; omitting the field on round-trip causes strict
+		// endpoints to reject the request.
+		return json.Marshal(&struct {
+			Alias
+			Thinking string `json:"thinking"` // no omitempty
+		}{
+			Alias:    Alias(b),
+			Thinking: b.Thinking,
+		})
+	}
 	// For all other types: use default serialization (with omitempty on input)
 	return json.Marshal(&struct {
 		Alias
