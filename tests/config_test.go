@@ -10,15 +10,9 @@ import (
 
 // TestConfigLoadFromFile tests loading config from a specific file
 func TestConfigLoadFromFile(t *testing.T) {
-	// Save and clear environment variables
-	oldAPIKey := os.Getenv("TS_AGENT_API_KEY")
-	oldBraveKey := os.Getenv("BRAVE_SEARCH_API_KEY")
-	defer func() {
-		os.Setenv("TS_AGENT_API_KEY", oldAPIKey)
-		os.Setenv("BRAVE_SEARCH_API_KEY", oldBraveKey)
-	}()
-	os.Unsetenv("TS_AGENT_API_KEY")
-	os.Unsetenv("BRAVE_SEARCH_API_KEY")
+	// Clear every config override so an ambient gateway/model setting in the
+	// developer's shell cannot leak into these assertions.
+	clearAgentEnv(t)
 
 	// Create a temporary config file
 	tmpDir := t.TempDir()
@@ -45,15 +39,9 @@ func TestConfigLoadFromFile(t *testing.T) {
 
 // TestConfigFileNotFound tests error when config file doesn't exist
 func TestConfigFileNotFound(t *testing.T) {
-	// Save and clear environment variables
-	oldAPIKey := os.Getenv("TS_AGENT_API_KEY")
-	oldBraveKey := os.Getenv("BRAVE_SEARCH_API_KEY")
-	defer func() {
-		os.Setenv("TS_AGENT_API_KEY", oldAPIKey)
-		os.Setenv("BRAVE_SEARCH_API_KEY", oldBraveKey)
-	}()
-	os.Unsetenv("TS_AGENT_API_KEY")
-	os.Unsetenv("BRAVE_SEARCH_API_KEY")
+	// Clear every config override so an ambient gateway/model setting in the
+	// developer's shell cannot leak into these assertions.
+	clearAgentEnv(t)
 
 	// Try to load non-existent config
 	_, err := config.LoadFromFile("/non/existent/config")
@@ -70,15 +58,9 @@ func TestConfigFileNotFound(t *testing.T) {
 
 // TestConfigMissingAPIKey tests error when API key is missing from config
 func TestConfigMissingAPIKey(t *testing.T) {
-	// Save and clear environment variables
-	oldAPIKey := os.Getenv("TS_AGENT_API_KEY")
-	oldBraveKey := os.Getenv("BRAVE_SEARCH_API_KEY")
-	defer func() {
-		os.Setenv("TS_AGENT_API_KEY", oldAPIKey)
-		os.Setenv("BRAVE_SEARCH_API_KEY", oldBraveKey)
-	}()
-	os.Unsetenv("TS_AGENT_API_KEY")
-	os.Unsetenv("BRAVE_SEARCH_API_KEY")
+	// Clear every config override so an ambient gateway/model setting in the
+	// developer's shell cannot leak into these assertions.
+	clearAgentEnv(t)
 
 	// Create config without TS_AGENT_API_KEY
 	tmpDir := t.TempDir()
@@ -103,15 +85,9 @@ func TestConfigMissingAPIKey(t *testing.T) {
 
 // TestConfigDefaultValues tests that config has proper default values
 func TestConfigDefaultValues(t *testing.T) {
-	// Save and clear environment variables
-	oldAPIKey := os.Getenv("TS_AGENT_API_KEY")
-	oldBraveKey := os.Getenv("BRAVE_SEARCH_API_KEY")
-	defer func() {
-		os.Setenv("TS_AGENT_API_KEY", oldAPIKey)
-		os.Setenv("BRAVE_SEARCH_API_KEY", oldBraveKey)
-	}()
-	os.Unsetenv("TS_AGENT_API_KEY")
-	os.Unsetenv("BRAVE_SEARCH_API_KEY")
+	// Clear every config override so an ambient gateway/model setting in the
+	// developer's shell cannot leak into these assertions.
+	clearAgentEnv(t)
 
 	// Create minimal config with just API key
 	tmpDir := t.TempDir()
@@ -141,15 +117,9 @@ func TestConfigDefaultValues(t *testing.T) {
 
 // TestConfigOptionalBraveKey tests that Brave API key is optional
 func TestConfigOptionalBraveKey(t *testing.T) {
-	// Save and clear environment variables
-	oldAPIKey := os.Getenv("TS_AGENT_API_KEY")
-	oldBraveKey := os.Getenv("BRAVE_SEARCH_API_KEY")
-	defer func() {
-		os.Setenv("TS_AGENT_API_KEY", oldAPIKey)
-		os.Setenv("BRAVE_SEARCH_API_KEY", oldBraveKey)
-	}()
-	os.Unsetenv("TS_AGENT_API_KEY")
-	os.Unsetenv("BRAVE_SEARCH_API_KEY")
+	// Clear every config override so an ambient gateway/model setting in the
+	// developer's shell cannot leak into these assertions.
+	clearAgentEnv(t)
 
 	// Create config without Brave API key
 	tmpDir := t.TempDir()
