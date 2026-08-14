@@ -174,12 +174,16 @@ type ToolChoice struct {
 //
 // Deliberately NOT included, and why:
 //
-//	temperature     Deprecated on Opus 5 — any value other than 1.0 is a hard
-//	                400. Thinking already forces temperature to 1, so omitting
-//	                it is behaviorally identical to the 4.6 default (1.0) while
-//	                staying forward-compatible.
-//	top_p / top_k   Deprecated on Opus 5 (hard 400). Unset on 4.6 by default,
-//	                so omitting matches baseline.
+// These are constrained whenever thinking is enabled or adaptive — which,
+// for us, is always. Verified against Opus 5 through the gateway:
+//
+//	temperature     Must be exactly 1 when thinking is on; any other value is
+//	                a 400 ("`temperature` may only be set to 1 when thinking is
+//	                enabled or in adaptive mode"). 1 is also the 4.6 default,
+//	                so omitting is behaviorally identical and forward-compatible.
+//	top_p           Must be >= 0.95 or unset when thinking is on. Unset on 4.6
+//	                by default, so omitting matches baseline.
+//	top_k           Must be unset when thinking is on — a 400 at any value.
 //	stop_sequences  Baseline is none; the harness relies on stop_reason instead.
 //	service_tier    Left to the account/gateway default so routing policy is
 //	                not hardcoded into the harness.
