@@ -140,9 +140,177 @@ func (a *Agent) Compact() error {
 		newHistory = appendPreservedMessages(newHistory, keptMessages)
 	}
 
+	// Repair tool_use/tool_result pairing. Preservation is index-based, so the
+	// LLM can select a user message full of tool_results whose originating
+	// assistant tool_use message was not selected (or vice versa). The Claude
+	// API rejects any such orphan with:
+	//
+	//	unexpected `tool_use_id` found in `tool_result` blocks
+	//	tool_use ids were found without `tool_result` blocks immediately after
+	//
+	// which would hard-fail every subsequent request in the session.
+	newHistory = sanitizeToolPairs(newHistory)
+
 	a.history = newHistory
 
 	return nil
+}
+
+// orphanToolResultPlaceholder replaces a user message whose every block was a
+// dangling tool_result. Something must remain so user/assistant alternation
+// survives the removal.
+const orphanToolResultPlaceholder = "[System: prior tool results omitted during compaction]"
+
+// synthesizedToolResultText is the stand-in body for a tool_use whose real
+// result was dropped by compaction.
+const synthesizedToolResultText = "[Tool result omitted during compaction — see the compaction summary for the outcome.]"
+
+// contentBlocks normalizes a Message's content into a block slice.
+// Returns ok=false for string (plain text) content.
+func contentBlocks(msg providers.Message) ([]providers.ContentBlock, bool) {
+	blocks, ok := msg.Content.([]providers.ContentBlock)
+	return blocks, ok
+}
+
+// SanitizeToolPairs repairs tool_use/tool_result adjacency in an assembled
+// history. Exported for testing; used internally by Compact().
+func SanitizeToolPairs(msgs []providers.Message) []providers.Message {
+	return sanitizeToolPairs(msgs)
+}
+
+// sanitizeToolPairs enforces the Claude API's tool-block adjacency contract on
+// an assembled history:
+//
+//  1. Every tool_result must reference a tool_use in the immediately preceding
+//     assistant message. Orphans are dropped.
+//  2. Every tool_use must be answered by a tool_result in the immediately
+//     following user message. Missing answers are synthesized as placeholders.
+//
+// The function never drops or reorders messages — only rewrites their content —
+// so the user/assistant alternation established by appendPreservedMessages is
+// left intact.
+func sanitizeToolPairs(msgs []providers.Message) []providers.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+
+	out := make([]providers.Message, len(msgs))
+	copy(out, msgs)
+
+	// Pass 1: drop tool_result blocks with no matching tool_use in the
+	// immediately preceding assistant message.
+	for i := range out {
+		blocks, ok := contentBlocks(out[i])
+		if !ok || out[i].Role != "user" {
+			continue
+		}
+
+		available := map[string]bool{}
+		if i > 0 && out[i-1].Role == "assistant" {
+			if prev, ok := contentBlocks(out[i-1]); ok {
+				for _, b := range prev {
+					if b.Type == "tool_use" && b.ID != "" {
+						available[b.ID] = true
+					}
+				}
+			}
+		}
+
+		kept := make([]providers.ContentBlock, 0, len(blocks))
+		dropped := false
+		for _, b := range blocks {
+			if b.Type == "tool_result" && !available[b.ToolUseID] {
+				dropped = true
+				continue
+			}
+			kept = append(kept, b)
+		}
+		if !dropped {
+			continue
+		}
+		if len(kept) == 0 {
+			out[i].Content = orphanToolResultPlaceholder
+			continue
+		}
+		out[i].Content = kept
+	}
+
+	// Pass 2: synthesize placeholder tool_results for unanswered tool_use blocks.
+	for i := range out {
+		if out[i].Role != "assistant" {
+			continue
+		}
+		blocks, ok := contentBlocks(out[i])
+		if !ok {
+			continue
+		}
+
+		var ids []string
+		for _, b := range blocks {
+			if b.Type == "tool_use" && b.ID != "" {
+				ids = append(ids, b.ID)
+			}
+		}
+		if len(ids) == 0 {
+			continue
+		}
+
+		// A trailing assistant tool_use is the agent mid-turn: the real result
+		// is about to be appended by the tool loop, so leave it alone.
+		if i == len(out)-1 {
+			continue
+		}
+
+		next := out[i+1]
+		nextBlocks, nextHasBlocks := contentBlocks(next)
+
+		answered := map[string]bool{}
+		if next.Role == "user" && nextHasBlocks {
+			for _, b := range nextBlocks {
+				if b.Type == "tool_result" {
+					answered[b.ToolUseID] = true
+				}
+			}
+		}
+
+		var missing []providers.ContentBlock
+		for _, id := range ids {
+			if answered[id] {
+				continue
+			}
+			missing = append(missing, providers.ContentBlock{
+				Type:      "tool_result",
+				ToolUseID: id,
+				Content:   synthesizedToolResultText,
+			})
+		}
+		if len(missing) == 0 {
+			continue
+		}
+
+		switch {
+		case next.Role == "user" && nextHasBlocks:
+			// tool_results must lead the user message.
+			out[i+1].Content = append(missing, nextBlocks...)
+		case next.Role == "user":
+			// Plain-text user message (e.g. an alternation bridge): promote it
+			// to blocks so the results can lead it.
+			text, _ := next.Content.(string)
+			merged := missing
+			if strings.TrimSpace(text) != "" {
+				merged = append(merged, providers.ContentBlock{Type: "text", Text: text})
+			}
+			out[i+1].Content = merged
+		default:
+			// Next message is another assistant — splice in a user message
+			// carrying just the synthesized results.
+			out = append(out, providers.Message{})
+			copy(out[i+2:], out[i+1:])
+			out[i+1] = providers.Message{Role: "user", Content: missing}
+		}
+	}
+
+	return out
 }
 
 // appendPreservedMessages appends preserved messages to history while maintaining

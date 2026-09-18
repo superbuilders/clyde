@@ -1705,3 +1705,726 @@ func startMockCompactionServer(t *testing.T, handler func(body string) string) *
 		}`, responseText)
 	}))
 }
+
+// --- CMP-N: tool_use / tool_result pairing across compaction ---
+
+// assertToolPairsValid enforces the two Claude API adjacency rules that a
+// compacted history must satisfy:
+//
+//	(a) every tool_result references a tool_use in the previous message
+//	(b) every tool_use is answered in the immediately following message
+func assertToolPairsValid(t *testing.T, history []providers.Message) {
+	t.Helper()
+	for i, msg := range history {
+		blocks, ok := msg.Content.([]providers.ContentBlock)
+		if !ok {
+			continue
+		}
+
+		if msg.Role == "user" {
+			prev := map[string]bool{}
+			if i > 0 && history[i-1].Role == "assistant" {
+				if pb, ok := history[i-1].Content.([]providers.ContentBlock); ok {
+					for _, b := range pb {
+						if b.Type == "tool_use" {
+							prev[b.ID] = true
+						}
+					}
+				}
+			}
+			for _, b := range blocks {
+				if b.Type == "tool_result" && !prev[b.ToolUseID] {
+					t.Errorf("messages.%d: orphan tool_result %q (no tool_use in previous message)", i, b.ToolUseID)
+				}
+			}
+			continue
+		}
+
+		answered := map[string]bool{}
+		if i+1 < len(history) && history[i+1].Role == "user" {
+			if nb, ok := history[i+1].Content.([]providers.ContentBlock); ok {
+				for _, b := range nb {
+					if b.Type == "tool_result" {
+						answered[b.ToolUseID] = true
+					}
+				}
+			}
+		}
+		for _, b := range blocks {
+			if b.Type == "tool_use" && !answered[b.ID] {
+				t.Errorf("messages.%d: tool_use %q has no tool_result immediately after", i, b.ID)
+			}
+		}
+	}
+
+	for i := 1; i < len(history); i++ {
+		if history[i].Role == history[i-1].Role {
+			t.Errorf("messages.%d: role %q repeats (alternation broken)", i, history[i].Role)
+		}
+	}
+
+	for i, msg := range history {
+		if blocks, ok := msg.Content.([]providers.ContentBlock); ok && len(blocks) == 0 {
+			t.Errorf("messages.%d: empty content block list", i)
+		}
+		if text, ok := msg.Content.(string); ok && text == "" {
+			t.Errorf("messages.%d: empty text content", i)
+		}
+	}
+}
+
+// TestCompact_NoOrphanToolResults reproduces the aws-bedrock 400:
+//
+//	messages.4.content.0: unexpected `tool_use_id` found in `tool_result` blocks
+//
+// Preservation is index-based, so the triage model can select a tool_result
+// message while skipping the assistant tool_use that produced it. The compacted
+// history must not carry that orphan forward.
+func TestCompact_NoOrphanToolResults(t *testing.T) {
+	// Preserve only the tool_result halves (messages 2 and 6), never the
+	// assistant tool_use messages that precede them.
+	srv := startMockCompactionServer(t, func(body string) string {
+		if strings.Contains(body, "identify tool results") ||
+			strings.Contains(body, "Triage Analysis") {
+			return "## Preserve\n- Message 2: the grep output\n- Message 6: the read output\n"
+		}
+		if strings.Contains(body, "writing a summary") {
+			return "Summary of the work so far."
+		}
+		return "## Current Objective\nFind the bug.\n\n## Preserve\n- Message 2\n- Message 6\n"
+	})
+	defer srv.Close()
+
+	client := providers.NewClient("fake", srv.URL, "m", 1000)
+	a := agent.NewAgent(client, "test", agent.WithContextWindowSize(200000))
+
+	toolUse := func(id, name string) providers.Message {
+		return providers.Message{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "tool_use", ID: id, Name: name, Input: map[string]interface{}{"pattern": "x"}},
+		}}
+	}
+	toolResult := func(id, out string) providers.Message {
+		return providers.Message{Role: "user", Content: []providers.ContentBlock{
+			{Type: "tool_result", ToolUseID: id, Content: out},
+		}}
+	}
+
+	a.SetHistory([]providers.Message{
+		{Role: "user", Content: "Investigate the placement bug."},
+		toolUse("toolu_01X5jktmVqacMViJGpQwYb5c", "grep"),
+		toolResult("toolu_01X5jktmVqacMViJGpQwYb5c", "grep output"),
+		{Role: "assistant", Content: "Found some candidates."},
+		{Role: "user", Content: "Keep going."},
+		toolUse("toolu_02aaaaaaaaaaaaaaaaaaaaaa", "read_file"),
+		toolResult("toolu_02aaaaaaaaaaaaaaaaaaaaaa", "file contents"),
+		{Role: "assistant", Content: "Here is what I found."},
+		{Role: "user", Content: "Continue."},
+		{Role: "assistant", Content: "Working on it."},
+	})
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+
+	assertToolPairsValid(t, a.GetHistory())
+}
+
+// TestCompact_NoOrphanToolUse covers the mirror case: an assistant tool_use is
+// preserved but the user message carrying its result is not.
+func TestCompact_NoOrphanToolUse(t *testing.T) {
+	srv := startMockCompactionServer(t, func(body string) string {
+		if strings.Contains(body, "writing a summary") {
+			return "Summary of the work so far."
+		}
+		return "## Current Objective\nFind the bug.\n\n## Preserve\n- Message 1\n- Message 5\n"
+	})
+	defer srv.Close()
+
+	client := providers.NewClient("fake", srv.URL, "m", 1000)
+	a := agent.NewAgent(client, "test", agent.WithContextWindowSize(200000))
+
+	a.SetHistory([]providers.Message{
+		{Role: "user", Content: "Investigate the placement bug."},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "tool_use", ID: "toolu_aaa", Name: "grep", Input: map[string]interface{}{"pattern": "x"}},
+		}},
+		{Role: "user", Content: []providers.ContentBlock{
+			{Type: "tool_result", ToolUseID: "toolu_aaa", Content: "grep output"},
+		}},
+		{Role: "assistant", Content: "Found some candidates."},
+		{Role: "user", Content: "Keep going."},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "tool_use", ID: "toolu_bbb", Name: "read_file", Input: map[string]interface{}{"path": "x"}},
+		}},
+		{Role: "user", Content: []providers.ContentBlock{
+			{Type: "tool_result", ToolUseID: "toolu_bbb", Content: "file contents"},
+		}},
+		{Role: "assistant", Content: "Here is what I found."},
+		{Role: "user", Content: "Continue."},
+		{Role: "assistant", Content: "Working on it."},
+	})
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+
+	assertToolPairsValid(t, a.GetHistory())
+}
+
+// TestSanitizeToolPairs_KeepsValidPairs verifies the repair pass is a no-op on
+// an already-valid history (no spurious placeholders, no reordering).
+func TestSanitizeToolPairs_KeepsValidPairs(t *testing.T) {
+	srv := startMockCompactionServer(t, func(body string) string {
+		if strings.Contains(body, "writing a summary") {
+			return "Summary."
+		}
+		return "## Current Objective\nGo.\n\n## Preserve\n- Messages 0-1\n"
+	})
+	defer srv.Close()
+
+	client := providers.NewClient("fake", srv.URL, "m", 1000)
+	a := agent.NewAgent(client, "test", agent.WithContextWindowSize(200000))
+
+	a.SetHistory([]providers.Message{
+		{Role: "user", Content: "Mission."},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "tool_use", ID: "toolu_keep", Name: "grep", Input: map[string]interface{}{"pattern": "x"}},
+		}},
+		{Role: "user", Content: []providers.ContentBlock{
+			{Type: "tool_result", ToolUseID: "toolu_keep", Content: "real output"},
+		}},
+		{Role: "assistant", Content: "Done."},
+		{Role: "user", Content: "More."},
+		{Role: "assistant", Content: "Sure."},
+	})
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+
+	history := a.GetHistory()
+	assertToolPairsValid(t, history)
+
+	foundReal := false
+	for _, msg := range history {
+		blocks, ok := msg.Content.([]providers.ContentBlock)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			if b.Type == "tool_result" && b.ToolUseID == "toolu_keep" {
+				if s, _ := b.Content.(string); s == "real output" {
+					foundReal = true
+				} else {
+					t.Errorf("valid tool_result was replaced with %v", b.Content)
+				}
+			}
+		}
+	}
+	if !foundReal {
+		t.Error("preserved tool_use/tool_result pair was lost")
+	}
+}
+
+// TestSanitizeToolPairs_Branches exercises each repair path directly.
+func TestSanitizeToolPairs_Branches(t *testing.T) {
+	use := func(ids ...string) providers.Message {
+		var blocks []providers.ContentBlock
+		for _, id := range ids {
+			blocks = append(blocks, providers.ContentBlock{Type: "tool_use", ID: id, Name: "grep"})
+		}
+		return providers.Message{Role: "assistant", Content: blocks}
+	}
+	res := func(ids ...string) providers.Message {
+		var blocks []providers.ContentBlock
+		for _, id := range ids {
+			blocks = append(blocks, providers.ContentBlock{Type: "tool_result", ToolUseID: id, Content: "out"})
+		}
+		return providers.Message{Role: "user", Content: blocks}
+	}
+
+	subtests := []struct {
+		name string
+		in   []providers.Message
+	}{
+		{
+			name: "orphan tool_result becomes placeholder",
+			in: []providers.Message{
+				{Role: "user", Content: "go"},
+				{Role: "assistant", Content: "sure"},
+				res("toolu_gone"),
+				{Role: "assistant", Content: "done"},
+			},
+		},
+		{
+			name: "partial orphan keeps the valid block",
+			in: []providers.Message{
+				{Role: "user", Content: "go"},
+				use("toolu_a"),
+				res("toolu_a", "toolu_gone"),
+				{Role: "assistant", Content: "done"},
+			},
+		},
+		{
+			name: "unanswered tool_use gets placeholder result",
+			in: []providers.Message{
+				{Role: "user", Content: "go"},
+				use("toolu_a", "toolu_b"),
+				res("toolu_a"),
+				{Role: "assistant", Content: "done"},
+			},
+		},
+		{
+			name: "tool_use followed by plain user text",
+			in: []providers.Message{
+				{Role: "user", Content: "go"},
+				use("toolu_a"),
+				{Role: "user", Content: "[System: continued]"},
+				{Role: "assistant", Content: "done"},
+			},
+		},
+		{
+			name: "tool_use followed by another assistant",
+			in: []providers.Message{
+				{Role: "user", Content: "go"},
+				use("toolu_a"),
+				{Role: "assistant", Content: "done"},
+				{Role: "user", Content: "ok"},
+				{Role: "assistant", Content: "yes"},
+			},
+		},
+	}
+
+	for _, st := range subtests {
+		t.Run(st.name, func(t *testing.T) {
+			assertToolPairsValid(t, agent.SanitizeToolPairs(st.in))
+		})
+	}
+}
+
+// TestSanitizeToolPairs_TrailingToolUseUntouched verifies a mid-turn trailing
+// tool_use is left alone — the agent loop is about to append the real result.
+func TestSanitizeToolPairs_TrailingToolUseUntouched(t *testing.T) {
+	in := []providers.Message{
+		{Role: "user", Content: "go"},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "tool_use", ID: "toolu_pending", Name: "grep"},
+		}},
+	}
+	out := agent.SanitizeToolPairs(in)
+	if len(out) != 2 {
+		t.Fatalf("trailing tool_use should not gain a synthesized result, got %d messages", len(out))
+	}
+}
+
+// --- CMP-ISSUE-1: session-breaking regressions after auto-compaction ---
+//
+// See github.com/superbuilders/clyde#1. Four hypotheses:
+//   H1 thinking blocks survive reassembly with stale signatures
+//   H2 synthetic acks break the thinking/tool-use contract
+//   H3 SanitizeToolPairs is not sufficient over the final assembled history
+//   H4 no degraded fallback when the compaction workflow fails
+
+// assertNoThinkingBlocks fails if any message carries thinking or
+// redacted_thinking blocks. Signatures computed over a pre-compaction prefix
+// are rejected by the API once the prefix changes.
+func assertNoThinkingBlocks(t *testing.T, history []providers.Message) {
+	t.Helper()
+	for i, msg := range history {
+		blocks, ok := msg.Content.([]providers.ContentBlock)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			if b.Type == "thinking" || b.Type == "redacted_thinking" {
+				t.Errorf("message %d (%s) still contains a %q block after compaction", i, msg.Role, b.Type)
+			}
+		}
+	}
+}
+
+// thinkingCompactionServer returns a mock that preserves message 2 (an
+// assistant message containing a thinking block + tool_use).
+func thinkingCompactionServer(t *testing.T, preserve string) *httptest.Server {
+	callCount := 0
+	return startMockCompactionServer(t, func(body string) string {
+		callCount++
+		switch callCount {
+		case 1:
+			return "## Current Objective\nFix the failing test.\n\n## Preserve\n- Message " + preserve + ": pivot"
+		case 2:
+			return "## Preserve\n- Message " + preserve + ": supporting evidence"
+		default:
+			return "Summary of the omitted work."
+		}
+	})
+}
+
+// historyWithThinking builds a realistic extended-thinking history: assistant
+// turns lead with a thinking block, tool_use/tool_result pairs follow.
+func historyWithThinking() []providers.Message {
+	return []providers.Message{
+		{Role: "user", Content: "Fix the failing integration test."},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "thinking", Thinking: "I should read the test first.", Signature: "sig-aaa"},
+			{Type: "text", Text: "Reading the test."},
+			{Type: "tool_use", ID: "toolu_1", Name: "read_file", Input: map[string]interface{}{"path": "x_test.go"}},
+		}},
+		{Role: "user", Content: []providers.ContentBlock{
+			{Type: "tool_result", ToolUseID: "toolu_1", Content: "func TestX(t *testing.T) {...}"},
+		}},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "thinking", Thinking: "The assertion is inverted.", Signature: "sig-bbb"},
+			{Type: "tool_use", ID: "toolu_2", Name: "patch_file", Input: map[string]interface{}{"path": "x_test.go"}},
+		}},
+		{Role: "user", Content: []providers.ContentBlock{
+			{Type: "tool_result", ToolUseID: "toolu_2", Content: "patched"},
+		}},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "redacted_thinking", Data: "encrypted-blob"},
+			{Type: "text", Text: "Patched the assertion."},
+		}},
+		{Role: "user", Content: "Now run the tests."},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "thinking", Thinking: "Running go test.", Signature: "sig-ccc"},
+			{Type: "tool_use", ID: "toolu_3", Name: "run_bash", Input: map[string]interface{}{"command": "go test ./..."}},
+		}},
+		{Role: "user", Content: []providers.ContentBlock{
+			{Type: "tool_result", ToolUseID: "toolu_3", Content: "ok"},
+		}},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "thinking", Thinking: "All green.", Signature: "sig-ddd"},
+			{Type: "text", Text: "Tests pass."},
+		}},
+	}
+}
+
+// TestIssue1_ThinkingStrippedFromPreservedMessages covers H1: preserved
+// messages are re-appended verbatim, retaining thinking blocks whose
+// signatures no longer match the (now rewritten) prefix.
+func TestIssue1_ThinkingStrippedFromPreservedMessages(t *testing.T) {
+	ts := thinkingCompactionServer(t, "1")
+	defer ts.Close()
+
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	a := agent.NewAgent(client, "test", agent.WithContextWindowSize(200000))
+	a.SetHistory(historyWithThinking())
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+	assertNoThinkingBlocks(t, a.GetHistory())
+}
+
+// TestIssue1_ThinkingStrippedFromKeptMessages covers H1 for the kept tail,
+// which is spliced in verbatim and never passes through any serializer.
+func TestIssue1_ThinkingStrippedFromKeptMessages(t *testing.T) {
+	ts := thinkingCompactionServer(t, "0")
+	defer ts.Close()
+
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	a := agent.NewAgent(client, "test", agent.WithContextWindowSize(200000))
+	a.SetHistory(historyWithThinking())
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+	assertNoThinkingBlocks(t, a.GetHistory())
+	assertToolPairsValid(t, a.GetHistory())
+}
+
+// TestIssue1_StripThinkingBlocks exercises the helper directly, including the
+// case where a message consists of nothing but thinking blocks (it must keep a
+// non-empty body so alternation survives).
+func TestIssue1_StripThinkingBlocks(t *testing.T) {
+	in := []providers.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "thinking", Thinking: "hmm", Signature: "sig"},
+			{Type: "text", Text: "hi"},
+		}},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "thinking", Thinking: "only thinking", Signature: "sig"},
+			{Type: "redacted_thinking", Data: "blob"},
+		}},
+	}
+	out := agent.StripThinkingBlocks(in)
+
+	if len(out) != len(in) {
+		t.Fatalf("StripThinkingBlocks changed message count: %d → %d", len(in), len(out))
+	}
+	assertNoThinkingBlocks(t, out)
+
+	blocks, ok := out[1].Content.([]providers.ContentBlock)
+	if !ok || len(blocks) != 1 || blocks[0].Text != "hi" {
+		t.Errorf("surviving text block lost: %#v", out[1].Content)
+	}
+	if agent.MessageText(out[2]) == "" {
+		t.Error("thinking-only message must retain a non-empty placeholder body")
+	}
+
+	// The input must not be mutated in place.
+	if origBlocks, _ := in[1].Content.([]providers.ContentBlock); len(origBlocks) != 2 {
+		t.Error("StripThinkingBlocks mutated its input")
+	}
+}
+
+// TestIssue1_ValidateHistory covers the invariant checker used before handing
+// a compacted history back to the API.
+func TestIssue1_ValidateHistory(t *testing.T) {
+	subtests := []struct {
+		name    string
+		in      []providers.Message
+		wantErr bool
+	}{
+		{
+			name: "clean_history",
+			in: []providers.Message{
+				{Role: "user", Content: "go"},
+				{Role: "assistant", Content: []providers.ContentBlock{
+					{Type: "tool_use", ID: "t1", Name: "ls"},
+				}},
+				{Role: "user", Content: []providers.ContentBlock{
+					{Type: "tool_result", ToolUseID: "t1", Content: "ok"},
+				}},
+				{Role: "assistant", Content: "done"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "orphan_tool_result",
+			in: []providers.Message{
+				{Role: "user", Content: "go"},
+				{Role: "assistant", Content: "sure"},
+				{Role: "user", Content: []providers.ContentBlock{
+					{Type: "tool_result", ToolUseID: "nope", Content: "ok"},
+				}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "unanswered_tool_use_midhistory",
+			in: []providers.Message{
+				{Role: "user", Content: "go"},
+				{Role: "assistant", Content: []providers.ContentBlock{
+					{Type: "tool_use", ID: "t1", Name: "ls"},
+				}},
+				{Role: "user", Content: "never mind"},
+				{Role: "assistant", Content: "ok"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "thinking_block_present",
+			in: []providers.Message{
+				{Role: "user", Content: "go"},
+				{Role: "assistant", Content: []providers.ContentBlock{
+					{Type: "thinking", Thinking: "x", Signature: "s"},
+					{Type: "text", Text: "ok"},
+				}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "consecutive_same_role",
+			in: []providers.Message{
+				{Role: "user", Content: "go"},
+				{Role: "user", Content: "still going"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "tool_result_not_leading",
+			in: []providers.Message{
+				{Role: "user", Content: "go"},
+				{Role: "assistant", Content: []providers.ContentBlock{
+					{Type: "tool_use", ID: "t1", Name: "ls"},
+				}},
+				{Role: "user", Content: []providers.ContentBlock{
+					{Type: "text", Text: "here you go"},
+					{Type: "tool_result", ToolUseID: "t1", Content: "ok"},
+				}},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, st := range subtests {
+		t.Run(st.name, func(t *testing.T) {
+			err := agent.ValidateHistory(st.in)
+			if st.wantErr && err == nil {
+				t.Error("ValidateHistory() = nil, want error")
+			}
+			if !st.wantErr && err != nil {
+				t.Errorf("ValidateHistory() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestIssue1_SanitizeMovesToolResultsToFront covers H3: a preserved user
+// message can carry tool_results after other blocks, which the API rejects.
+func TestIssue1_SanitizeMovesToolResultsToFront(t *testing.T) {
+	in := []providers.Message{
+		{Role: "user", Content: "go"},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "tool_use", ID: "t1", Name: "ls"},
+		}},
+		{Role: "user", Content: []providers.ContentBlock{
+			{Type: "text", Text: "and also do this next"},
+			{Type: "tool_result", ToolUseID: "t1", Content: "ok"},
+		}},
+	}
+	out := agent.SanitizeToolPairs(in)
+	if err := agent.ValidateHistory(out); err != nil {
+		t.Errorf("sanitized history still invalid: %v", err)
+	}
+}
+
+// TestIssue1_SanitizeSpliceOrphanToolUse covers H3: the preserved/kept splice
+// can leave an unanswered tool_use in a non-trailing position followed by a
+// plain-text user message, and a second unanswered tool_use further along.
+func TestIssue1_SanitizeSpliceOrphanToolUse(t *testing.T) {
+	in := []providers.Message{
+		{Role: "user", Content: "mission"},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "tool_use", ID: "t_preserved", Name: "read_file"},
+		}},
+		// splice point: kept tail starts here with a plain user message
+		{Role: "user", Content: "continue please"},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "tool_use", ID: "t_kept", Name: "run_bash"},
+		}},
+		{Role: "user", Content: "and one more thing"},
+		{Role: "assistant", Content: "sure"},
+	}
+	out := agent.SanitizeToolPairs(in)
+	assertToolPairsValid(t, out)
+	if err := agent.ValidateHistory(out); err != nil {
+		t.Errorf("sanitized history still invalid: %v", err)
+	}
+}
+
+// TestIssue1_SanitizeAssistantToolUseFollowedByAssistant covers the splice
+// case that grows the slice: the inserted bridge must not push the final
+// message out of the sanitizer's reach.
+func TestIssue1_SanitizeGrowthDoesNotSkipTail(t *testing.T) {
+	in := []providers.Message{
+		{Role: "user", Content: "mission"},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "tool_use", ID: "t1", Name: "a"},
+		}},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "tool_use", ID: "t2", Name: "b"},
+		}},
+		{Role: "user", Content: "plain text, no results"},
+		{Role: "assistant", Content: "ok"},
+	}
+	out := agent.SanitizeToolPairs(in)
+	assertToolPairsValid(t, out)
+	if err := agent.ValidateHistory(out); err != nil {
+		t.Errorf("sanitized history still invalid: %v", err)
+	}
+}
+
+// TestIssue1_CompactedHistoryIsValid covers H1+H2+H3 end-to-end: whatever the
+// preserve selection, the post-compaction history must satisfy every invariant.
+func TestIssue1_CompactedHistoryIsValid(t *testing.T) {
+	for _, preserve := range []string{"0", "1", "2", "3", "0-4", "1-3"} {
+		t.Run("preserve_"+preserve, func(t *testing.T) {
+			ts := thinkingCompactionServer(t, preserve)
+			defer ts.Close()
+
+			client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+			a := agent.NewAgent(client, "test", agent.WithContextWindowSize(200000))
+			a.SetHistory(historyWithThinking())
+
+			if err := a.Compact(); err != nil {
+				t.Fatalf("Compact() error = %v", err)
+			}
+			if err := agent.ValidateHistory(a.GetHistory()); err != nil {
+				t.Errorf("post-compaction history invalid: %v", err)
+			}
+		})
+	}
+}
+
+// TestIssue1_CompactionFailureDegradesGracefully covers H4: when the workflow's
+// LLM calls fail, the session must degrade (hard truncation) rather than die.
+func TestIssue1_CompactionFailureDegradesGracefully(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"error":{"type":"api_error","message":"boom"}}`)
+	}))
+	defer ts.Close()
+
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	var markers []string
+	a := agent.NewAgent(client, "test",
+		agent.WithContextWindowSize(200000),
+		agent.WithCompactionCallback(func(marker string, summary string) {
+			if marker != "" {
+				markers = append(markers, marker)
+			}
+		}),
+	)
+	original := historyWithThinking()
+	a.SetHistory(original)
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact() should degrade, not error; got %v", err)
+	}
+
+	got := a.GetHistory()
+	if len(got) >= len(original) {
+		t.Errorf("degraded history not truncated: %d messages (was %d)", len(got), len(original))
+	}
+	if len(got) == 0 {
+		t.Fatal("degraded history is empty")
+	}
+	if got[0].Role != "user" || agent.MessageText(got[0]) != agent.MessageText(original[0]) {
+		t.Error("degraded history must still pin the original first user message")
+	}
+	if err := agent.ValidateHistory(got); err != nil {
+		t.Errorf("degraded history invalid: %v", err)
+	}
+	assertNoThinkingBlocks(t, got)
+
+	joined := strings.Join(markers, "\n")
+	if !strings.Contains(strings.ToLower(joined), "truncat") {
+		t.Errorf("expected a user-visible degraded-truncation notice, got markers: %v", markers)
+	}
+}
+
+// TestIssue1_DegradedFallbackKeepsMissionOnly verifies the fallback is safe
+// even when almost nothing can be kept.
+func TestIssue1_DegradedFallbackKeepsMissionOnly(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"error":{"type":"api_error","message":"boom"}}`)
+	}))
+	defer ts.Close()
+
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	a := agent.NewAgent(client, "test", agent.WithContextWindowSize(200000))
+	a.SetHistory([]providers.Message{
+		{Role: "user", Content: "mission"},
+		{Role: "assistant", Content: []providers.ContentBlock{
+			{Type: "thinking", Thinking: "t", Signature: "s"},
+			{Type: "tool_use", ID: "t1", Name: "ls"},
+		}},
+		{Role: "user", Content: []providers.ContentBlock{
+			{Type: "tool_result", ToolUseID: "t1", Content: "ok"},
+		}},
+		{Role: "assistant", Content: "done"},
+		{Role: "user", Content: "more"},
+		{Role: "assistant", Content: "ok"},
+	})
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact() should degrade, not error; got %v", err)
+	}
+	if err := agent.ValidateHistory(a.GetHistory()); err != nil {
+		t.Errorf("degraded history invalid: %v", err)
+	}
+}
