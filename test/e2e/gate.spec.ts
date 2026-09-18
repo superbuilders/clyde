@@ -21,7 +21,10 @@ async function listSessions(api: APIRequestContext): Promise<Session[]> {
   expect(res.status(), "GET /api/sessions must be 200").toBe(200);
   const body = await res.json();
   expect(body, "/api/sessions must return a sessions array").toHaveProperty("sessions");
-  return body.sessions as Session[];
+  // The viewer returns `null`, not `[]`, when nothing matches the window. That
+  // is upstream's shape, so normalise rather than treating it as a failure —
+  // the assertion that matters is that our *new* session shows up below.
+  return (body.sessions ?? []) as Session[];
 }
 
 test("the viewer page renders as the authenticated user, not an empty shell", async ({ page }) => {
