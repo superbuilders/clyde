@@ -124,6 +124,63 @@ func TestDeployedAllowlistM2(t *testing.T) {
 	}
 }
 
+// TestEmailVerifiedFederated covers the Google-federation case that denied AJ.
+//
+// The shared pool maps Google's `email` but not `email_verified`, so a real
+// Google login arrives with the claim absent and an `identities` entry instead.
+func TestEmailVerifiedFederated(t *testing.T) {
+	a := testAuth(t, "anthony.beckner@superbuilders.school")
+	a.TrustedProviders = []string{"Google"}
+
+	googleIdentities := []any{
+		map[string]any{"providerName": "Google", "userId": "1234"},
+	}
+
+	// The exact shape that was being denied: no claim, Google identity.
+	if !a.emailVerified(nil, googleIdentities) {
+		t.Error("Google-federated login with absent email_verified was denied")
+	}
+	// Cognito has also shipped `identities` as a JSON string.
+	raw := `[{"providerName":"Google","userId":"1234"}]`
+	if !a.emailVerified(nil, raw) {
+		t.Error("string-encoded identities claim was not parsed")
+	}
+	// A native verified user still passes, in both bool and string forms.
+	if !a.emailVerified(true, nil) {
+		t.Error("email_verified=true was denied")
+	}
+	if !a.emailVerified("true", nil) {
+		t.Error(`email_verified="true" was denied`)
+	}
+
+	// --- the security property: unverified and untrusted must still fail ---
+
+	// A Cognito-native self-signup with an allowlisted address it does not own.
+	// This is the attack email_verified exists to stop, so it must still fail.
+	if a.emailVerified(false, nil) {
+		t.Error("unverified native user was admitted")
+	}
+	if a.emailVerified(nil, nil) {
+		t.Error("user with no claim and no identities was admitted")
+	}
+	// Clever is wired into the same pool but is not a trusted provider.
+	clever := []any{map[string]any{"providerName": "Clever", "userId": "x"}}
+	if a.emailVerified(nil, clever) {
+		t.Error("untrusted provider Clever was admitted")
+	}
+	// Malformed identities must not become a bypass.
+	for _, bad := range []any{"not json", `{"providerName":"Google"}`, []any{"Google"}, 42} {
+		if a.emailVerified(nil, bad) {
+			t.Errorf("malformed identities %#v was admitted", bad)
+		}
+	}
+	// With no trusted providers configured, federation grants nothing.
+	a.TrustedProviders = nil
+	if a.emailVerified(nil, googleIdentities) {
+		t.Error("federation was trusted with an empty TrustedProviders list")
+	}
+}
+
 func TestSignUnsignRoundTrip(t *testing.T) {
 	a := testAuth(t, "example.com")
 	payload := []byte(`{"email":"x@example.com","exp":123}`)

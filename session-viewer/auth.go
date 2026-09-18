@@ -56,6 +56,9 @@ type authConfig struct {
 	Allowed      []string // domains ("superbuilders.school") and/or exact emails
 	SessionKey   []byte
 	CookieSecure bool
+	// TrustedProviders are federated Cognito providers whose email assertion we
+	// accept in place of an email_verified claim. See emailVerified.
+	TrustedProviders []string
 
 	provider *oidc.Provider
 	verifier *oidc.IDTokenVerifier
@@ -72,6 +75,7 @@ type authFlags struct {
 	allowed      string
 	sessionKey   string
 	cookieSecure string
+	trusted      string
 }
 
 var authFlagVals authFlags
@@ -97,14 +101,16 @@ func registerAuthFlags() {
 	allow := fs("allowed-emails", "BONNIE_ALLOWED_EMAILS", "", "comma-separated allowed domains and/or exact emails")
 	skey := fs("session-key", "BONNIE_SESSION_KEY", "", "hex-encoded session signing key (>=32 bytes)")
 	sec := fs("cookie-secure", "BONNIE_COOKIE_SECURE", "auto", "Secure cookie flag: auto|true|false")
+	trust := fs("trusted-providers", "BONNIE_TRUSTED_PROVIDERS", "Google",
+		"comma-separated Cognito federated providers whose email assertion is trusted")
 
-	authFlagPtrs = []*string{mode, issuer, cid, csec, redir, allow, skey, sec}
+	authFlagPtrs = []*string{mode, issuer, cid, csec, redir, allow, skey, sec, trust}
 }
 
 var authFlagPtrs []*string
 
 func collectAuthFlags() {
-	if len(authFlagPtrs) != 8 {
+	if len(authFlagPtrs) != 9 {
 		return
 	}
 	authFlagVals = authFlags{
@@ -116,6 +122,7 @@ func collectAuthFlags() {
 		allowed:      *authFlagPtrs[5],
 		sessionKey:   *authFlagPtrs[6],
 		cookieSecure: *authFlagPtrs[7],
+		trusted:      *authFlagPtrs[8],
 	}
 }
 
@@ -170,6 +177,15 @@ func buildAuth(ctx context.Context) (*authConfig, error) {
 		}
 		cfg.Allowed = append(cfg.Allowed, strings.TrimPrefix(e, "@"))
 	}
+
+	// Federated providers whose email assertion we accept in lieu of an
+	// email_verified claim. See emailVerified for why this exists.
+	for _, raw := range strings.Split(f.trusted, ",") {
+		if p := strings.TrimSpace(raw); p != "" {
+			cfg.TrustedProviders = append(cfg.TrustedProviders, p)
+		}
+	}
+
 	if len(cfg.Allowed) == 0 {
 		return nil, errors.New("auth=oidc requires a non-empty --allowed-emails")
 	}
@@ -485,6 +501,7 @@ func (a *authConfig) handleCallback(c echo.Context) error {
 		Email         string `json:"email"`
 		EmailVerified any    `json:"email_verified"`
 		Sub           string `json:"sub"`
+		Identities    any    `json:"identities"`
 	}
 	if err := idTok.Claims(&claims); err != nil {
 		return a.authFail(c, "claims_failed", "Could not read identity claims.")
@@ -495,7 +512,7 @@ func (a *authConfig) handleCallback(c echo.Context) error {
 	// email_verified is load-bearing, not cosmetic. The shared Cognito pool
 	// permits self-signup, so a domain allowlist alone would be satisfiable by
 	// registering an unverified address in an allowed domain.
-	if !truthy(claims.EmailVerified) {
+	if !a.emailVerified(claims.EmailVerified, claims.Identities) {
 		fmt.Printf("[auth] event=denied reason=email_unverified email=%s\n", claims.Email)
 		return c.Redirect(http.StatusFound, "/auth/denied")
 	}
@@ -532,6 +549,67 @@ func (a *authConfig) authFail(c echo.Context, event, human string) error {
 	return c.HTML(http.StatusBadRequest,
 		"<!doctype html><meta charset=utf-8><title>Login failed</title><h1>Login failed</h1><p>"+
 			echoHTMLEscape(human)+"</p><p><a href=\"/auth/login\">Try again</a></p>")
+}
+
+// emailVerified decides whether we can trust the email address in the ID token.
+//
+// Cognito sets email_verified for users it manages itself, but it only forwards
+// the claim for federated users if the identity provider's attribute mapping
+// says to. The pool backing bonnie-dev maps Google's `email` but not
+// `email_verified`, so every Google-federated login arrives with the claim
+// absent — which would deny AJ while permitting only the Cognito-native e2e
+// user. Fixing the mapping would mean mutating a shared production pool used by
+// other applications, so the decision is made here instead.
+//
+// The check still matters. It exists because the pool permits self-signup: if
+// email_verified were ignored outright, someone could register an allowlisted
+// address they do not own and pass the allowlist. That attack is only available
+// to Cognito-native users, and those are still required to be verified. For a
+// federated identity the provider has already asserted the address — nobody
+// gets a Google token for anthony.beckner@superbuilders.school without control
+// of that Google account — so the provider's assertion substitutes for the
+// claim. Only explicitly trusted providers count: Clever is also wired into
+// this pool and is not trusted here.
+func (a *authConfig) emailVerified(claim any, identities any) bool {
+	if truthy(claim) {
+		return true
+	}
+	for _, p := range identityProviders(identities) {
+		for _, trusted := range a.TrustedProviders {
+			if strings.EqualFold(p, trusted) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// identityProviders extracts providerName values from Cognito's `identities`
+// claim. Cognito has shipped this as both a JSON array and a JSON-encoded
+// string, so handle both rather than trusting one shape.
+func identityProviders(identities any) []string {
+	switch v := identities.(type) {
+	case string:
+		var decoded any
+		if err := json.Unmarshal([]byte(v), &decoded); err != nil {
+			return nil
+		}
+		return identityProviders(decoded)
+	case []any:
+		var out []string
+		for _, item := range v {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if name, ok := m["providerName"].(string); ok && name != "" {
+				out = append(out, name)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func truthy(v any) bool {
