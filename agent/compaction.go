@@ -216,18 +216,31 @@ func sanitizeToolPairs(msgs []providers.Message) []providers.Message {
 			}
 		}
 
-		kept := make([]providers.ContentBlock, 0, len(blocks))
-		dropped := false
+		// Keep matching tool_results, drop orphans, and hoist the surviving
+		// tool_results to the front: the API requires tool_result blocks to
+		// lead the user message that carries them.
+		results := make([]providers.ContentBlock, 0, len(blocks))
+		rest := make([]providers.ContentBlock, 0, len(blocks))
+		changed := false
 		for _, b := range blocks {
-			if b.Type == "tool_result" && !available[b.ToolUseID] {
-				dropped = true
+			if b.Type == "tool_result" {
+				if !available[b.ToolUseID] {
+					changed = true
+					continue
+				}
+				if len(rest) > 0 {
+					// This result trails a non-result block — reorder needed.
+					changed = true
+				}
+				results = append(results, b)
 				continue
 			}
-			kept = append(kept, b)
+			rest = append(rest, b)
 		}
-		if !dropped {
+		if !changed {
 			continue
 		}
+		kept := append(results, rest...)
 		if len(kept) == 0 {
 			out[i].Content = orphanToolResultPlaceholder
 			continue
@@ -236,7 +249,14 @@ func sanitizeToolPairs(msgs []providers.Message) []providers.Message {
 	}
 
 	// Pass 2: synthesize placeholder tool_results for unanswered tool_use blocks.
-	for i := range out {
+	//
+	// The loop is index-based (not `range`) because the slice can grow when a
+	// bridging user message is spliced in: a `range` evaluates len() once and
+	// would skip the shifted tail. lastOriginal identifies the genuinely
+	// trailing message so the "agent mid-turn" exemption is not handed to a
+	// message that merely became non-final because of an earlier splice.
+	lastOriginal := out[len(out)-1]
+	for i := 0; i < len(out); i++ {
 		if out[i].Role != "assistant" {
 			continue
 		}
@@ -258,7 +278,11 @@ func sanitizeToolPairs(msgs []providers.Message) []providers.Message {
 		// A trailing assistant tool_use is the agent mid-turn: the real result
 		// is about to be appended by the tool loop, so leave it alone.
 		if i == len(out)-1 {
-			continue
+			if sameMessage(out[i], lastOriginal) {
+				continue
+			}
+			// The slice grew past the original tail; answer with placeholders.
+			out = append(out, providers.Message{Role: "user"})
 		}
 
 		next := out[i+1]
@@ -311,6 +335,32 @@ func sanitizeToolPairs(msgs []providers.Message) []providers.Message {
 	}
 
 	return out
+}
+
+// sameMessage reports whether two messages are the same turn, compared by role
+// and block shape. Used only to recognise the original trailing message.
+func sameMessage(a, b providers.Message) bool {
+	if a.Role != b.Role {
+		return false
+	}
+	ab, aOK := contentBlocks(a)
+	bb, bOK := contentBlocks(b)
+	if aOK != bOK {
+		return false
+	}
+	if aOK {
+		if len(ab) != len(bb) {
+			return false
+		}
+		for i := range ab {
+			if ab[i].Type != bb[i].Type || ab[i].ID != bb[i].ID ||
+				ab[i].ToolUseID != bb[i].ToolUseID || ab[i].Text != bb[i].Text {
+				return false
+			}
+		}
+		return true
+	}
+	return messageText(a) == messageText(b)
 }
 
 // appendPreservedMessages appends preserved messages to history while maintaining
