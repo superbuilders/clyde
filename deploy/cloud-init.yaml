@@ -1,0 +1,179 @@
+#cloud-config
+# Bonnie M2 — first boot of the single box.
+#
+# Scope is deliberately small compared to v1: ONE Unix user (`bonnie`), one
+# systemd unit, no per-user agentd, no provisioning units, no repo sync. M3
+# makes users real; M6 adds repos.
+#
+# Everything here is idempotent enough to survive a reboot, because the data
+# volume persists across instance replacement and must not be reformatted.
+
+package_update: true
+packages:
+  - tmux
+  - git
+  - jq
+  - curl
+  - unzip
+  - ripgrep
+  - build-essential
+  - amazon-cloudwatch-agent
+
+write_files:
+  # ── CloudWatch agent ────────────────────────────────────────────────────
+  - path: /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${cloudwatch_agent_config}
+
+  # ── the web unit ────────────────────────────────────────────────────────
+  - path: /etc/systemd/system/bonnie-web.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${systemd_unit}
+
+  # ── boot-time setup, run once by the bonnie-setup unit ──────────────────
+  #
+  # A script rather than a pile of runcmd lines so it is readable, re-runnable
+  # and greppable in the journal when it fails.
+  - path: /usr/local/sbin/bonnie-setup
+    permissions: "0750"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      exec 2>&1
+
+      REGION="${aws_region}"
+      DEV="${data_volume_by_id}"
+      BUCKET="${release_bucket}"
+      PREFIX="${release_prefix}"
+      VERSION="${release_version}"
+      WEB_SECRET="${web_secret_name}"
+      AGENT_SECRET="${agent_secret_name}"
+
+      echo "== bonnie-setup starting =="
+
+      # 1. The AWS CLI. Ubuntu's apt awscli is v1 and too old; use v2.
+      if ! command -v aws >/dev/null; then
+        tmp=$(mktemp -d)
+        curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "$tmp/awscli.zip"
+        unzip -q "$tmp/awscli.zip" -d "$tmp"
+        "$tmp/aws/install"
+        rm -rf "$tmp"
+      fi
+      aws --version
+
+      # 2. The data volume. Format ONLY if it has no filesystem — an instance
+      #    replacement reattaches a volume full of session transcripts and
+      #    reformatting it would be the single most destructive thing here.
+      echo "== waiting for $DEV =="
+      for i in $(seq 1 60); do [[ -e "$DEV" ]] && break; sleep 2; done
+      [[ -e "$DEV" ]] || { echo "data volume $DEV never appeared"; exit 1; }
+
+      if ! blkid "$DEV" >/dev/null 2>&1; then
+        echo "== no filesystem on $DEV; creating ext4 =="
+        mkfs.ext4 -L bonnie-data "$DEV"
+      else
+        echo "== $DEV already has a filesystem; NOT touching it =="
+      fi
+
+      mkdir -p /srv/bonnie
+      grep -q '^LABEL=bonnie-data' /etc/fstab || \
+        echo 'LABEL=bonnie-data /srv/bonnie ext4 defaults,noatime,nofail 0 2' >>/etc/fstab
+      mountpoint -q /srv/bonnie || mount /srv/bonnie
+      mountpoint -q /srv/bonnie
+
+      # 3. The single Unix user. M2 intentionally shares one account.
+      if ! id bonnie >/dev/null 2>&1; then
+        # No login shell via ssh (there is no ssh key and no public IP); the shell
+        # is real because agents exec it for run_bash.
+        useradd --system --create-home --home-dir /srv/bonnie/home --shell /bin/bash bonnie
+      fi
+      mkdir -p /srv/bonnie/home /run/bonnie
+      chown -R bonnie:bonnie /srv/bonnie/home /run/bonnie
+      chmod 0750 /srv/bonnie/home
+
+      # A project directory for the agent to work in, so a fresh box has
+      # somewhere to start a session. discoverProjectDirs() finds ~/code/*.
+      mkdir -p /srv/bonnie/home/code/scratch/.clyde/sessions
+      chown -R bonnie:bonnie /srv/bonnie/home/code
+      sudo -u bonnie git -C /srv/bonnie/home/code/scratch rev-parse --git-dir >/dev/null 2>&1 || \
+        sudo -u bonnie git -C /srv/bonnie/home/code/scratch init -q
+
+      # 4. The release. Tarball contains ./bonnie and ./clyde at the root.
+      mkdir -p "/opt/bonnie/versions/$VERSION"
+      tmp=$(mktemp -d)
+      aws s3 cp "s3://$BUCKET/$PREFIX/$VERSION.tar.gz" "$tmp/r.tar.gz" --region "$REGION"
+      aws s3 cp "s3://$BUCKET/$PREFIX/$VERSION.tar.gz.sha256" "$tmp/r.sha256" --region "$REGION"
+      ( cd "$tmp" && echo "$(cat r.sha256)  r.tar.gz" | sha256sum -c - )
+      tar -xzf "$tmp/r.tar.gz" -C "/opt/bonnie/versions/$VERSION"
+      rm -rf "$tmp"
+      ln -sfn "/opt/bonnie/versions/$VERSION" /opt/bonnie/current
+      chmod 0755 /opt/bonnie/current/bonnie /opt/bonnie/current/clyde
+      /opt/bonnie/current/bonnie --help >/dev/null 2>&1 || true
+
+      # 5. The environment file. Secrets come from Secrets Manager at boot and
+      #    land in a 0640 root:bonnie file — never in user-data, never in argv,
+      #    never in Terraform state.
+      web=$(aws secretsmanager get-secret-value --secret-id "$WEB_SECRET" \
+              --query SecretString --output text --region "$REGION")
+      agent=$(aws secretsmanager get-secret-value --secret-id "$AGENT_SECRET" \
+              --query SecretString --output text --region "$REGION")
+
+      mkdir -p /etc/bonnie
+      umask 027
+      {
+        echo "BONNIE_AUTH=oidc"
+        echo "BONNIE_OIDC_ISSUER=${oidc_issuer}"
+        echo "BONNIE_OIDC_CLIENT_ID=${oidc_client_id}"
+        echo "BONNIE_OIDC_REDIRECT_URL=https://${domain_name}/auth/callback"
+        echo "BONNIE_ALLOWED_EMAILS=${allowed_emails}"
+        echo "BONNIE_COOKIE_SECURE=true"
+        echo "BONNIE_OIDC_CLIENT_SECRET=$(jq -r .BONNIE_OIDC_CLIENT_SECRET <<<"$web")"
+        echo "BONNIE_SESSION_KEY=$(jq -r .BONNIE_SESSION_KEY <<<"$web")"
+        echo "ANTHROPIC_API_KEY=$(jq -r .ANTHROPIC_API_KEY <<<"$agent")"
+      } >/etc/bonnie/web.env
+      chown root:bonnie /etc/bonnie/web.env
+      chmod 0640 /etc/bonnie/web.env
+      unset web agent
+
+      # 6. CloudWatch agent, then the web unit.
+      /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+        -a fetch-config -m ec2 -s \
+        -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json || \
+        echo "WARN: cloudwatch agent config failed"
+
+      systemctl daemon-reload
+      systemctl enable --now bonnie-web.service
+      echo "== bonnie-setup done =="
+
+  - path: /etc/systemd/system/bonnie-setup.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=Bonnie first-boot setup
+      After=network-online.target cloud-init.service
+      Wants=network-online.target
+      ConditionPathExists=!/srv/bonnie/.setup-complete
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/bonnie-setup
+      ExecStartPost=/bin/touch /srv/bonnie/.setup-complete
+      StandardOutput=journal
+      StandardError=journal
+      TimeoutStartSec=900
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, bonnie-setup.service]
+
+output: { all: "| tee -a /var/log/cloud-init-output.log" }

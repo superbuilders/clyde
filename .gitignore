@@ -50,3 +50,10 @@ session-viewer/session-viewer
 bin/
 .bonnie-dev/
 .bonnie-baseline
+
+# Deploy: per-account facts and build artefacts never land in git.
+deploy/terraform/env/*.tfvars
+deploy/terraform/env/*.backend.hcl
+deploy/terraform/**/.terraform/
+deploy/terraform/**/*.tfplan
+dist/

@@ -1,0 +1,95 @@
+# bonnie-web.service — the one privileged-ish web front end (PLAN.md §1, A8).
+#
+# M2 scope: a SINGLE Unix user. Everyone who logs in shares the `bonnie`
+# account, and agents are spawned as `bonnie` on `bonnie`'s own tmux socket.
+# That is deliberately an interim state — M3 makes users real Unix users and
+# adds CAP_SETUID/CAP_SETGID/CAP_CHOWN to spawn agents as the owning user.
+# Until then this process needs NO capabilities at all, so it gets none.
+#
+# Two deviations from PLAN.md §1, both deliberate:
+#
+#  1. §1 says "bind 127.0.0.1:8080". An ALB reaches the instance over its
+#     private IP, so a loopback-only bind is unreachable and the target would
+#     never pass its health check. We bind 0.0.0.0:8080 and confine reachability
+#     with the instance security group, which permits ingress on 8080 from the
+#     ALB's security group only. The intent of §1 — never terminate TLS here,
+#     never be directly reachable from the internet — is preserved. `:443`/`:80`
+#     are never bound.
+#  2. No socket activation. PLAN.md §4 explicitly deleted it. Restart safety
+#     comes from agents living in tmux, not in this process's tree (§8.6), so a
+#     restart costs a few refused connections, not a session.
+#
+# Never exec through a shell: ExecStart is explicit argv.
+
+[Unit]
+Description=Bonnie session viewer (authenticated)
+Documentation=https://github.com/superbuilders/clyde
+After=network-online.target srv-bonnie.mount
+Wants=network-online.target
+RequiresMountsFor=/srv/bonnie
+
+[Service]
+# Type=exec, not notify: the viewer never calls sd_notify. Under Type=notify
+# systemd waits out TimeoutStartSec and then kills a healthy server.
+Type=exec
+User=bonnie
+Group=bonnie
+WorkingDirectory=/srv/bonnie/home
+
+# Explicit argv, no shell. The listen address is the only thing on the command
+# line; every secret arrives through the environment file.
+ExecStart=/opt/bonnie/current/bonnie --listen 0.0.0.0:8080
+Restart=always
+RestartSec=2
+
+# Secrets and config arrive via the environment file (0640 root:bonnie), never
+# on a command line — /proc/*/cmdline is world-readable.
+EnvironmentFile=/etc/bonnie/web.env
+
+# The agent needs a real HOME and a PATH that contains tmux, git and clyde.
+Environment=HOME=/srv/bonnie/home
+Environment=PATH=/opt/bonnie/current:/usr/local/bin:/usr/bin:/bin
+Environment=SHELL=/bin/bash
+
+# ── hardening (PLAN.md §1) ────────────────────────────────────────────────
+# M2 spawns agents as itself, so it needs no capabilities whatsoever. M3 will
+# add CAP_SETUID CAP_SETGID CAP_CHOWN here and nothing else.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=true
+
+ProtectSystem=strict
+# ProtectHome=read-only per §1; /srv/bonnie is not under /home, and it is listed
+# read-write below because session transcripts are written there.
+ProtectHome=read-only
+ReadWritePaths=/srv/bonnie
+ReadWritePaths=/run/bonnie
+
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RemoveIPC=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# AF_UNIX for tmux, AF_INET/AF_INET6 for HTTP and the OIDC/Anthropic calls.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0027
+
+# MemoryDenyWriteExecute is deliberately NOT set: this process forks agents that
+# exec a Go binary, and the Go runtime in a child can trip it.
+
+ReadOnlyPaths=/opt/bonnie
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,28 @@
+# Copy to dev.tfvars (gitignored) and fill in. Per-account facts do not live in
+# this repo; see PLAN.md §2 (repo split).
+
+name       = "bonnie-dev"
+aws_region = "us-east-1"
+
+# From the network module's `tfvars_snippet` output.
+vpc_id            = "vpc-REPLACE"
+public_subnet_ids = ["subnet-REPLACE-a", "subnet-REPLACE-b"]
+private_subnet_id = "subnet-REPLACE"
+
+domain_name     = "bonnie-dev.developer.timeback.com"
+route53_zone_id = "ZREPLACE"
+
+release_bucket  = "bonnie-releases-REPLACE"
+release_version = "REPLACE_WITH_GIT_SHA"
+
+secret_prefix     = "bonnie-dev"
+web_secret_name   = "bonnie-dev/web"
+agent_secret_name = "bonnie-dev/agent"
+
+# Auth (M1). The client secret and session key are NOT here — they are in
+# Secrets Manager under secret_prefix and read at boot.
+oidc_issuer    = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_REPLACE"
+oidc_client_id = "REPLACE"
+
+# The security boundary of the install. M2: AJ plus the e2e test user only.
+allowed_emails = "superbuilders.school"
