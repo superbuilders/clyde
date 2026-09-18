@@ -96,7 +96,15 @@ func (a *Agent) Compact() error {
 	// Step 4: Run the 3-call compaction workflow.
 	summary, preservedMessages, err := a.runCompactionWorkflow(firstUserMsg, toSummarize, keptMessages)
 	if err != nil {
-		return fmt.Errorf("compaction failed: %w", err)
+		// Degraded path: the workflow's LLM calls failed. Erroring out here
+		// leaves the session unusable (context is still over the limit, so
+		// every subsequent request fails), so hard-truncate instead and keep
+		// going with reduced context.
+		if a.diagnosticCallback != nil {
+			a.diagnosticCallback(fmt.Sprintf("⚠️ Compaction workflow failed (%v) — falling back to hard truncation", err))
+		}
+		a.compactDegraded(firstUserMsg, keptMessages)
+		return nil
 	}
 
 	// Step 5: Emit the summary via callback for session persistence
@@ -131,13 +139,17 @@ func (a *Agent) Compact() error {
 
 	// Preserved messages (pivot points and critical tool results) in chronological order.
 	// Ensure proper user/assistant alternation.
+	//
+	// Thinking blocks are stripped from everything re-appended below: their
+	// signatures were computed over the pre-compaction prefix, which no longer
+	// exists, and replaying them makes the API reject every later request.
 	if len(preservedMessages) > 0 {
-		newHistory = appendPreservedMessages(newHistory, preservedMessages)
+		newHistory = appendPreservedMessages(newHistory, StripThinkingBlocks(preservedMessages))
 	}
 
 	// Append recent kept messages, maintaining alternation at the boundary.
 	if len(keptMessages) > 0 {
-		newHistory = appendPreservedMessages(newHistory, keptMessages)
+		newHistory = appendPreservedMessages(newHistory, StripThinkingBlocks(keptMessages))
 	}
 
 	// Repair tool_use/tool_result pairing. Preservation is index-based, so the
@@ -151,9 +163,60 @@ func (a *Agent) Compact() error {
 	// which would hard-fail every subsequent request in the session.
 	newHistory = sanitizeToolPairs(newHistory)
 
+	// Final guard rail: if the assembled history still violates an API
+	// invariant, shipping it would break every subsequent request. Degrade to
+	// hard truncation instead of poisoning the session.
+	if err := ValidateHistory(newHistory); err != nil {
+		if a.diagnosticCallback != nil {
+			a.diagnosticCallback(fmt.Sprintf("⚠️ Assembled history failed validation (%v) — falling back to hard truncation", err))
+		}
+		a.compactDegraded(firstUserMsg, keptMessages)
+		return nil
+	}
+
 	a.history = newHistory
 
 	return nil
+}
+
+// degradedTruncationNotice is shown to the user (and injected into history)
+// when compaction could not produce a usable summary.
+const degradedTruncationNotice = "⚠️ Compaction failed — hard truncation applied, earlier context was dropped."
+
+// compactDegraded is the fallback when the compaction workflow fails or the
+// assembled history is invalid. It rebuilds history as:
+//
+//	[pinned first user message] [ack] [notice] [ack] [last N complete turns]
+//
+// with thinking blocks stripped and tool pairs sanitized. The session loses
+// context but stays usable, which beats dying mid-task.
+func (a *Agent) compactDegraded(firstUserMsg providers.Message, keptMessages []providers.Message) {
+	if a.compactionCallback != nil {
+		a.compactionCallback(degradedTruncationNotice, "")
+	}
+
+	newHistory := []providers.Message{
+		firstUserMsg,
+		{Role: "assistant", Content: "I understand the task. Let me work on this."},
+		{Role: "user", Content: "[System: Compaction Notice]\n\n" + degradedTruncationNotice +
+			" Re-derive anything you need (re-read files, re-run commands) rather than assuming prior state."},
+		{Role: "assistant", Content: "Understood. I'll re-establish the context I need and continue."},
+	}
+
+	if len(keptMessages) > 0 {
+		newHistory = appendPreservedMessages(newHistory, StripThinkingBlocks(keptMessages))
+	}
+	newHistory = sanitizeToolPairs(newHistory)
+
+	if err := ValidateHistory(newHistory); err != nil {
+		// Last resort: mission + notice only. This is always valid.
+		if a.diagnosticCallback != nil {
+			a.diagnosticCallback(fmt.Sprintf("⚠️ Degraded history still invalid (%v) — keeping mission only", err))
+		}
+		newHistory = newHistory[:4]
+	}
+
+	a.history = newHistory
 }
 
 // orphanToolResultPlaceholder replaces a user message whose every block was a

@@ -39,6 +39,12 @@ func Run() {
 	// Parse log level and extended flags, stripping them from args
 	flags := loglevel.ParseFlagsExt(os.Args[1:])
 
+	// Handle help request locally — never forward to the model
+	if isHelpRequest(strings.Join(flags.Args, " ")) {
+		printHelp()
+		return
+	}
+
 	// Handle --sessions mode (list and exit)
 	if flags.Sessions {
 		runSessionsMode()
@@ -559,6 +565,12 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 			break
 		}
 
+		// Handle help locally — never send to the model
+		if isHelpRequest(userInput) {
+			printHelp()
+			continue
+		}
+
 		// Handle /verbosity command — changes verbosity and replays chat
 		if strings.HasPrefix(userInput, "/verbosity") {
 			newLevel, ok := parseVerbosityCommand(userInput)
@@ -659,6 +671,41 @@ func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spin
 		totalInput := usage.InputTokens + usage.CacheReadInputTokens
 		contextPercent = prompt.CalculateContextPercent(totalInput, contextWindowSize)
 	}
+}
+
+// isHelpRequest reports whether the input is a request for Clyde's own usage
+// information (e.g. "--help", "-h", "help"). These are handled locally so the
+// agent never shells out trying to run help on itself.
+func isHelpRequest(input string) bool {
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "--help", "-h", "-help", "help", "/help", "/?":
+		return true
+	}
+	return false
+}
+
+// printHelp prints Clyde's usage information.
+func printHelp() {
+	fmt.Println(`Clyde - AI Coding Agent
+
+Usage:
+  clyde                      Start interactive REPL
+  clyde "<prompt>"           Run a single prompt and exit
+  clyde -f prompt.txt        Read the prompt from a file
+  echo "<prompt>" | clyde    Run a piped prompt and exit
+
+Flags:
+  --help, -h                 Show this help
+  --sessions                 List saved sessions
+  --resume [target]          Resume the last (or given) session
+  --no-think                 Disable extended thinking
+  --silent, --quiet, --normal, --verbose, --debug
+                             Set output verbosity
+
+REPL commands:
+  help                       Show this help
+  /verbosity <level>         Change verbosity (silent|quiet|normal|verbose|debug)
+  exit, quit                 Leave the REPL`)
 }
 
 // printGoodbye prints the goodbye message and session path.
@@ -974,6 +1021,12 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 		if userInput == "exit" || userInput == "quit" {
 			printGoodbye(sess)
 			break
+		}
+
+		// Handle help locally — never send to the model
+		if isHelpRequest(userInput) {
+			printHelp()
+			continue
 		}
 
 		// Handle /verbosity command — changes verbosity and replays chat

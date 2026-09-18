@@ -328,6 +328,7 @@ func TestCompact_CallbacksEmitted(t *testing.T) {
 	client := providers.NewClient("fake", "http://localhost", "m", 1000)
 
 	var compactionMarker string
+	var compactionMarkers []string
 	var compactionSummary string
 	var diagnosticMsgs []string
 
@@ -336,6 +337,7 @@ func TestCompact_CallbacksEmitted(t *testing.T) {
 		agent.WithCompactionCallback(func(marker string, summary string) {
 			if marker != "" {
 				compactionMarker = marker
+				compactionMarkers = append(compactionMarkers, marker)
 			}
 			if summary != "" {
 				compactionSummary = summary
@@ -366,8 +368,8 @@ func TestCompact_CallbacksEmitted(t *testing.T) {
 	if compactionMarker == "" {
 		t.Error("compaction marker callback was not called")
 	}
-	if !strings.Contains(compactionMarker, "🗜️") {
-		t.Errorf("compaction marker should contain 🗜️, got: %q", compactionMarker)
+	if !strings.Contains(strings.Join(compactionMarkers, "\n"), "🗜️") {
+		t.Errorf("compaction markers should contain 🗜️, got: %v", compactionMarkers)
 	}
 
 	// The diagnostic callback should have been called
@@ -382,9 +384,16 @@ func TestCompact_CallbacksEmitted(t *testing.T) {
 		t.Errorf("expected diagnostic message about compaction, got: %v", diagnosticMsgs)
 	}
 
-	// Summary will be empty because API call fails, and err will be non-nil
-	if err == nil {
-		t.Error("expected error from Compact with fake API client")
+	// The API call fails, so compaction degrades to hard truncation rather
+	// than erroring (issue #1): the session must stay usable.
+	if err != nil {
+		t.Errorf("Compact() should degrade on API failure, got error: %v", err)
+	}
+	if !strings.Contains(strings.Join(compactionMarkers, "\n"), "truncation") {
+		t.Errorf("expected a degraded-truncation notice marker, got: %v", compactionMarkers)
+	}
+	if err := agent.ValidateHistory(a.GetHistory()); err != nil {
+		t.Errorf("degraded history invalid: %v", err)
 	}
 	if compactionSummary != "" {
 		t.Errorf("expected empty summary (API call should fail), got: %q", compactionSummary)
