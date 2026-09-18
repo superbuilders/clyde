@@ -47,3 +47,6 @@ test_read_*.txt
 clyde-qwen
 cmd/
 session-viewer/session-viewer
+bin/
+.bonnie-dev/
+.bonnie-baseline

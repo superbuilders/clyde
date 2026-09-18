@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"embed"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -30,9 +31,9 @@ var staticFiles embed.FS
 
 // ViewerCache is the persistent JSON cache stored on disk.
 type ViewerCache struct {
-	Sessions    map[string]*CachedSession `json:"sessions"`    // key: "cwd::session_id"
+	Sessions    map[string]*CachedSession `json:"sessions"` // key: "cwd::session_id"
 	Preferences Preferences               `json:"preferences"`
-	LastScan    string                     `json:"last_scan"`
+	LastScan    string                    `json:"last_scan"`
 }
 
 type CachedSession struct {
@@ -41,7 +42,7 @@ type CachedSession struct {
 	Project       string `json:"project"`
 	Branch        string `json:"branch"`
 	User          string `json:"user"`
-	Name          string `json:"name"`           // user-assigned display name
+	Name          string `json:"name"` // user-assigned display name
 	MessageCount  int    `json:"message_count"`
 	LastModified  string `json:"last_modified"`
 	Preview       string `json:"preview"`
@@ -1623,6 +1624,18 @@ func main() {
 	staticFS, _ := fs.Sub(staticFiles, "static")
 	e.GET("/*", echo.WrapHandler(http.FileServer(http.FS(staticFS))))
 
-	fmt.Println("🔍 Session Viewer at http://localhost:8787")
-	e.Logger.Fatal(e.Start(":8787"))
+	// Listen address. Defaults to today's behaviour; overridable so the viewer
+	// can run in a sandbox alongside a real one. Accepts ":8788" or a bare port.
+	addr := ":8787"
+	if v := os.Getenv("CLYDE_VIEWER_LISTEN"); v != "" {
+		addr = v
+	}
+	flag.StringVar(&addr, "listen", addr, "listen address, e.g. :8787")
+	flag.Parse()
+	if !strings.Contains(addr, ":") {
+		addr = ":" + addr
+	}
+
+	fmt.Printf("🔍 Session Viewer at http://localhost%s\n", addr)
+	e.Logger.Fatal(e.Start(addr))
 }
