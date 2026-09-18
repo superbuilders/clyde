@@ -1,0 +1,12 @@
+{
+  "name": "bonnie-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Bonnie headless auth e2e harness (PLAN.md §5)",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}

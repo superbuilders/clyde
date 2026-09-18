@@ -60,6 +60,17 @@ echo
 # pulls in every other clyde worktree's real sessions. Verified: it found 467.
 cd "$SANDBOX/home"
 
+# Forward auth configuration (BONNIE_*) through `env -i`. The scrub is there to
+# isolate HOME/PATH/tmux, not to block configuration; without this, auth=oidc
+# cannot be exercised in the sandbox at all.
+bonnie_env=()
+while IFS= read -r var; do
+	[[ -n "$var" ]] && bonnie_env+=("$var=${!var}")
+done < <(compgen -v | grep '^BONNIE_' || true)
+if ((${#bonnie_env[@]})); then
+	echo "auth env : ${bonnie_env[*]%%=*}"
+fi
+
 exec env -i \
 	PATH="$SANDBOX/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin" \
 	HOME="$SANDBOX/home" \
@@ -67,4 +78,5 @@ exec env -i \
 	TERM="${TERM:-xterm-256color}" \
 	TMUX_TMPDIR="$SANDBOX/tmux" \
 	CLYDE_VIEWER_LISTEN=":$PORT" \
+	"${bonnie_env[@]}" \
 	"$HERE/bin/bonnie" "$@"

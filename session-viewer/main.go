@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"embed"
 	"encoding/json"
 	"flag"
@@ -1591,12 +1592,32 @@ end tell`, name)
 // ── Main ──
 
 func main() {
+	// Flags are parsed before anything binds or scans, so a misconfigured auth
+	// setup fails before the viewer is reachable.
+	addr := ":8787"
+	if v := os.Getenv("CLYDE_VIEWER_LISTEN"); v != "" {
+		addr = v
+	}
+	flag.StringVar(&addr, "listen", addr, "listen address, e.g. :8787")
+	registerAuthFlags()
+	flag.Parse()
+	if !strings.Contains(addr, ":") {
+		addr = ":" + addr
+	}
+
+	auth, err := buildAuth(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth configuration error: %v\n", err)
+		os.Exit(2)
+	}
+
 	initCache()
 	startBackgroundScanner()
 
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Use(middleware.CORS())
+	auth.install(e)
 
 	api := e.Group("/api")
 	api.GET("/sessions", getSessions)
@@ -1624,18 +1645,11 @@ func main() {
 	staticFS, _ := fs.Sub(staticFiles, "static")
 	e.GET("/*", echo.WrapHandler(http.FileServer(http.FS(staticFS))))
 
-	// Listen address. Defaults to today's behaviour; overridable so the viewer
-	// can run in a sandbox alongside a real one. Accepts ":8788" or a bare port.
-	addr := ":8787"
-	if v := os.Getenv("CLYDE_VIEWER_LISTEN"); v != "" {
-		addr = v
+	if auth.Mode == "none" {
+		fmt.Printf("🔍 Session Viewer at http://localhost%s\n", addr)
+	} else {
+		fmt.Printf("🔒 Session Viewer at %s (auth=%s, allowed=%s)\n",
+			addr, auth.Mode, strings.Join(auth.Allowed, ","))
 	}
-	flag.StringVar(&addr, "listen", addr, "listen address, e.g. :8787")
-	flag.Parse()
-	if !strings.Contains(addr, ":") {
-		addr = ":" + addr
-	}
-
-	fmt.Printf("🔍 Session Viewer at http://localhost%s\n", addr)
 	e.Logger.Fatal(e.Start(addr))
 }

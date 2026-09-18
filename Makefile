@@ -83,3 +83,9 @@ install:
 	@echo "  by absolute path instead."
 	@echo ""
 	@exit 1
+
+# Headless auth e2e (PLAN.md §5). Targets a *running* instance; set BONNIE_URL
+# to the deployed URL for a milestone gate.
+.PHONY: e2e
+e2e:
+	@./scripts/bonnie-e2e.sh
