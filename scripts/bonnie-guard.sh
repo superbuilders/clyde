@@ -42,3 +42,32 @@ EOF
 fi
 
 echo "✓ installed clyde unchanged ($installed)"
+
+# ---------------------------------------------------------------------------
+# Assert the viewer frontend is still upstream's. BONNIE.md forbids porting,
+# forking, or rewriting session-viewer's frontend: index.html stays untouched.
+# v1 shipped a broken login partly by rewriting this file, so pin it.
+# ---------------------------------------------------------------------------
+VIEWER_HTML="session-viewer/static/index.html"
+UPSTREAM_REF="171f610"
+
+if [[ -f "$HERE/$VIEWER_HTML" ]]; then
+	if ! git -C "$HERE" cat-file -e "$UPSTREAM_REF:$VIEWER_HTML" 2>/dev/null; then
+		echo "⚠️  cannot resolve $UPSTREAM_REF:$VIEWER_HTML — skipping viewer check"
+	elif git -C "$HERE" diff --quiet "$UPSTREAM_REF" -- "$VIEWER_HTML"; then
+		echo "✓ viewer frontend unchanged from upstream ($VIEWER_HTML)"
+	else
+		cat <<EOF
+
+  ⛔ THE VIEWER FRONTEND HAS BEEN MODIFIED.
+
+     file:     $VIEWER_HTML
+     upstream: $UPSTREAM_REF
+
+  BONNIE.md: do not port, fork, or rewrite session-viewer's frontend.
+  Revert with: git checkout $UPSTREAM_REF -- $VIEWER_HTML
+
+EOF
+		exit 1
+	fi
+fi

@@ -43,7 +43,15 @@ ls -la "$DIST"
 
 echo "== packaging =="
 TAR="$HERE/dist/$VERSION.tar.gz"
-tar -czf "$TAR" -C "$DIST" bonnie clyde
+# COPYFILE_DISABLE stops macOS bsdtar from emitting AppleDouble "._" resource
+# forks, which otherwise land in /opt/bonnie/current as 501:staff junk.
+COPYFILE_DISABLE=1 tar -czf "$TAR" -C "$DIST" bonnie clyde
+# Fail loudly rather than shipping them silently.
+if tar -tzf "$TAR" | grep -q '\._'; then
+	echo "ERROR: release tarball contains AppleDouble files" >&2
+	tar -tzf "$TAR" >&2
+	exit 1
+fi
 SHA="$(shasum -a 256 "$TAR" | awk '{print $1}')"
 printf '%s' "$SHA" >"$TAR.sha256"
 echo "sha256: $SHA"
