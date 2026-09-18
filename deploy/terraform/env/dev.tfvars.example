@@ -25,4 +25,10 @@ oidc_issuer    = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_REPLACE"
 oidc_client_id = "REPLACE"
 
 # The security boundary of the install. M2: AJ plus the e2e test user only.
-allowed_emails = "superbuilders.school"
+#
+# Accepts bare domains and/or exact addresses. Prefer exact addresses here: the
+# Cognito pool is a SHARED production pool holding thousands of federated
+# identities from several schools, so a bare domain grants far more people
+# access than it appears to. Use a domain only if you have confirmed who is in
+# it.
+allowed_emails = "you@example.com,bonnie-e2e@superbuilders.school"
