@@ -85,6 +85,45 @@ func TestEmailAllowlist(t *testing.T) {
 	}
 }
 
+// TestDeployedAllowlistM2 pins the exact allowlist the bonnie-dev box runs with.
+//
+// The Cognito pool backing it (us-east-1_3uhuoRM3R) is a shared production pool
+// holding thousands of federated identities from several schools, including
+// other people at superbuilders.school. So M2 uses exact addresses, not a bare
+// domain, and this test fails if anyone widens it back to a domain.
+func TestDeployedAllowlistM2(t *testing.T) {
+	a := testAuth(t,
+		"anthony.beckner@superbuilders.school",
+		"bonnie-e2e@superbuilders.school",
+	)
+
+	for _, e := range []string{
+		"anthony.beckner@superbuilders.school",
+		"bonnie-e2e@superbuilders.school",
+	} {
+		if !a.emailAllowed(e) {
+			t.Errorf("deployed allowlist rejects %q, want allowed", e)
+		}
+	}
+
+	for _, e := range []string{
+		// A real, different person in the same pool. This is the case a bare
+		// "superbuilders.school" entry would wrongly admit.
+		"anthony.harley@superbuilders.school",
+		// Other identities that exist in the pool and are not AJ.
+		"ajbeckner@gmail.com",
+		"ajbecknerapps@gmail.com",
+		// Near-misses on the allowed addresses.
+		"anthony.beckner@superbuilers.school",
+		"anthony.beckner@superbuilders.school.evil.com",
+		"superbuilders.school",
+	} {
+		if a.emailAllowed(e) {
+			t.Errorf("deployed allowlist admits %q, want denied", e)
+		}
+	}
+}
+
 func TestSignUnsignRoundTrip(t *testing.T) {
 	a := testAuth(t, "example.com")
 	payload := []byte(`{"email":"x@example.com","exp":123}`)
