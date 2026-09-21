@@ -93,17 +93,20 @@ test("lists sessions, starts one, sends a message, and sees output stream back",
         const r = await api.post(`/api/sessions/${sid}/messages`, {
           data: { cwd, content: prompt, force: true },
         });
-        if (r.status() === 200) return 200;
+        // The viewer queues the turn and replies 202 Accepted; 200 is also
+        // fine. Treat any 2xx as sent, and assert on the reply below rather
+        // than on the status code.
+        if (r.status() >= 200 && r.status() < 300) return true;
         const text = await r.text();
         // 409 = agent busy; 500 "tmux session not running" = agent still
         // booting. Both are transient right after /sessions/new, so retry.
-        if (r.status() === 409 || /not running/.test(text)) return r.status();
-        expect(r.status(), `POST message failed: ${text}`).toBe(200);
-        return r.status();
+        if (r.status() === 409 || /not running/.test(text)) return false;
+        expect(r.status(), `POST message failed: ${text}`).toBe(202);
+        return false;
       },
       { timeout: 90_000, message: "agent never became ready to accept a message" },
     )
-    .toBe(200);
+    .toBe(true);
   console.log(`[gate] sent message with marker ${marker}`);
 
   // 5. See output stream back: an assistant message must appear. This is the
