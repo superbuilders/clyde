@@ -179,8 +179,14 @@ variable "web_secret_name" {
 }
 
 variable "agent_secret_name" {
-  description = "Secret holding the agent bundle (Anthropic key, GitHub App key)."
+  description = "Secret holding the agent model credential (gateway key, URL, model id)."
   type        = string
+}
+
+variable "github_secret_name" {
+  description = "Secret holding the agent GitHub credential. Optional: if it does not exist the box still boots, but private git remotes will not work."
+  type        = string
+  default     = ""
 }
 
 

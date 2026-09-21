@@ -63,7 +63,14 @@ ProtectSystem=strict
 # read-write below because session transcripts are written there.
 ProtectHome=read-only
 ReadWritePaths=/srv/bonnie
-ReadWritePaths=/run/bonnie
+# /run is tmpfs and is emptied on every boot. cloud-init created /run/bonnie
+# once, but bonnie-setup is guarded by .setup-complete on the persistent data
+# volume, so it never ran again — which meant that after any reboot the unit
+# failed with 226/NAMESPACE on a missing ReadWritePaths target and the box came
+# back permanently broken. RuntimeDirectory makes systemd create (and clean up)
+# /run/bonnie on every start, so there is nothing left to go stale.
+RuntimeDirectory=bonnie
+RuntimeDirectoryMode=0750
 
 PrivateTmp=true
 PrivateDevices=true

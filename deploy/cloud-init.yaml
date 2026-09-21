@@ -53,6 +53,7 @@ write_files:
       VERSION="${release_version}"
       WEB_SECRET="${web_secret_name}"
       AGENT_SECRET="${agent_secret_name}"
+      GITHUB_SECRET="${github_secret_name}"
 
       echo "== bonnie-setup starting =="
 
@@ -168,6 +169,34 @@ write_files:
       echo "agent ok: $(cat /tmp/clyde-version.log)"
 
       unset web agent brave
+
+      # 5c. Git credentials for the agent. Stored in a 0600 file owned by
+      #     bonnie rather than baked into a remote URL: a tokenised URL leaks
+      #     into .git/config, into `git remote -v`, and into any error message
+      #     the agent happens to print.
+      #
+      #     The secret is optional — if it is absent the box still boots, git
+      #     simply cannot reach private remotes.
+      if gh=$(aws secretsmanager get-secret-value --secret-id "$GITHUB_SECRET" \
+                --query SecretString --output text --region "$REGION" 2>/dev/null); then
+        umask 077
+        printf 'https://%s:%s@github.com\n' \
+          "$(jq -r .GITHUB_USER <<<"$gh")" "$(jq -r .GITHUB_TOKEN <<<"$gh")" \
+          >/srv/bonnie/home/.git-credentials
+        chown bonnie:bonnie /srv/bonnie/home/.git-credentials
+        chmod 0600 /srv/bonnie/home/.git-credentials
+        umask 027
+        unset gh
+        sudo -u bonnie -H env HOME=/srv/bonnie/home git config --global credential.helper store
+        echo "git credentials installed"
+      else
+        echo "WARN: no $GITHUB_SECRET — private git remotes will not work"
+      fi
+
+      sudo -u bonnie -H env HOME=/srv/bonnie/home git config --global user.name "Bonnie"
+      sudo -u bonnie -H env HOME=/srv/bonnie/home git config --global user.email "bonnie@superbuilders.school"
+      sudo -u bonnie -H env HOME=/srv/bonnie/home git config --global init.defaultBranch main
+      sudo -u bonnie -H env HOME=/srv/bonnie/home git config --global push.default current
 
       # 6. CloudWatch agent, then the web unit.
       /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \

@@ -366,6 +366,7 @@ resource "aws_instance" "web" {
     release_version         = var.release_version
     web_secret_name         = var.web_secret_name
     agent_secret_name       = var.agent_secret_name
+    github_secret_name      = var.github_secret_name
     domain_name             = var.domain_name
     oidc_issuer             = var.oidc_issuer
     oidc_client_id          = var.oidc_client_id
