@@ -159,15 +159,15 @@ func preserveList(indices []int) string {
 //
 // raw index -> toSummarize index
 //
-//	 1 -> 0  assistant tool_use  t1
-//	 2 -> 1  user      tool_result t1
-//	 3 -> 2  assistant text
-//	 4 -> 3  user      text
-//	 5 -> 4  assistant tool_use  t2
-//	 6 -> 5  user      tool_result t2
-//	 7 -> 6  assistant tool_use  t3, t4
-//	 8 -> 7  user      tool_result t3, t4
-//	 9 -> 8  assistant text
+//	1 -> 0  assistant tool_use  t1
+//	2 -> 1  user      tool_result t1
+//	3 -> 2  assistant text
+//	4 -> 3  user      text
+//	5 -> 4  assistant tool_use  t2
+//	6 -> 5  user      tool_result t2
+//	7 -> 6  assistant tool_use  t3, t4
+//	8 -> 7  user      tool_result t3, t4
+//	9 -> 8  assistant text
 func toolHeavyHistory() []providers.Message {
 	return []providers.Message{
 		{Role: "user", Content: "Investigate the latency regression."},
