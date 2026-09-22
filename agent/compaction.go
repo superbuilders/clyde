@@ -140,6 +140,21 @@ func (a *Agent) Compact() error {
 		newHistory = appendPreservedMessages(newHistory, keptMessages)
 	}
 
+	// Second line of defence. Snapping the selection above should make this a
+	// no-op, but the splice between the preserved region and the kept tail, and
+	// the alternation bridges inserted by appendPreservedMessages, can still
+	// strand a tool block.
+	newHistory = sanitizeToolPairs(newHistory)
+
+	// Hard validation. A violation here would hard-fail every subsequent
+	// request in the session with a provider 400, so it is reported as a loud
+	// internal error naming the offending id and the poisoned history is
+	// discarded rather than adopted. The caller keeps the pre-compaction
+	// history, which is known good.
+	if err := ValidateHistory(newHistory); err != nil {
+		return fmt.Errorf("compaction produced an invalid history and was discarded: %w", err)
+	}
+
 	a.history = newHistory
 
 	return nil
@@ -326,7 +341,18 @@ func (a *Agent) runCompactionWorkflow(
 	a.emitCompactionDebug("Call 2 output (tool results)", call2Output)
 
 	// Parse preserved message indices from calls 1 and 2.
-	preserveIndices := ParsePreserveIndices(call1Output, call2Output)
+	//
+	// The model names indices over a structure it does not know has adjacency
+	// constraints, so it will happily select a user message carrying
+	// tool_results without the assistant message that issued the tool_use (or
+	// vice versa). Snapping the selection to pair boundaries here means an
+	// orphan is never constructed — see issue #2.
+	rawIndices := ParsePreserveIndices(call1Output, call2Output)
+	preserveIndices := SnapPreserveIndicesToPairs(toSummarize, rawIndices)
+	if a.diagnosticCallback != nil && len(preserveIndices) != len(rawIndices) {
+		a.diagnosticCallback(fmt.Sprintf("🗜️ Snapped preserved selection to tool pair boundaries: %d → %d indices",
+			len(rawIndices), len(preserveIndices)))
+	}
 	preserved := extractPreservedMessages(toSummarize, preserveIndices)
 
 	if a.diagnosticCallback != nil {

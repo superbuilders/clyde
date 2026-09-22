@@ -1299,7 +1299,7 @@ func TestV3_ConstantCallCount(t *testing.T) {
 		history = append(history, providers.Message{
 			Role: "assistant",
 			Content: []providers.ContentBlock{
-				{Type: "tool_use", Name: "read_file", Input: map[string]interface{}{"path": fmt.Sprintf("file%d.go", i)}},
+				{Type: "tool_use", ID: fmt.Sprintf("toolu_%d", i), Name: "read_file", Input: map[string]interface{}{"path": fmt.Sprintf("file%d.go", i)}},
 			},
 		})
 		history = append(history, providers.Message{
