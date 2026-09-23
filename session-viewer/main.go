@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -297,12 +298,44 @@ func tmuxName(sessionID string) string {
 var _tmuxCache map[string]bool
 var _tmuxCacheTime time.Time
 
-func getTmuxSessions() map[string]bool {
-	if time.Since(_tmuxCacheTime) < 2*time.Second && _tmuxCache != nil {
-		return _tmuxCache
+// principals resolves an authenticated email to the Unix user we act as. In
+// solo mode it always yields the invoking user, so nothing below changes.
+var principals *principalResolver
+
+// tmuxCmd builds a tmux invocation for a principal.
+//
+// Every tmux call must be scoped to the owning user, for two reasons: the
+// server must run as them so the agent it spawns inherits their uid, and the
+// socket must be theirs so no other user can attach and drive their agent.
+// Solo mode returns a plain exec.Command, identical to before.
+func tmuxCmd(p *Principal, args ...string) *exec.Cmd {
+	if p == nil || p.Solo {
+		return exec.Command("tmux", args...)
+	}
+	return p.command("tmux", args...)
+}
+
+// tmuxCacheKey keeps per-user caches apart. A single shared cache would let
+// one user's session list mask another's.
+func tmuxCacheKey(p *Principal) string {
+	if p == nil || p.Solo {
+		return ""
+	}
+	return p.Username
+}
+
+var _tmuxCacheByUser = map[string]map[string]bool{}
+var _tmuxCacheTimeByUser = map[string]time.Time{}
+
+func getTmuxSessions(p *Principal) map[string]bool {
+	key := tmuxCacheKey(p)
+	if t, ok := _tmuxCacheTimeByUser[key]; ok && time.Since(t) < 2*time.Second {
+		if c := _tmuxCacheByUser[key]; c != nil {
+			return c
+		}
 	}
 	result := make(map[string]bool)
-	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+	out, err := tmuxCmd(p, "list-sessions", "-F", "#{session_name}").Output()
 	if err == nil {
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			if line = strings.TrimSpace(line); line != "" {
@@ -310,47 +343,54 @@ func getTmuxSessions() map[string]bool {
 			}
 		}
 	}
-	_tmuxCache = result
-	_tmuxCacheTime = time.Now()
+	_tmuxCacheByUser[key] = result
+	_tmuxCacheTimeByUser[key] = time.Now()
 	return result
 }
 
-func isTmuxRunning(name string) bool {
-	return getTmuxSessions()[name]
+func invalidateTmuxCache(p *Principal) {
+	delete(_tmuxCacheTimeByUser, tmuxCacheKey(p))
 }
 
-func startClyde(cwd, sessionID string) error {
+func isTmuxRunning(p *Principal, name string) bool {
+	return getTmuxSessions(p)[name]
+}
+
+func startClyde(p *Principal, cwd, sessionID string) error {
 	name := tmuxName(sessionID)
-	if isTmuxRunning(name) {
+	if isTmuxRunning(p, name) {
 		return nil
+	}
+	if err := p.ensureRuntimeDir(); err != nil {
+		return fmt.Errorf("preparing runtime dir: %w", err)
 	}
 	// Always use -r to resume into the existing session directory,
 	// even if it's empty. Without -r, clyde creates its own new session.
 	cmd := fmt.Sprintf("cd %s && clyde -r %s", shellQuote(cwd), shellQuote(sessionID))
-	err := exec.Command("tmux", "new-session", "-d", "-s", name, "-x", "200", "-y", "50", cmd).Run()
+	err := tmuxCmd(p, "new-session", "-d", "-s", name, "-x", "200", "-y", "50", cmd).Run()
 	// Invalidate tmux cache
-	_tmuxCacheTime = time.Time{}
+	invalidateTmuxCache(p)
 	return err
 }
 
-func sendToClyde(sessionID, message string) error {
+func sendToClyde(p *Principal, sessionID, message string) error {
 	name := tmuxName(sessionID)
-	if !isTmuxRunning(name) {
+	if !isTmuxRunning(p, name) {
 		return fmt.Errorf("tmux session %s not running", name)
 	}
-	if err := exec.Command("tmux", "send-keys", "-t", name, "-l", message).Run(); err != nil {
+	if err := tmuxCmd(p, "send-keys", "-t", name, "-l", message).Run(); err != nil {
 		return err
 	}
-	return exec.Command("tmux", "send-keys", "-t", name, "Enter").Run()
+	return tmuxCmd(p, "send-keys", "-t", name, "Enter").Run()
 }
 
-func stopClyde(sessionID string) error {
+func stopClyde(p *Principal, sessionID string) error {
 	name := tmuxName(sessionID)
-	if !isTmuxRunning(name) {
+	if !isTmuxRunning(p, name) {
 		return nil
 	}
-	err := exec.Command("tmux", "kill-session", "-t", name).Run()
-	_tmuxCacheTime = time.Time{}
+	err := tmuxCmd(p, "kill-session", "-t", name).Run()
+	invalidateTmuxCache(p)
 	return err
 }
 
@@ -358,9 +398,9 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
 
-func isTmuxBusy(sessionID string) bool {
+func isTmuxBusy(p *Principal, sessionID string) bool {
 	name := tmuxName(sessionID)
-	if !isTmuxRunning(name) {
+	if !isTmuxRunning(p, name) {
 		return false
 	}
 	out, err := exec.Command("tmux", "capture-pane", "-t", name, "-p").Output()
@@ -456,10 +496,10 @@ type liveStatus struct {
 	busy        bool
 }
 
-func getLiveStatuses(sessions map[string]*CachedSession) map[string]liveStatus {
+func getLiveStatuses(p *Principal, sessions map[string]*CachedSession) map[string]liveStatus {
 	result := make(map[string]liveStatus)
 	processes := getRunningProcesses()
-	tmuxSessions := getTmuxSessions()
+	tmuxSessions := getTmuxSessions(p)
 
 	for key, s := range sessions {
 		st := liveStatus{}
@@ -468,7 +508,7 @@ func getLiveStatuses(sessions map[string]*CachedSession) map[string]liveStatus {
 		tName := tmuxName(s.ID)
 		if tmuxSessions[tName] {
 			st.processType = "tmux"
-			st.busy = isTmuxBusy(s.ID)
+			st.busy = isTmuxBusy(p, s.ID)
 			result[key] = st
 			continue
 		}
@@ -549,15 +589,35 @@ func getBranch(dir string, cache map[string]string) string {
 var messageTypeRe = regexp.MustCompile(`_([a-z-]+)\.md$`)
 
 func discoverProjectDirs() map[string]bool {
+	return discoverProjectDirsFor(nil)
+}
+
+// discoverProjectDirsFor finds project directories belonging to a principal.
+//
+// In solo mode this is exactly the old behaviour: the invoking user's home and
+// cwd. In multi-user mode it is scoped to the principal's home, which is what
+// makes "Alice and Bob see only their own sessions" true of the listing as
+// well as of the filesystem.
+func discoverProjectDirsFor(p *Principal) map[string]bool {
 	s := make(map[string]bool)
-	home, _ := os.UserHomeDir()
-	s[home] = true
-	cwd, _ := os.Getwd()
-	// Resolve symlinks for consistent path comparison (macOS /tmp → /private/tmp)
-	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
-		cwd = resolved
+
+	home := ""
+	if p != nil && !p.Solo {
+		home = p.Home
+	} else {
+		home, _ = os.UserHomeDir()
+		cwd, _ := os.Getwd()
+		// Resolve symlinks for consistent path comparison (macOS /tmp → /private/tmp)
+		if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+			cwd = resolved
+		}
+		s[cwd] = true
 	}
-	s[cwd] = true
+	if home == "" {
+		return s
+	}
+	s[home] = true
+
 	for _, d := range []string{filepath.Join(home, "code"), filepath.Join(home, "Downloads")} {
 		out, err := exec.Command("find", d, "-maxdepth", "4", "-name", ".clyde", "-type", "d").Output()
 		if err == nil {
@@ -574,6 +634,29 @@ func discoverProjectDirs() map[string]bool {
 		}
 	}
 	return s
+}
+
+// ownsPath reports whether a principal may see a filesystem path.
+//
+// This is the application-code half of the authorization story (PLAN.md §1):
+// the webserver can read everything, so it must decide what to *show*. The
+// kernel half — what the agent can touch — is enforced by uid, separately.
+// Both must hold; neither is sufficient alone.
+func ownsPath(p *Principal, path string) bool {
+	if p == nil || p.Solo {
+		return true
+	}
+	if path == "" {
+		return false
+	}
+	home := filepath.Clean(p.Home)
+	clean := filepath.Clean(path)
+	if clean == home {
+		return true
+	}
+	// Prefix match on a path boundary, so /home/alice-evil does not match
+	// /home/alice.
+	return strings.HasPrefix(clean, home+string(filepath.Separator))
 }
 
 func readFileCapped(path string, maxBytes int64) (string, error) {
@@ -800,6 +883,13 @@ func startBackgroundScanner() {
 // ── API handlers ──
 
 func getSessions(c echo.Context) error {
+	// Resolve the Unix identity this request acts as. Every tmux and agent
+	// operation below runs as that user; in solo mode it is the invoking user
+	// and nothing changes.
+	pr, err := principalFor(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
 	daysStr := c.QueryParam("days")
 	days := 30
 	if daysStr != "" {
@@ -817,7 +907,7 @@ func getSessions(c echo.Context) error {
 	cacheMu.RUnlock()
 
 	// Compute live statuses
-	statuses := getLiveStatuses(sessions)
+	statuses := getLiveStatuses(pr, sessions)
 
 	now := time.Now()
 	cutoff := time.Time{}
@@ -827,6 +917,12 @@ func getSessions(c echo.Context) error {
 
 	var result []SessionResponse
 	for key, s := range sessions {
+		// Ownership filter. The cache is populated by a single background
+		// scanner that has no principal — it sees every user's sessions — so
+		// isolation has to happen here, at read time, per request.
+		if !ownsPath(pr, s.CWD) {
+			continue
+		}
 		// Age filter
 		if days > 0 {
 			if s.LastModified == "" {
@@ -944,9 +1040,9 @@ func getSessionMessages(c echo.Context) error {
 }
 
 // findTerminalProcess returns a non-tmux clyde process attached to this session, if any.
-func findTerminalProcess(cwd, sessionID string) *RunningProcess {
+func findTerminalProcess(p *Principal, cwd, sessionID string) *RunningProcess {
 	// Don't bother scanning if there's already a tmux session for this ID
-	if isTmuxRunning(tmuxName(sessionID)) {
+	if isTmuxRunning(p, tmuxName(sessionID)) {
 		return nil
 	}
 	for _, proc := range getRunningProcesses() {
@@ -981,6 +1077,13 @@ func killTerminalProcess(pid int) error {
 }
 
 func postSessionMessage(c echo.Context) error {
+	// Resolve the Unix identity this request acts as. Every tmux and agent
+	// operation below runs as that user; in solo mode it is the invoking user
+	// and nothing changes.
+	pr, err := principalFor(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
 	sid := c.Param("id")
 	var body struct {
 		CWD     string `json:"cwd"`
@@ -997,12 +1100,12 @@ func postSessionMessage(c echo.Context) error {
 	if _, err := os.Stat(sessPath); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 	}
-	if isTmuxBusy(sid) {
+	if isTmuxBusy(pr, sid) {
 		return c.JSON(http.StatusConflict, map[string]string{"error": "agent is busy processing"})
 	}
 
 	// Check for a terminal clyde process on this session
-	if proc := findTerminalProcess(body.CWD, sid); proc != nil {
+	if proc := findTerminalProcess(pr, body.CWD, sid); proc != nil {
 		if !body.Force {
 			// Return details so the frontend can show a takeover confirmation
 			return c.JSON(http.StatusConflict, map[string]interface{}{
@@ -1020,13 +1123,13 @@ func postSessionMessage(c echo.Context) error {
 		}
 	}
 
-	if err := startClyde(body.CWD, sid); err != nil {
+	if err := startClyde(pr, body.CWD, sid); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to start clyde: " + err.Error()})
 	}
 	ready := false
 	for i := 0; i < 20; i++ {
 		time.Sleep(500 * time.Millisecond)
-		if !isTmuxBusy(sid) {
+		if !isTmuxBusy(pr, sid) {
 			ready = true
 			break
 		}
@@ -1034,33 +1137,47 @@ func postSessionMessage(c echo.Context) error {
 	if !ready {
 		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "clyde not ready yet"})
 	}
-	if err := sendToClyde(sid, body.Content); err != nil {
+	if err := sendToClyde(pr, sid, body.Content); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to send: " + err.Error()})
 	}
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
 func stopSession(c echo.Context) error {
+	// Resolve the Unix identity this request acts as. Every tmux and agent
+	// operation below runs as that user; in solo mode it is the invoking user
+	// and nothing changes.
+	pr, err := principalFor(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
 	sid := c.Param("id")
 	if sid == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "id required"})
 	}
-	if !isTmuxRunning(tmuxName(sid)) {
+	if !isTmuxRunning(pr, tmuxName(sid)) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "no tmux session running"})
 	}
-	if err := stopClyde(sid); err != nil {
+	if err := stopClyde(pr, sid); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 	return c.JSON(http.StatusOK, map[string]string{"status": "stopped"})
 }
 
 func getSessionStatus(c echo.Context) error {
+	// Resolve the Unix identity this request acts as. Every tmux and agent
+	// operation below runs as that user; in solo mode it is the invoking user
+	// and nothing changes.
+	pr, err := principalFor(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
 	sid := c.Param("id")
 	name := tmuxName(sid)
-	tmuxRunning := isTmuxRunning(name)
+	tmuxRunning := isTmuxRunning(pr, name)
 	busy := false
 	if tmuxRunning {
-		busy = isTmuxBusy(sid)
+		busy = isTmuxBusy(pr, sid)
 	}
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"process_type": map[bool]string{true: "tmux", false: ""}[tmuxRunning],
@@ -1128,8 +1245,17 @@ func triggerScan(c echo.Context) error {
 }
 
 func getProjects(c echo.Context) error {
-	cwdSet := discoverProjectDirs()
+	// Resolve the Unix identity this request acts as, so discovery is scoped
+	// to that user's home rather than to the whole filesystem.
+	pr, err := principalFor(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
+	cwdSet := discoverProjectDirsFor(pr)
 	home, _ := os.UserHomeDir()
+	if pr != nil && !pr.Solo {
+		home = pr.Home
+	}
 	bc := make(map[string]string)
 
 	// WT-6: Detect worktree groups from discovered dirs
@@ -1171,6 +1297,11 @@ func getProjects(c echo.Context) error {
 
 	var projects []ProjectInfo
 	for dir := range cwdSet {
+		// Worktree expansion above can pull in sibling checkouts outside the
+		// principal's home; drop anything they don't own.
+		if !ownsPath(pr, dir) {
+			continue
+		}
 		hasSessions := true
 		if _, err := os.Stat(filepath.Join(dir, ".clyde", "sessions")); os.IsNotExist(err) {
 			// For worktree group members without .clyde/sessions/, still include them
@@ -1325,6 +1456,13 @@ func uploadFile(c echo.Context) error {
 }
 
 func createSession(c echo.Context) error {
+	// Resolve the Unix identity this request acts as. Every tmux and agent
+	// operation below runs as that user; in solo mode it is the invoking user
+	// and nothing changes.
+	pr, err := principalFor(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
 	var body struct {
 		CWD string `json:"cwd"`
 	}
@@ -1365,7 +1503,7 @@ func createSession(c echo.Context) error {
 	go saveCache()
 
 	// Start clyde in tmux immediately so the session is live
-	if err := startClyde(body.CWD, dirName); err != nil {
+	if err := startClyde(pr, body.CWD, dirName); err != nil {
 		fmt.Printf("⚠️  Failed to start clyde for new session: %v\n", err)
 	}
 
@@ -1377,6 +1515,13 @@ func createSession(c echo.Context) error {
 // deleteSessionMessage hard-deletes a message file from disk.
 // Only allowed for stopped sessions (no tmux or terminal process).
 func deleteSessionMessage(c echo.Context) error {
+	// Resolve the Unix identity this request acts as. Every tmux and agent
+	// operation below runs as that user; in solo mode it is the invoking user
+	// and nothing changes.
+	pr, err := principalFor(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
 	sid := c.Param("id")
 	filename := c.Param("filename")
 	cwd := c.QueryParam("cwd")
@@ -1391,10 +1536,10 @@ func deleteSessionMessage(c echo.Context) error {
 
 	// Check session is not running
 	tName := tmuxName(sid)
-	if isTmuxRunning(tName) {
+	if isTmuxRunning(pr, tName) {
 		return c.JSON(http.StatusConflict, map[string]string{"error": "cannot delete messages from a running session"})
 	}
-	if proc := findTerminalProcess(cwd, sid); proc != nil {
+	if proc := findTerminalProcess(pr, cwd, sid); proc != nil {
 		return c.JSON(http.StatusConflict, map[string]string{"error": "cannot delete messages from a running session"})
 	}
 
@@ -1563,15 +1708,20 @@ func openInTerminal(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "id and cwd required"})
 	}
 
+	pr, err := principalFor(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
+
 	name := tmuxName(sid)
 
 	// Start tmux session if not running
-	if !isTmuxRunning(name) {
-		if err := startClyde(cwd, sid); err != nil {
+	if !isTmuxRunning(pr, name) {
+		if err := startClyde(pr, cwd, sid); err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to start clyde: " + err.Error()})
 		}
 		time.Sleep(500 * time.Millisecond)
-		if !isTmuxRunning(name) {
+		if !isTmuxRunning(pr, name) {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "tmux session failed to start"})
 		}
 	}
@@ -1591,7 +1741,23 @@ end tell`, name)
 
 // ── Main ──
 
+// envBool reads a boolean from the environment, defaulting to false.
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 func main() {
+	// `provision` is a root-only administrative subcommand, not a web
+	// endpoint: creating Unix users requires root and a shell on the box.
+	// Handled before flag parsing so it gets its own flag set.
+	if len(os.Args) > 1 && os.Args[1] == "provision" {
+		os.Exit(runProvision(os.Args[2:]))
+	}
+
 	// Flags are parsed before anything binds or scans, so a misconfigured auth
 	// setup fails before the viewer is reachable.
 	addr := ":8787"
@@ -1599,10 +1765,30 @@ func main() {
 		addr = v
 	}
 	flag.StringVar(&addr, "listen", addr, "listen address, e.g. :8787")
+	multiUser := flag.Bool("multi-user", envBool("BONNIE_MULTI_USER"),
+		"run each user's agents as their own Unix user (M3). Off = today's solo behaviour.")
+	userMapFlag := flag.String("user-map", userMapPath, "email→username map used with --multi-user")
 	registerAuthFlags()
 	flag.Parse()
 	if !strings.Contains(addr, ":") {
 		addr = ":" + addr
+	}
+
+	resolver, err := newPrincipalResolver(*multiUser, *userMapFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "principal configuration error: %v\n", err)
+		os.Exit(2)
+	}
+	principals = resolver
+	if *multiUser {
+		// Fail at startup, not on the first request: running as an
+		// unprivileged user means every spawn would fail with EPERM, and the
+		// symptom would be sessions that silently produce nothing.
+		if os.Geteuid() != 0 {
+			fmt.Fprintln(os.Stderr, "--multi-user requires root (CAP_SETUID/CAP_SETGID/CAP_CHOWN)")
+			os.Exit(2)
+		}
+		log.Printf("multi-user mode: principals from %s", *userMapFlag)
 	}
 
 	auth, err := buildAuth(context.Background())

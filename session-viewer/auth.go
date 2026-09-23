@@ -403,7 +403,8 @@ func (a *authConfig) middleware(next echo.HandlerFunc) echo.HandlerFunc {
 		if p == "/healthz" || strings.HasPrefix(p, "/auth/") {
 			return next(c)
 		}
-		if _, err := a.currentSession(c); err != nil {
+		sess, err := a.currentSession(c)
+		if err != nil {
 			if isAPIRequest(c) {
 				return c.JSON(http.StatusUnauthorized, map[string]string{
 					"error": "unauthenticated",
@@ -413,9 +414,44 @@ func (a *authConfig) middleware(next echo.HandlerFunc) echo.HandlerFunc {
 			nxt := c.Request().URL.RequestURI()
 			return c.Redirect(http.StatusFound, "/auth/login?next="+url.QueryEscape(nxt))
 		}
+		// Carry the verified email so handlers can resolve a principal without
+		// re-parsing the cookie.
+		c.Set(ctxEmailKey, sess.Email)
 		return next(c)
 	}
 }
+
+// principalFor resolves the Unix identity a request acts as.
+//
+// In solo mode this is the invoking user and the email is irrelevant. In
+// multi-user mode an authenticated email with no mapping is an error, never a
+// fallback to the service account — falling back would silently give an
+// unprovisioned user access to the service's own files.
+func principalFor(c echo.Context) (*Principal, error) {
+	if principals == nil {
+		// Unconfigured means "nobody asked for multi-user", which is solo: the
+		// only way to get a multi-user resolver is to pass --multi-user, and
+		// main() sets the global before serving. Defaulting to solo keeps
+		// in-process callers (tests) honest without inventing a privileged
+		// fallback for real requests, which is the case that would matter.
+		r, err := newPrincipalResolver(false, "")
+		if err != nil {
+			return nil, err
+		}
+		principals = r
+	}
+	if principals.solo {
+		return principals.forEmail("")
+	}
+	email, _ := c.Get(ctxEmailKey).(string)
+	if email == "" {
+		return nil, errors.New("no authenticated email on request")
+	}
+	return principals.forEmail(email)
+}
+
+// ctxEmailKey is where the auth middleware stashes the verified email.
+const ctxEmailKey = "bonnie.email"
 
 func (a *authConfig) handleLogin(c echo.Context) error {
 	// Already signed in: go straight where they were headed.
