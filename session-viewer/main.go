@@ -30,9 +30,9 @@ var staticFiles embed.FS
 
 // ViewerCache is the persistent JSON cache stored on disk.
 type ViewerCache struct {
-	Sessions    map[string]*CachedSession `json:"sessions"`    // key: "cwd::session_id"
+	Sessions    map[string]*CachedSession `json:"sessions"` // key: "cwd::session_id"
 	Preferences Preferences               `json:"preferences"`
-	LastScan    string                     `json:"last_scan"`
+	LastScan    string                    `json:"last_scan"`
 }
 
 type CachedSession struct {
@@ -41,7 +41,7 @@ type CachedSession struct {
 	Project       string `json:"project"`
 	Branch        string `json:"branch"`
 	User          string `json:"user"`
-	Name          string `json:"name"`           // user-assigned display name
+	Name          string `json:"name"` // user-assigned display name
 	MessageCount  int    `json:"message_count"`
 	LastModified  string `json:"last_modified"`
 	Preview       string `json:"preview"`
@@ -91,6 +91,18 @@ type ProjectInfo struct {
 	ParentPath      string          `json:"parent_path,omitempty"`
 	ParentName      string          `json:"parent_name,omitempty"`
 	Worktrees       []WorktreeEntry `json:"worktrees,omitempty"`
+}
+
+// sortedKeys returns the keys of a string-keyed set in deterministic order.
+// Used wherever a map is iterated to produce API output, or where the loop
+// body mutates the same map.
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // ── Worktree types and detection (WT-2) ──
@@ -194,21 +206,37 @@ func detectWorktreeGroup(dir string) *WorktreeGroup {
 		}
 	}
 
-	// Step 3: Check if all worktrees are siblings (same parent dir)
-	// The main worktree root is the parent of commonDir (commonDir points to .git)
+	// Step 3: Group the worktrees that are siblings of the main worktree root.
+	// The main worktree root is the parent of commonDir (commonDir points to .git).
+	//
+	// Outliers — worktrees created outside the container folder, e.g. a scratch
+	// worktree under /tmp — are deliberately EXCLUDED rather than treated as a
+	// veto. Previously a single out-of-tree worktree returned nil here and
+	// silently collapsed the entire group back into flat, ungrouped projects.
 	mainWorktreeRoot := filepath.Dir(commonDir)
 	parentFolder := filepath.Dir(mainWorktreeRoot)
 
+	siblings := make([]WorktreeEntry, 0, len(worktrees))
 	for _, wt := range worktrees {
-		if filepath.Dir(wt.Path) != parentFolder {
-			return nil // non-sibling layout — don't group
+		if filepath.Dir(wt.Path) == parentFolder {
+			siblings = append(siblings, wt)
 		}
 	}
+
+	// A group needs at least two co-located worktrees to be meaningful. If the
+	// main worktree stands alone in its folder (all linked worktrees live
+	// elsewhere), this is not a sibling layout — don't group.
+	if len(siblings) <= 1 {
+		return nil
+	}
+
+	// Stable order so the API response does not depend on git's output order.
+	sort.Slice(siblings, func(i, j int) bool { return siblings[i].Path < siblings[j].Path })
 
 	return &WorktreeGroup{
 		ParentDir:  parentFolder,
 		ParentName: filepath.Base(parentFolder),
-		Worktrees:  worktrees,
+		Worktrees:  siblings,
 	}
 }
 
@@ -681,8 +709,11 @@ func backgroundScan() {
 	// Track which commonDirs we've already processed to avoid redundant git calls
 	processedCommonDirs := make(map[string]bool)
 
-	// First pass: detect worktree groups from initially discovered dirs
-	for dir := range cwdSet {
+	// First pass: detect worktree groups from initially discovered dirs.
+	// Iterate a sorted snapshot: this loop ADDS keys to cwdSet, and Go does not
+	// guarantee whether keys added during a range are visited. Ranging the map
+	// directly made discovery (and the group representative) nondeterministic.
+	for _, dir := range sortedKeys(cwdSet) {
 		group := detectWorktreeGroup(dir)
 		if group == nil {
 			continue
@@ -716,7 +747,8 @@ func backgroundScan() {
 
 	found := make(map[string]bool)
 
-	for dir := range cwdSet {
+	// Sorted for reproducible scan order and stable logs.
+	for _, dir := range sortedKeys(cwdSet) {
 		sessDir := filepath.Join(dir, ".clyde", "sessions")
 		entries, err := os.ReadDir(sessDir)
 		if err != nil {
@@ -1163,14 +1195,12 @@ func getProjects(c echo.Context) error {
 	home, _ := os.UserHomeDir()
 	bc := make(map[string]string)
 
-	// WT-6: Detect worktree groups from discovered dirs
-	type wtGroupInfo struct {
-		group *WorktreeGroup
-	}
+	// WT-6: Detect worktree groups from discovered dirs.
+	// Sorted snapshot — this loop adds keys to cwdSet (see scan()).
 	worktreeGroupForDir := make(map[string]*WorktreeGroup)
 	processedCommonDirs := make(map[string]bool)
 
-	for dir := range cwdSet {
+	for _, dir := range sortedKeys(cwdSet) {
 		group := detectWorktreeGroup(dir)
 		if group == nil {
 			continue
@@ -1201,7 +1231,9 @@ func getProjects(c echo.Context) error {
 	emittedGroups := make(map[string]bool)
 
 	var projects []ProjectInfo
-	for dir := range cwdSet {
+	// Sorted: which member of a group carries IsWorktreeGroup must not depend on
+	// map iteration order.
+	for _, dir := range sortedKeys(cwdSet) {
 		hasSessions := true
 		if _, err := os.Stat(filepath.Join(dir, ".clyde", "sessions")); os.IsNotExist(err) {
 			// For worktree group members without .clyde/sessions/, still include them
@@ -1230,7 +1262,14 @@ func getProjects(c echo.Context) error {
 
 		projects = append(projects, pi)
 	}
-	sort.Slice(projects, func(i, j int) bool { return projects[i].Name < projects[j].Name })
+	sort.Slice(projects, func(i, j int) bool {
+		if projects[i].Name != projects[j].Name {
+			return projects[i].Name < projects[j].Name
+		}
+		// Same basename in different folders (e.g. sibling worktrees vs an
+		// unrelated repo) — break the tie on path so ordering is total.
+		return projects[i].Path < projects[j].Path
+	})
 	return c.JSON(http.StatusOK, projects)
 }
 
