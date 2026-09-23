@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -222,6 +223,77 @@ func TestDetectWorktreeGroup_NonSiblingWorktrees(t *testing.T) {
 	group := detectWorktreeGroup(mainDir)
 	if group != nil {
 		t.Error("expected nil for non-sibling worktrees")
+	}
+}
+
+// A worktree created outside the container folder — a scratch tree under /tmp,
+// say — must not veto the group. Regression: a single outlier made
+// detectWorktreeGroup return nil, silently flattening every sibling worktree
+// back into an ungrouped project list.
+func TestDetectWorktreeGroup_OutlierDoesNotVetoSiblings(t *testing.T) {
+	parentDir, mainDir, wtDir := setupWorktreeRepo(t)
+
+	// Second sibling, so the group is three-strong before the outlier lands.
+	sibling2 := filepath.Join(parentDir, "second-feature")
+	run(t, mainDir, "git", "worktree", "add", "-b", "second-feature", sibling2)
+
+	// Outlier in an unrelated parent.
+	otherParent, _ := filepath.EvalSymlinks(t.TempDir())
+	outlier := filepath.Join(otherParent, "scratch")
+	run(t, mainDir, "git", "worktree", "add", "-b", "scratch", outlier)
+
+	group := detectWorktreeGroup(mainDir)
+	if group == nil {
+		t.Fatal("outlier worktree vetoed the whole group; expected the siblings to still group")
+	}
+	if group.ParentDir != parentDir {
+		t.Errorf("ParentDir = %q, want %q", group.ParentDir, parentDir)
+	}
+	if len(group.Worktrees) != 3 {
+		t.Fatalf("expected 3 sibling worktrees, got %d: %+v", len(group.Worktrees), group.Worktrees)
+	}
+	for _, wt := range group.Worktrees {
+		if filepath.Dir(wt.Path) != parentDir {
+			t.Errorf("non-sibling %q leaked into the group", wt.Path)
+		}
+		if wt.Path == outlier {
+			t.Errorf("outlier %q should have been excluded", outlier)
+		}
+	}
+
+	// Detection from a linked worktree must agree with detection from main.
+	if g2 := detectWorktreeGroup(wtDir); g2 == nil || len(g2.Worktrees) != 3 {
+		t.Errorf("detection from linked worktree disagreed: %+v", g2)
+	}
+}
+
+// The group ordering must not depend on git's output order or map iteration.
+func TestDetectWorktreeGroup_StableOrdering(t *testing.T) {
+	parentDir, mainDir, _ := setupWorktreeRepo(t)
+	for _, name := range []string{"zeta", "alpha", "mid"} {
+		run(t, mainDir, "git", "worktree", "add", "-b", name, filepath.Join(parentDir, name))
+	}
+
+	first := detectWorktreeGroup(mainDir)
+	if first == nil {
+		t.Fatal("detectWorktreeGroup returned nil")
+	}
+	for i := 0; i < 5; i++ {
+		got := detectWorktreeGroup(mainDir)
+		if got == nil || len(got.Worktrees) != len(first.Worktrees) {
+			t.Fatalf("run %d: unstable group %+v", i, got)
+		}
+		for j := range got.Worktrees {
+			if got.Worktrees[j].Path != first.Worktrees[j].Path {
+				t.Fatalf("run %d: ordering changed at %d: %q vs %q",
+					i, j, got.Worktrees[j].Path, first.Worktrees[j].Path)
+			}
+		}
+	}
+	if !sort.SliceIsSorted(first.Worktrees, func(i, j int) bool {
+		return first.Worktrees[i].Path < first.Worktrees[j].Path
+	}) {
+		t.Errorf("worktrees not sorted by path: %+v", first.Worktrees)
 	}
 }
 
