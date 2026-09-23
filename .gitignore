@@ -57,3 +57,4 @@ deploy/terraform/env/*.backend.hcl
 deploy/terraform/**/.terraform/
 deploy/terraform/**/*.tfplan
 dist/
+Screenshot-*.png
