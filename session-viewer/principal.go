@@ -229,10 +229,23 @@ func (r *principalResolver) forEmail(email string) (*Principal, error) {
 //
 // Never route this through a shell: argv is explicit.
 func (p *Principal) command(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...)
 	if p == nil || p.Solo {
-		return cmd
+		return exec.Command(name, args...)
 	}
+	// Re-arm NoNewPrivileges in the child.
+	//
+	// The unit cannot set it: on systemd 255, NoNewPrivileges=yes combined with
+	// any seccomp-installing sandbox directive silently removes CAP_SETUID from
+	// the service's *permitted* set while leaving it in the bounding set, so
+	// every spawn fails with EPERM. The service therefore runs without it — it
+	// must change uid, which is precisely what NNP forbids.
+	//
+	// The agent has no such need, and it is the process actually running
+	// untrusted output, so it gets NNP back here: setpriv sets the bit before
+	// exec, and it is inherited by everything the agent spawns. Without this,
+	// an agent could regain privilege through a setuid binary.
+	argv := append([]string{"--no-new-privs", "--", name}, args...)
+	cmd := exec.Command(setprivPath, argv...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{
 			Uid:    p.UID,
@@ -244,6 +257,10 @@ func (p *Principal) command(name string, args ...string) *exec.Cmd {
 	cmd.Env = p.environ()
 	return cmd
 }
+
+// setprivPath is util-linux's setpriv. Absolute, because this runs with an
+// inherited PATH and the whole point is that it is the real one.
+const setprivPath = "/usr/bin/setpriv"
 
 // environ is the child environment for a non-solo principal. HOME must point
 // at the principal's home or the agent writes its sessions into the wrong

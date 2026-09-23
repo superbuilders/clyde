@@ -79,10 +79,27 @@ CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_DAC_READ_SEARCH
 # thing M3 exists to prevent. The service needs no ambient set: it runs as uid
 # 0, so its permitted set is the bounding set already.
 AmbientCapabilities=
-# NoNewPrivileges stays on. Dropping privilege with setuid(2) does not need it
-# off; what it blocks is the setuid *bit* on an executed file, which we never
-# rely on.
-NoNewPrivileges=true
+# NoNewPrivileges is OFF here, and this needs justifying.
+#
+# On systemd 255, NoNewPrivileges=yes combined with any directive that installs
+# a seccomp filter (PrivateDevices, ProtectKernelTunables, ProtectClock,
+# RestrictNamespaces, LockPersonality, SystemCallFilter, …) silently removes
+# CAP_SETUID — and only CAP_SETUID — from the service's PERMITTED set, while
+# leaving it in the bounding set that `systemctl show` reports. Every agent
+# spawn then fails with a bare EPERM from fork/exec. Reproduced minimally:
+#
+#   systemd-run -p User=root -p CapabilityBoundingSet=CAP_SETUID #     -p NoNewPrivileges=true -p LockPersonality=true #     /bin/sh -c 'grep CapPrm /proc/self/status'
+#
+# Either directive alone leaves CapPrm intact; the pair does not. So the choice
+# is NNP or the seccomp sandbox, and the sandbox is worth more: it is inherited
+# by every agent, and this process legitimately must change uid, which is
+# exactly what NNP exists to forbid.
+#
+# NNP is not lost, it is moved. Agents are spawned through
+# `setpriv --no-new-privs` (see Principal.command), so the bit is set on the
+# process that actually runs untrusted model output, and on everything it
+# spawns — which is where it matters.
+NoNewPrivileges=false
 
 ProtectSystem=strict
 # ProtectHome=read-only per §1; /srv/bonnie is not under /home, and it is listed
