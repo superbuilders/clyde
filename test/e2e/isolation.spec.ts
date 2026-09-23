@@ -18,6 +18,12 @@ import { test, expect } from "@playwright/test";
 // We authenticate as the e2e user (bonnie-e2e). "Alice" is the operator
 // account, anthony-beckner, seeded with a marker file this test must never be
 // able to see.
+//
+// SEED THE FIXTURE FIRST: scripts/bonnie-m3-fixture.sh. Against a rebuilt box
+// with no Alice data, the "nothing leaked" assertions would pass vacuously,
+// which is the worst way for a security test to be green. Bob cannot create
+// or check the fixture himself — that is the milestone — so it is seeded out
+// of band as root.
 
 const ALICE_HOME = "/srv/bonnie/users/anthony-beckner";
 const ALICE_MARKER = "alice-private-marker-do-not-leak";

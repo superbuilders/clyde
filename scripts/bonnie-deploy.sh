@@ -103,7 +103,11 @@ for e in \$(echo "\$PROVISION_EMAILS" | tr ',' ' '); do
     || echo "WARN: provision \$e failed"
 done
 # The agent must be able to load its config, or sessions produce no output.
-sudo -u bonnie /opt/bonnie/current/clyde --version
+# Checked by reading the file as the service account, NOT by running clyde:
+# clyde parses no flags, so \`clyde --version\` is taken as a PROMPT and
+# silently spends a model call (and spawns an agent) on every deploy.
+sudo -u bonnie test -r /srv/bonnie/home/.clyde/config || { echo "agent config unreadable"; exit 1; }
+echo "agent config: ok"
 systemctl restart bonnie-web.service
 sleep 4
 systemctl is-active bonnie-web.service
