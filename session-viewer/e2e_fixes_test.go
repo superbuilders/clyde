@@ -331,7 +331,7 @@ func TestE2E_DeleteWorktree_MoveSessions(t *testing.T) {
 	os.MkdirAll(mainSessRoot, 0755)
 
 	homeDir := t.TempDir()
-	baseURL, cleanup := startTestServer(t, homeDir)
+	baseURL, cleanup := startTestServer(t, homeDir, mainDir, wtDir)
 	defer cleanup()
 
 	// Inject sessions into cache
