@@ -5,6 +5,13 @@
 # means a release is never automatically live, and a rollback is the same
 # command with an older sha.
 #
+# It also syncs the systemd unit and provisions the Unix accounts named in
+# provision_emails. Both live in cloud-init, but cloud-init's write_files is a
+# per-INSTANCE module: a user_data change applied with `terraform apply` stops
+# and starts the box without changing its instance id, so write_files never
+# re-runs and the unit on disk silently stays at whatever first booted. Shipping
+# the unit here keeps the repo the single source of truth for a running box.
+#
 # The box has no public IP and no SSH, so all of this goes through SSM
 # RunShellScript. Note /bin/sh on AL2023 is dash: no `set -o pipefail`.
 #
@@ -50,10 +57,18 @@ echo "version  : $VERSION"
 aws --profile "$AWS_PROFILE" --region "$REGION" \
 	s3api head-object --bucket "$BUCKET" --key "$PREFIX/$VERSION.tar.gz" >/dev/null
 
+UNIT="$HERE/deploy/systemd/bonnie-web.service"
+UNIT_B64="$(base64 <"$UNIT" | tr -d '\n')"
+PROVISION_EMAILS="$(sed -n 's/^provision_emails *= *"\(.*\)"/\1/p' "$TFVARS")"
+echo "unit     : $UNIT"
+echo "users    : ${PROVISION_EMAILS:-(none)}"
+
 script=$(
 	cat <<EOS
 set -eu
 VERSION=$VERSION
+UNIT_B64=$UNIT_B64
+PROVISION_EMAILS="$PROVISION_EMAILS"
 BUCKET=$BUCKET
 PREFIX=$PREFIX
 REGION=$REGION
@@ -69,6 +84,24 @@ rm -rf "\$tmp"
 chmod 0755 "/opt/bonnie/versions/\$VERSION/bonnie" "/opt/bonnie/versions/\$VERSION/clyde"
 ln -sfn "/opt/bonnie/versions/\$VERSION" /opt/bonnie/current
 ln -sfn /opt/bonnie/current/clyde /usr/local/bin/clyde
+
+# The unit, from the repo. Written before provisioning so a failed provision
+# leaves a box whose unit and binary at least agree.
+echo "$UNIT_B64" | base64 -d >/etc/systemd/system/bonnie-web.service
+chmod 0644 /etc/systemd/system/bonnie-web.service
+systemctl daemon-reload
+
+# Unix accounts for the named users. Idempotent, and non-fatal: a box with a
+# current binary and one unprovisioned user is better than a failed rollout,
+# and the unprovisioned user fails closed rather than sharing an account.
+install -d -m 0751 -o root -g root /srv/bonnie/users
+# POSIX word-splitting on commas, not bash arrays: SSM's AWS-RunShellScript
+# runs this under dash.
+for e in \$(echo "\$PROVISION_EMAILS" | tr ',' ' '); do
+  [ -n "\$e" ] || continue
+  BONNIE_SERVICE_HOME=/srv/bonnie/home /opt/bonnie/current/bonnie provision --email "\$e" \\
+    || echo "WARN: provision \$e failed"
+done
 # The agent must be able to load its config, or sessions produce no output.
 sudo -u bonnie /opt/bonnie/current/clyde --version
 systemctl restart bonnie-web.service
