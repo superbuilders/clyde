@@ -684,6 +684,26 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+// principalUsername is the name to stamp on a session: the user the session
+// belongs to, not whoever the service happens to run as. In solo mode it falls
+// back to the old git-derived name so single-user transcripts are unchanged.
+func principalUsername(p *Principal) string {
+	if p == nil || p.Solo {
+		return getUsername()
+	}
+	return p.Username
+}
+
+// principalHome is the home to compare a project path against when deciding
+// whether to display it as "~".
+func principalHome(p *Principal) string {
+	if p != nil && !p.Solo {
+		return p.Home
+	}
+	h, _ := os.UserHomeDir()
+	return h
+}
+
 func getUsername() string {
 	// Use --global to avoid picking up a local repo config from the SV's working directory.
 	// The session viewer can be launched from any repo — we want the user's identity,
@@ -1505,15 +1525,22 @@ func createSession(c echo.Context) error {
 	if body.CWD == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd required"})
 	}
-	sessRoot := filepath.Join(body.CWD, ".clyde", "sessions")
-	os.MkdirAll(sessRoot, 0755)
-	dirName := formatTimestampDir(time.Now()) + "_" + getUsername()
-	if err := os.MkdirAll(filepath.Join(sessRoot, dirName), 0755); err != nil {
+	// The caller supplies the path, and the service runs as root — so this has
+	// to be checked, not assumed. Without it a user could start a session in
+	// someone else's project.
+	if !ownsPath(pr, body.CWD) {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "not your project"})
+	}
+	// Created as the principal, not as the service: a root-owned session
+	// directory is one the agent cannot write its transcript into.
+	dirName := formatTimestampDir(time.Now()) + "_" + principalUsername(pr)
+	sessDir := filepath.Join(body.CWD, ".clyde", "sessions", dirName)
+	if err := pr.mkdirAs(sessDir); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 	// Add to cache immediately
 	key := cacheKey(body.CWD, dirName)
-	home, _ := os.UserHomeDir()
+	home := principalHome(pr)
 	project := filepath.Base(body.CWD)
 	if body.CWD == home {
 		project = "~"
@@ -1527,7 +1554,7 @@ func createSession(c echo.Context) error {
 	}
 	cacheMu.Lock()
 	cache.Sessions[key] = &CachedSession{
-		ID: dirName, CWD: body.CWD, Project: project, User: getUsername(),
+		ID: dirName, CWD: body.CWD, Project: project, User: principalUsername(pr),
 		LastModified:       time.Now().Format(time.RFC3339),
 		WorktreeParent:     wtParent,
 		WorktreeParentName: wtParentName,

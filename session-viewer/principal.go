@@ -292,3 +292,27 @@ func (p *Principal) ensureRuntimeDir() error {
 	}
 	return os.Chmod(d, 0o700)
 }
+
+// mkdirAs creates dir, and any missing parents, as the principal rather than
+// as the service.
+//
+// The service runs as root but deliberately has no CAP_DAC_OVERRIDE, so
+// os.MkdirAll into a user's 0750 home fails with EACCES — as it should. More
+// importantly, a directory the service created would be owned by root, and the
+// agent (which runs as the user) could not write into it. Every write into a
+// user's tree happens as that user; the service only ever reads.
+func (p *Principal) mkdirAs(dir string) error {
+	if p == nil || p.Solo {
+		return os.MkdirAll(dir, 0o750)
+	}
+	if !ownsPath(p, dir) {
+		return fmt.Errorf("refusing to create %q outside %s's home", dir, p.Username)
+	}
+	// `mkdir -p` rather than a chain of syscalls: setting the credential is a
+	// property of a child process, so the work has to happen in one.
+	cmd := p.command("mkdir", "-p", "-m", "0750", dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mkdir -p %s as %s: %v: %s", dir, p.Username, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}

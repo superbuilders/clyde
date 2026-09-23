@@ -27,7 +27,16 @@ export default defineConfig({
     },
     {
       name: "gate",
-      testMatch: /gate\.spec\.ts/,
+      testMatch: /^.*gate\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: "state.json" },
+    },
+    {
+      // M3 isolation. A separate project so `--project=isolation` can run the
+      // milestone gate on its own without paying for the full agent round
+      // trip in gate.spec.ts.
+      name: "isolation",
+      testMatch: /isolation\.spec\.ts/,
       dependencies: ["setup"],
       use: { storageState: "state.json" },
     },

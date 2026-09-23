@@ -5,13 +5,19 @@
 # agents on its own tmux socket. Isolation is a permission bit — Bob's agent
 # reading Alice's tree gets EACCES from the kernel — not a policy check.
 #
-# That requires setuid, so this process runs as root with exactly three
+# That requires setuid, so this process runs as root with exactly four
 # capabilities: CAP_SETUID and CAP_SETGID to become the owning user, CAP_CHOWN
-# to hand newly created files to them. Nothing else.
+# to hand newly created files to them, and CAP_DAC_READ_SEARCH because the
+# viewer must read and traverse every user's 0750 home to render transcripts.
 #
-# Running as root means the webserver can read every user's files, so it must
-# decide what to *show*: see ownsPath() in the viewer. Both halves must hold;
-# neither is sufficient alone.
+# CAP_DAC_OVERRIDE is deliberately absent, and the distinction is the whole
+# design: the service may READ anything and WRITE nothing. Every write into a
+# user's tree happens in a child that has setuid to that user, so the file
+# lands owned by them and the agent can write it afterwards. A root-owned file
+# in a user's home is a bug, and without DAC_OVERRIDE it is an impossible one.
+#
+# Because the service can read everything, it must decide what to *show*: see
+# ownsPath() in the viewer. Both halves must hold; neither is sufficient alone.
 #
 # Two deviations from PLAN.md §1, both deliberate:
 #
@@ -62,10 +68,17 @@ Environment=PATH=/opt/bonnie/current:/usr/local/bin:/usr/bin:/bin
 Environment=SHELL=/bin/bash
 
 # ── hardening (PLAN.md §1) ────────────────────────────────────────────────
-# Exactly the three capabilities multi-user spawning needs. The bounding set is
-# the ceiling: even a compromised process cannot regain the rest.
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN
-AmbientCapabilities=CAP_SETUID CAP_SETGID CAP_CHOWN
+# Exactly the capabilities multi-user spawning and transcript rendering need.
+# The bounding set is the ceiling: even a compromised process cannot regain
+# the rest.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_DAC_READ_SEARCH
+# AmbientCapabilities is deliberately EMPTY, and this is load-bearing. Ambient
+# capabilities are inherited across exec and survive a setuid to an
+# unprivileged user — listing CAP_DAC_READ_SEARCH here would hand every spawned
+# agent the ability to read every other user's home, which is precisely the
+# thing M3 exists to prevent. The service needs no ambient set: it runs as uid
+# 0, so its permitted set is the bounding set already.
+AmbientCapabilities=
 # NoNewPrivileges stays on. Dropping privilege with setuid(2) does not need it
 # off; what it blocks is the setuid *bit* on an executed file, which we never
 # rely on.
