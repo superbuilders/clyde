@@ -376,6 +376,10 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 	// Get all registered tools
 	allTools := tools.GetAllTools()
 
+	// One automatic re-sanitize-and-retry per user turn for the
+	// tool_use/tool_result pairing error family (see issue #2).
+	pairingRetryUsed := false
+
 	// Conversation loop - continue until we get a text response
 	for {
 		// Check compaction threshold before API call.
@@ -391,12 +395,32 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			}
 		}
 
+		// Last line of defence for the tool-block adjacency contract. History
+		// can pick up orphan tool_use/tool_result blocks from compaction,
+		// session resume, or an interrupted tool loop; any one of them makes
+		// the API reject every subsequent request in the session with a 400.
+		// Repairing here keeps a single recovery path for all of those sources.
+		a.history = sanitizeToolPairs(a.history)
+
 		// Start spinner while waiting for API response
 		if a.spinnerCallback != nil {
 			a.spinnerCallback(true, "Thinking...")
 		}
 
 		resp, err := a.apiClient.Call(a.systemPrompt, a.history, allTools)
+
+		// The tool_use/tool_result pairing family is a formatting defect in
+		// the in-memory history, not a request the user got wrong. Repair the
+		// history and retry exactly once before giving up; without this a
+		// single bad splice makes every remaining turn in the session fail.
+		if err != nil && providers.IsToolPairingError(err) && !pairingRetryUsed {
+			pairingRetryUsed = true
+			if a.diagnosticCallback != nil {
+				a.diagnosticCallback(fmt.Sprintf("⚠️ Provider rejected tool pairing (%v) — re-sanitizing history and retrying once", err))
+			}
+			a.history = sanitizeToolPairs(a.history)
+			resp, err = a.apiClient.Call(a.systemPrompt, a.history, allTools)
+		}
 
 		// Stop spinner once API responds
 		if a.spinnerCallback != nil {

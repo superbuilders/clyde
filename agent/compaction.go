@@ -96,7 +96,15 @@ func (a *Agent) Compact() error {
 	// Step 4: Run the 3-call compaction workflow.
 	summary, preservedMessages, err := a.runCompactionWorkflow(firstUserMsg, toSummarize, keptMessages)
 	if err != nil {
-		return fmt.Errorf("compaction failed: %w", err)
+		// Degraded path: the workflow's LLM calls failed. Erroring out here
+		// leaves the session unusable (context is still over the limit, so
+		// every subsequent request fails), so hard-truncate instead and keep
+		// going with reduced context.
+		if a.diagnosticCallback != nil {
+			a.diagnosticCallback(fmt.Sprintf("⚠️ Compaction workflow failed (%v) — falling back to hard truncation", err))
+		}
+		a.compactDegraded(firstUserMsg, keptMessages)
+		return nil
 	}
 
 	// Step 5: Emit the summary via callback for session persistence
@@ -131,18 +139,125 @@ func (a *Agent) Compact() error {
 
 	// Preserved messages (pivot points and critical tool results) in chronological order.
 	// Ensure proper user/assistant alternation.
+	//
+	// Thinking blocks are stripped from everything re-appended below: their
+	// signatures were computed over the pre-compaction prefix, which no longer
+	// exists, and replaying them makes the API reject every later request.
 	if len(preservedMessages) > 0 {
-		newHistory = appendPreservedMessages(newHistory, preservedMessages)
+		newHistory = appendPreservedMessages(newHistory, StripThinkingBlocks(preservedMessages))
 	}
 
 	// Append recent kept messages, maintaining alternation at the boundary.
 	if len(keptMessages) > 0 {
-		newHistory = appendPreservedMessages(newHistory, keptMessages)
+		newHistory = appendPreservedMessages(newHistory, StripThinkingBlocks(keptMessages))
+	}
+
+	// Repair tool_use/tool_result pairing. Preservation is index-based, so the
+	// LLM can select a user message full of tool_results whose originating
+	// assistant tool_use message was not selected (or vice versa). The Claude
+	// API rejects any such orphan with:
+	//
+	//	unexpected `tool_use_id` found in `tool_result` blocks
+	//	tool_use ids were found without `tool_result` blocks immediately after
+	//
+	// which would hard-fail every subsequent request in the session.
+	newHistory = sanitizeToolPairs(newHistory)
+
+	// Final guard rail: if the assembled history still violates an API
+	// invariant, shipping it would break every subsequent request. Degrade to
+	// hard truncation instead of poisoning the session.
+	if err := ValidateHistory(newHistory); err != nil {
+		if a.diagnosticCallback != nil {
+			a.diagnosticCallback(fmt.Sprintf("⚠️ Assembled history failed validation (%v) — falling back to hard truncation", err))
+		}
+		a.compactDegraded(firstUserMsg, keptMessages)
+		return nil
+	}
+
+	// Second line of defence. Snapping the selection above should make this a
+	// no-op, but the splice between the preserved region and the kept tail, and
+	// the alternation bridges inserted by appendPreservedMessages, can still
+	// strand a tool block.
+	newHistory = sanitizeToolPairs(newHistory)
+
+	// Hard validation. A violation here would hard-fail every subsequent
+	// request in the session with a provider 400, so it is reported as a loud
+	// internal error naming the offending id and the poisoned history is
+	// discarded rather than adopted. The caller keeps the pre-compaction
+	// history, which is known good.
+	if err := ValidateHistory(newHistory); err != nil {
+		return fmt.Errorf("compaction produced an invalid history and was discarded: %w", err)
 	}
 
 	a.history = newHistory
 
 	return nil
+}
+
+// degradedTruncationNotice is shown to the user (and injected into history)
+// when compaction could not produce a usable summary.
+const degradedTruncationNotice = "⚠️ Compaction failed — hard truncation applied, earlier context was dropped."
+
+// compactDegraded is the fallback when the compaction workflow fails or the
+// assembled history is invalid. It rebuilds history as:
+//
+//	[pinned first user message] [ack] [notice] [ack] [last N complete turns]
+//
+// with thinking blocks stripped and tool pairs sanitized. The session loses
+// context but stays usable, which beats dying mid-task.
+func (a *Agent) compactDegraded(firstUserMsg providers.Message, keptMessages []providers.Message) {
+	if a.compactionCallback != nil {
+		a.compactionCallback(degradedTruncationNotice, "")
+	}
+
+	newHistory := []providers.Message{
+		firstUserMsg,
+		{Role: "assistant", Content: "I understand the task. Let me work on this."},
+		{Role: "user", Content: "[System: Compaction Notice]\n\n" + degradedTruncationNotice +
+			" Re-derive anything you need (re-read files, re-run commands) rather than assuming prior state."},
+		{Role: "assistant", Content: "Understood. I'll re-establish the context I need and continue."},
+	}
+
+	if len(keptMessages) > 0 {
+		newHistory = appendPreservedMessages(newHistory, StripThinkingBlocks(keptMessages))
+	}
+	newHistory = sanitizeToolPairs(newHistory)
+
+	if err := ValidateHistory(newHistory); err != nil {
+		// Last resort: mission + notice only. This is always valid.
+		if a.diagnosticCallback != nil {
+			a.diagnosticCallback(fmt.Sprintf("⚠️ Degraded history still invalid (%v) — keeping mission only", err))
+		}
+		newHistory = newHistory[:4]
+	}
+
+	a.history = newHistory
+}
+
+// sameMessage reports whether two messages are the same turn, compared by role
+// and block shape. Used only to recognise the original trailing message.
+func sameMessage(a, b providers.Message) bool {
+	if a.Role != b.Role {
+		return false
+	}
+	ab, aOK := contentBlocks(a)
+	bb, bOK := contentBlocks(b)
+	if aOK != bOK {
+		return false
+	}
+	if aOK {
+		if len(ab) != len(bb) {
+			return false
+		}
+		for i := range ab {
+			if ab[i].Type != bb[i].Type || ab[i].ID != bb[i].ID ||
+				ab[i].ToolUseID != bb[i].ToolUseID || ab[i].Text != bb[i].Text {
+				return false
+			}
+		}
+		return true
+	}
+	return messageText(a) == messageText(b)
 }
 
 // appendPreservedMessages appends preserved messages to history while maintaining
@@ -326,7 +441,18 @@ func (a *Agent) runCompactionWorkflow(
 	a.emitCompactionDebug("Call 2 output (tool results)", call2Output)
 
 	// Parse preserved message indices from calls 1 and 2.
-	preserveIndices := ParsePreserveIndices(call1Output, call2Output)
+	//
+	// The model names indices over a structure it does not know has adjacency
+	// constraints, so it will happily select a user message carrying
+	// tool_results without the assistant message that issued the tool_use (or
+	// vice versa). Snapping the selection to pair boundaries here means an
+	// orphan is never constructed — see issue #2.
+	rawIndices := ParsePreserveIndices(call1Output, call2Output)
+	preserveIndices := SnapPreserveIndicesToPairs(toSummarize, rawIndices)
+	if a.diagnosticCallback != nil && len(preserveIndices) != len(rawIndices) {
+		a.diagnosticCallback(fmt.Sprintf("🗜️ Snapped preserved selection to tool pair boundaries: %d → %d indices",
+			len(rawIndices), len(preserveIndices)))
+	}
 	preserved := extractPreservedMessages(toSummarize, preserveIndices)
 
 	if a.diagnosticCallback != nil {

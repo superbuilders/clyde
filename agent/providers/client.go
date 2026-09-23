@@ -123,6 +123,12 @@ func (c *Client) Call(systemPrompt string, messages []Message, tools []Tool) (*R
 				"  - Message format issues",
 				"  - Try a simpler request to test",
 			)
+			// The tool_use/tool_result pairing family is recoverable: the
+			// on-disk session replays cleanly, only the in-memory history is
+			// malformed. Say so, or the user assumes the session is dead.
+			if containsToolPairingMarker(string(body)) {
+				suggestions = append(suggestions, ToolPairingRecoveryHint)
+			}
 		case 500, 502, 503, 504:
 			suggestions = append(suggestions,
 				"",
