@@ -44,7 +44,7 @@ func TestPromptLine_FormatWithAgent(t *testing.T) {
 		t.Skip("Skipping: TS_AGENT_API_KEY not set")
 	}
 
-	apiClient := providers.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
+	apiClient := providers.NewClient(apiKey, testAPIURL(), testModelID(), 4096)
 	a := agent.NewAgent(apiClient, prompts.SystemPrompt)
 
 	// Before any API call, LastUsage should be zero
@@ -163,7 +163,7 @@ func TestPromptLine_ContextPercentProgression(t *testing.T) {
 		t.Skip("Skipping: TS_AGENT_API_KEY not set")
 	}
 
-	apiClient := providers.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
+	apiClient := providers.NewClient(apiKey, testAPIURL(), testModelID(), 4096)
 	a := agent.NewAgent(apiClient, prompts.SystemPrompt)
 
 	// Before any call, usage should be zero

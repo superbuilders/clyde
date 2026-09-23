@@ -53,8 +53,8 @@ func TestCacheDisplayVerboseFormat(t *testing.T) {
 
 	apiClient := providers.NewClient(
 		apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-sonnet-4-5-20250929",
+		testAPIURL(),
+		testModelID(),
 		4096,
 	)
 
@@ -108,8 +108,8 @@ func TestCacheDisplayDebugFormat(t *testing.T) {
 
 	apiClient := providers.NewClient(
 		apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-sonnet-4-5-20250929",
+		testAPIURL(),
+		testModelID(),
 		4096,
 	)
 
@@ -234,8 +234,8 @@ func TestCacheDisplayOldFormatRemoved(t *testing.T) {
 
 	apiClient := providers.NewClient(
 		apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-sonnet-4-5-20250929",
+		testAPIURL(),
+		testModelID(),
 		4096,
 	)
 

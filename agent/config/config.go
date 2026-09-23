@@ -13,6 +13,8 @@ import (
 	"strconv"
 
 	"github.com/joho/godotenv"
+
+	"github.com/superbuilders/clyde/agent/providers"
 )
 
 // Config holds the application configuration
@@ -23,7 +25,8 @@ type Config struct {
 	ModelID              string
 	MaxTokens            int
 	ContextWindowSize    int    // Maximum context window for the model in tokens
-	ThinkingBudgetTokens int    // Budget for extended thinking (0 = use default 8192)
+	ThinkingBudgetTokens int    // DEPRECATED: rejected by Opus 5+; translated to ThinkingEffort
+	ThinkingEffort       string // Reasoning depth: low|medium|high|xhigh|max ("" = pinned default)
 	MCPPlaywright        bool   // Enable Playwright MCP browser automation
 	MCPPlaywrightArgs    string // Extra args for npx @playwright/mcp (e.g. "--headless")
 	ReserveTokens        int    // Tokens to reserve for response; triggers compaction (0 = default 16000)
@@ -91,17 +94,24 @@ func LoadFromFile(path string) (*Config, error) {
 		modelID = "claude-opus-4-6"
 	}
 
+	// Reasoning effort replaces the deprecated THINKING_BUDGET_TOKENS knob.
+	thinkingEffort := os.Getenv("TS_AGENT_THINKING_EFFORT")
+	if thinkingEffort != "" && !providers.IsValidEffort(thinkingEffort) {
+		return nil, fmt.Errorf("TS_AGENT_THINKING_EFFORT must be one of %v, got %q",
+			providers.ValidEfforts, thinkingEffort)
+	}
+
 	return &Config{
 		APIKey:               apiKey,
 		BraveSearchAPIKey:    os.Getenv("BRAVE_SEARCH_API_KEY"),
 		APIURL:               apiURL,
 		ModelID:              modelID,
 		MaxTokens:            64000,
-		ContextWindowSize:    200000, // Claude Opus 4.6 context window
+		ContextWindowSize:    200000, // Claude Opus 4.6 / Opus 5 context window
 		ThinkingBudgetTokens: thinkingBudget,
+		ThinkingEffort:       thinkingEffort,
 		MCPPlaywright:        os.Getenv("MCP_PLAYWRIGHT") == "true",
 		MCPPlaywrightArgs:    os.Getenv("MCP_PLAYWRIGHT_ARGS"),
 		ReserveTokens:        reserveTokens,
-
 	}, nil
 }

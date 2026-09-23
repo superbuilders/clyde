@@ -15,6 +15,70 @@ import (
 
 // Test helper functions that wrap the new architecture
 
+// testAPIURL returns the endpoint integration tests should call.
+//
+// It honors TS_AGENT_API_URL so that pointing the harness at a gateway
+// (TrueFoundary, Cloudflare AI Gateway, LiteLLM, ...) does not require
+// editing hardcoded literals scattered across the suite. Before this
+// existed, migrating to a gateway left every live test 401ing against
+// api.anthropic.com with a gateway key.
+func testAPIURL() string {
+	if u := os.Getenv("TS_AGENT_API_URL"); u != "" {
+		return u
+	}
+	return testAPIURL()
+}
+
+// testModelID returns the model integration tests should exercise.
+// Honors TS_AGENT_MODEL_ID so a model swap cannot silently break, or
+// silently keep testing, the wrong model.
+func testModelID() string {
+	if m := os.Getenv("TS_AGENT_MODEL_ID"); m != "" {
+		return m
+	}
+	return "claude-opus-4-6"
+}
+
+// agentEnvOverrides lists every environment variable that can override a
+// config default. Tests asserting default values must clear all of them,
+// otherwise an ambient gateway/model setting in the developer's shell leaks
+// in and the test fails for reasons unrelated to the code under test.
+var agentEnvOverrides = []string{
+	"TS_AGENT_API_KEY",
+	"TS_AGENT_API_URL",
+	"TS_AGENT_MODEL_ID",
+	"TS_AGENT_THINKING_EFFORT",
+	"TS_AGENT_MAX_TOKENS",
+	"TS_AGENT_CONTEXT_WINDOW",
+	"THINKING_BUDGET_TOKENS",
+	"RESERVE_TOKENS",
+	"BRAVE_SEARCH_API_KEY",
+	"MCP_PLAYWRIGHT",
+	"MCP_PLAYWRIGHT_ARGS",
+}
+
+// clearAgentEnv unsets every config-override variable for the duration of the
+// test, restoring the previous values on cleanup.
+func clearAgentEnv(t *testing.T) {
+	t.Helper()
+	saved := make(map[string]string, len(agentEnvOverrides))
+	for _, k := range agentEnvOverrides {
+		if v, ok := os.LookupEnv(k); ok {
+			saved[k] = v
+		}
+		os.Unsetenv(k)
+	}
+	t.Cleanup(func() {
+		for _, k := range agentEnvOverrides {
+			if v, ok := saved[k]; ok {
+				os.Setenv(k, v)
+			} else {
+				os.Unsetenv(k)
+			}
+		}
+	})
+}
+
 var systemPrompt = prompts.SystemPrompt
 
 // Message type alias for tests
@@ -90,8 +154,8 @@ func executeBrowse(urlStr, prompt string, maxLength int, apiKey string, conversa
 	// Create API client for AI processing if needed
 	cfg := &config.Config{
 		APIKey:    apiKey,
-		APIURL:    "https://api.anthropic.com/v1/messages",
-		ModelID:   "claude-sonnet-4-5-20250929",
+		APIURL:    testAPIURL(),
+		ModelID:   testModelID(),
 		MaxTokens: 4096,
 	}
 	apiClient := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
@@ -119,8 +183,8 @@ func executeMultiPatch(patches []interface{}) (string, error) {
 func callClaude(apiKey string, messages []Message) (*Response, error) {
 	cfg := &config.Config{
 		APIKey:    apiKey,
-		APIURL:    "https://api.anthropic.com/v1/messages",
-		ModelID:   "claude-sonnet-4-5-20250929",
+		APIURL:    testAPIURL(),
+		ModelID:   testModelID(),
 		MaxTokens: 4096,
 	}
 	client := providers.NewClient(cfg.APIKey, cfg.APIURL, cfg.ModelID, cfg.MaxTokens)
@@ -168,8 +232,8 @@ func handleConversation(apiKey string, userInput string, conversationHistory []M
 	cfg := &config.Config{
 		APIKey:            apiKey,
 		BraveSearchAPIKey: braveAPIKey,
-		APIURL:            "https://api.anthropic.com/v1/messages",
-		ModelID:           "claude-sonnet-4-5-20250929",
+		APIURL:            testAPIURL(),
+		ModelID:           testModelID(),
 		MaxTokens:         4096,
 	}
 

@@ -463,8 +463,8 @@ func TestThinkingIntegration(t *testing.T) {
 
 	client := providers.NewClient(
 		apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-opus-4-6",
+		testAPIURL(),
+		testModelID(),
 		64000,
 	).WithThinking(&providers.ThinkingConfig{Type: "adaptive"})
 
@@ -514,8 +514,8 @@ func TestThinkingIntegrationWithAgent(t *testing.T) {
 
 	client := providers.NewClient(
 		apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-opus-4-6",
+		testAPIURL(),
+		testModelID(),
 		64000,
 	).WithThinking(&providers.ThinkingConfig{Type: "adaptive"})
 
@@ -561,8 +561,8 @@ func TestThinkingIntegrationVerbose(t *testing.T) {
 
 	client := providers.NewClient(
 		apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-opus-4-6",
+		testAPIURL(),
+		testModelID(),
 		64000,
 	).WithThinking(&providers.ThinkingConfig{Type: "adaptive"})
 
@@ -599,8 +599,8 @@ func TestThinkingSuppressedAtQuiet(t *testing.T) {
 
 	client := providers.NewClient(
 		apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-opus-4-6",
+		testAPIURL(),
+		testModelID(),
 		64000,
 	).WithThinking(&providers.ThinkingConfig{Type: "adaptive"})
 
@@ -634,8 +634,8 @@ func TestNoThinkIntegration(t *testing.T) {
 
 	client := providers.NewClient(
 		apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-opus-4-6",
+		testAPIURL(),
+		testModelID(),
 		64000,
 	)
 

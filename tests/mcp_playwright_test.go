@@ -225,7 +225,7 @@ func TestMCPPlaywrightIntegration(t *testing.T) {
 	}
 	defer cleanupMCPTools(t)
 
-	apiClient := providers.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
+	apiClient := providers.NewClient(apiKey, testAPIURL(), testModelID(), 4096)
 
 	var progressMessages []string
 	agentInstance := agent.NewAgent(
@@ -314,7 +314,7 @@ func TestMCPPlaywrightBrowserStatePersists(t *testing.T) {
 	mcp.RegisterPlaywrightTools(mcpServer)
 	defer cleanupMCPTools(t)
 
-	apiClient := providers.NewClient(apiKey, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20250929", 4096)
+	apiClient := providers.NewClient(apiKey, testAPIURL(), testModelID(), 4096)
 
 	agentInstance := agent.NewAgent(
 		apiClient,

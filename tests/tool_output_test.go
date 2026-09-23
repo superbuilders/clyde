@@ -250,8 +250,8 @@ func TestToolOutputIntegrationNormal(t *testing.T) {
 
 	apiClient := providers.NewClient(
 		apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-sonnet-4-5-20250929",
+		testAPIURL(),
+		testModelID(),
 		4096,
 	)
 
@@ -306,8 +306,8 @@ func TestToolOutputIntegrationQuietSuppressed(t *testing.T) {
 
 	apiClient := providers.NewClient(
 		apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-sonnet-4-5-20250929",
+		testAPIURL(),
+		testModelID(),
 		4096,
 	)
 
@@ -350,8 +350,8 @@ func TestToolOutputIntegrationVerboseNoTruncation(t *testing.T) {
 
 	apiClient := providers.NewClient(
 		apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-sonnet-4-5-20250929",
+		testAPIURL(),
+		testModelID(),
 		4096,
 	)
 
