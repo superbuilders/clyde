@@ -315,7 +315,9 @@ func (p *Principal) ensureRuntimeDir() error {
 	}
 
 	// Parent first, still owned by root: one directory per user underneath it.
-	if err := os.MkdirAll(filepath.Dir(d), 0o755); err != nil {
+	// 0751 so each user can traverse to their own socket dir without being
+	// able to list anyone else's (matches RuntimeDirectoryMode in the unit).
+	if err := os.MkdirAll(filepath.Dir(d), 0o751); err != nil {
 		return err
 	}
 	// Mode before ownership. Once the directory belongs to the user, the

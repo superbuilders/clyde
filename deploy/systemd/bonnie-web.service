@@ -113,7 +113,13 @@ ReadWritePaths=/srv/bonnie
 # back permanently broken. RuntimeDirectory makes systemd create (and clean up)
 # /run/bonnie on every start, so there is nothing left to go stale.
 RuntimeDirectory=bonnie
-RuntimeDirectoryMode=0750
+# 0751, not 0750. Each user's tmux socket lives in /run/bonnie/<user>, and the
+# agent — running as that user, not in the bonnie group — must traverse the
+# parent to reach it. At 0750 tmux cannot see its own socket directory and
+# silently falls back to /tmp, where every user shares one server: any user
+# could then attach to another's agent. --x for others buys traversal without
+# letting anyone enumerate who has a session.
+RuntimeDirectoryMode=0751
 
 PrivateTmp=true
 PrivateDevices=true
