@@ -17,6 +17,9 @@ packages:
   - unzip
   - ripgrep
   - build-essential
+  # M4 sharing: setfacl/getfacl. Absent from the base AMI, so a fresh box
+  # cannot grant a share without it. See PLAN.md §4 (M4).
+  - acl
   - amazon-cloudwatch-agent
 
 write_files:
