@@ -371,6 +371,7 @@ resource "aws_instance" "web" {
     oidc_issuer             = var.oidc_issuer
     oidc_client_id          = var.oidc_client_id
     allowed_emails          = var.allowed_emails
+    provision_emails        = var.provision_emails
     cloudwatch_agent_config = local.cloudwatch_agent_config
     systemd_unit            = indent(6, file("${path.module}/../systemd/bonnie-web.service"))
   }))

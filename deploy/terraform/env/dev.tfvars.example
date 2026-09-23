@@ -33,3 +33,7 @@ oidc_client_id = "REPLACE"
 # access than it appears to. Use a domain only if you have confirmed who is in
 # it.
 allowed_emails = "you@example.com,bonnie-e2e@superbuilders.school"
+
+# Exact addresses to provision Unix accounts for at boot. Domains are not
+# allowed here: a domain cannot be turned into a username.
+provision_emails = "you@example.com,bonnie-e2e@superbuilders.school"

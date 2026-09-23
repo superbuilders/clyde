@@ -260,6 +260,19 @@ variable "oidc_client_id" {
   type        = string
 }
 
+variable "provision_emails" {
+  description = <<-EOT
+    Comma-separated list of EXACT addresses to provision Unix accounts for at
+    boot. Distinct from allowed_emails, which may contain bare domains: a domain
+    cannot be turned into a username, and provisioning is an administrative act
+    that must name its subjects. An allowed address with no account fails closed
+    with "no unix user mapped to this email" until an operator runs
+    `bonnie provision`.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "allowed_emails" {
   description = <<-EOT
     Comma-separated allowlist of bare domains and/or exact addresses. This is the

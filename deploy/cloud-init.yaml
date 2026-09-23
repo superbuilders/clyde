@@ -198,6 +198,19 @@ write_files:
       sudo -u bonnie -H env HOME=/srv/bonnie/home git config --global init.defaultBranch main
       sudo -u bonnie -H env HOME=/srv/bonnie/home git config --global push.default current
 
+      # 5.5 Unix accounts for the named users (M3). Idempotent, so re-running
+      # setup or adding a name to provision_emails is safe. A user on the
+      # allowlist with no account here fails closed at request time rather than
+      # sharing the service account, which is the whole point of M3.
+      install -d -m 0751 -o root -g root /srv/bonnie/users
+      IFS=',' read -ra EMAILS <<< "${provision_emails}"
+      for e in "$${EMAILS[@]}"; do
+        e=$(echo "$e" | tr -d '[:space:]')
+        [ -n "$e" ] || continue
+        BONNIE_SERVICE_HOME=/srv/bonnie/home /opt/bonnie/current/bonnie provision --email "$e" \
+          || echo "WARN: provision $e failed"
+      done
+
       # 6. CloudWatch agent, then the web unit.
       /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
         -a fetch-config -m ec2 -s \

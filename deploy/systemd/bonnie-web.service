@@ -1,10 +1,17 @@
 # bonnie-web.service — the one privileged-ish web front end (PLAN.md §1, A8).
 #
-# M2 scope: a SINGLE Unix user. Everyone who logs in shares the `bonnie`
-# account, and agents are spawned as `bonnie` on `bonnie`'s own tmux socket.
-# That is deliberately an interim state — M3 makes users real Unix users and
-# adds CAP_SETUID/CAP_SETGID/CAP_CHOWN to spawn agents as the owning user.
-# Until then this process needs NO capabilities at all, so it gets none.
+# M3 scope: users are real Unix users. Each authenticated email maps, through
+# /etc/bonnie/users.map, to an account that owns its own home and runs its own
+# agents on its own tmux socket. Isolation is a permission bit — Bob's agent
+# reading Alice's tree gets EACCES from the kernel — not a policy check.
+#
+# That requires setuid, so this process runs as root with exactly three
+# capabilities: CAP_SETUID and CAP_SETGID to become the owning user, CAP_CHOWN
+# to hand newly created files to them. Nothing else.
+#
+# Running as root means the webserver can read every user's files, so it must
+# decide what to *show*: see ownsPath() in the viewer. Both halves must hold;
+# neither is sufficient alone.
 #
 # Two deviations from PLAN.md §1, both deliberate:
 #
@@ -32,13 +39,16 @@ RequiresMountsFor=/srv/bonnie
 # Type=exec, not notify: the viewer never calls sd_notify. Under Type=notify
 # systemd waits out TimeoutStartSec and then kills a healthy server.
 Type=exec
-User=bonnie
-Group=bonnie
+# root, because spawning an agent as the owning user is setuid(2). The process
+# immediately drops to the principal's uid in every child it forks; it never
+# runs user code as root.
+User=root
+Group=root
 WorkingDirectory=/srv/bonnie/home
 
 # Explicit argv, no shell. The listen address is the only thing on the command
 # line; every secret arrives through the environment file.
-ExecStart=/opt/bonnie/current/bonnie --listen 0.0.0.0:8080
+ExecStart=/opt/bonnie/current/bonnie --listen 0.0.0.0:8080 --multi-user --user-map /etc/bonnie/users.map
 Restart=always
 RestartSec=2
 
@@ -52,10 +62,13 @@ Environment=PATH=/opt/bonnie/current:/usr/local/bin:/usr/bin:/bin
 Environment=SHELL=/bin/bash
 
 # ── hardening (PLAN.md §1) ────────────────────────────────────────────────
-# M2 spawns agents as itself, so it needs no capabilities whatsoever. M3 will
-# add CAP_SETUID CAP_SETGID CAP_CHOWN here and nothing else.
-CapabilityBoundingSet=
-AmbientCapabilities=
+# Exactly the three capabilities multi-user spawning needs. The bounding set is
+# the ceiling: even a compromised process cannot regain the rest.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN
+AmbientCapabilities=CAP_SETUID CAP_SETGID CAP_CHOWN
+# NoNewPrivileges stays on. Dropping privilege with setuid(2) does not need it
+# off; what it blocks is the setuid *bit* on an executed file, which we never
+# rely on.
 NoNewPrivileges=true
 
 ProtectSystem=strict

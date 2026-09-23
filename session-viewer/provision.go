@@ -109,11 +109,14 @@ func provision(o provisionOpts) error {
 
 	if o.dryRun {
 		fmt.Printf("would ensure group   %s\n", o.group)
-		fmt.Printf("would ensure user    %s (home /home/%s, shell /usr/sbin/nologin)\n", username, username)
+		fmt.Printf("would ensure user    %s (home %s/%s, shell /usr/sbin/nologin)\n", username, homeRoot, username)
 		fmt.Printf("would map            %s -> %s in %s\n", email, username, o.mapPath)
 		return nil
 	}
 
+	if err := ensureHomeRoot(); err != nil {
+		return err
+	}
 	if err := ensureGroup(o.group); err != nil {
 		return err
 	}
@@ -171,6 +174,31 @@ func ensureGroup(group string) error {
 	return nil
 }
 
+// homeRoot is where provisioned users' homes live.
+//
+// NOT /home, for two reasons that are both fatal: /home is on the root volume
+// and would not survive instance replacement, and the web unit runs with
+// ProtectHome=read-only, so an agent — which inherits the unit's mount
+// namespace — could not write its own home.
+//
+// Also not /srv/bonnie/home, which is the service account's own home and is
+// 0750 bonnie:bonnie; a user home nested inside it would be untraversable by
+// its owner. Peer directory, own permissions.
+const homeRoot = "/srv/bonnie/users"
+
+// ensureHomeRoot creates the parent of all user homes. 0751, not 0755: a user
+// needs to traverse it to reach their own home, but nobody needs to enumerate
+// who else exists.
+func ensureHomeRoot() error {
+	if err := os.MkdirAll(homeRoot, 0o751); err != nil {
+		return err
+	}
+	if err := os.Chmod(homeRoot, 0o751); err != nil {
+		return err
+	}
+	return os.Chown(homeRoot, 0, 0)
+}
+
 // ensureUser creates the account if absent. Shell is nologin: these accounts
 // exist to own files and run agents, not to be logged into. Idempotent.
 func ensureUser(username, group string) (bool, error) {
@@ -187,7 +215,7 @@ func ensureUser(username, group string) (bool, error) {
 	}
 	args := []string{
 		"--create-home",
-		"--home-dir", filepath.Join("/home", username),
+		"--home-dir", filepath.Join(homeRoot, username),
 		"--shell", "/usr/sbin/nologin",
 		"--groups", group,
 		username,
