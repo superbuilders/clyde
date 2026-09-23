@@ -244,6 +244,7 @@ func ensureHomeSkeleton(username string) error {
 		u.HomeDir,
 		filepath.Join(u.HomeDir, "code"),
 		filepath.Join(u.HomeDir, "code", "scratch"),
+		filepath.Join(u.HomeDir, "code", "scratch", ".clyde"),
 		filepath.Join(u.HomeDir, "code", "scratch", ".clyde", "sessions"),
 		filepath.Join(u.HomeDir, ".clyde"),
 	}
@@ -251,7 +252,12 @@ func ensureHomeSkeleton(username string) error {
 		if err := os.MkdirAll(d, 0o750); err != nil {
 			return err
 		}
-		if err := os.Chown(d, uid, gid); err != nil {
+		// Chown every component, not just the leaf. MkdirAll creates
+		// intermediates owned by the *caller* — root — and a 0750 root-owned
+		// directory in the middle of the path means the user cannot traverse
+		// into their own sessions directory. Listing only the leaf left
+		// code/scratch/.clyde owned by root and the agent unable to write.
+		if err := chownTree(d, u.HomeDir, uid, gid); err != nil {
 			return err
 		}
 	}
@@ -299,6 +305,26 @@ func ensureHomeSkeleton(username string) error {
 		}
 	}
 	return nil
+}
+
+// chownTree gives every path component from root down to dir to uid:gid. It
+// stops at root so it can never walk up past a user's home.
+func chownTree(dir, root string, uid, gid int) error {
+	dir = filepath.Clean(dir)
+	root = filepath.Clean(root)
+	for {
+		if err := os.Chown(dir, uid, gid); err != nil {
+			return err
+		}
+		if dir == root {
+			return nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir || len(parent) < len(root) {
+			return nil
+		}
+		dir = parent
+	}
 }
 
 // serviceHome is the home of the account the service itself runs under, used
