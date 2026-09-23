@@ -301,13 +301,33 @@ func (p *Principal) ensureRuntimeDir() error {
 		return nil
 	}
 	d := p.runtimeDir()
-	if err := os.MkdirAll(d, 0o700); err != nil {
+	if fi, err := os.Stat(d); err == nil {
+		if !fi.IsDir() {
+			return fmt.Errorf("%s exists and is not a directory", d)
+		}
+		// Already set up — by us, on an earlier spawn this boot. Do not try to
+		// re-chmod it: it now belongs to the user, and the service has no
+		// CAP_FOWNER, so chmod on a file it does not own fails with EPERM.
+		// That is the desired asymmetry, not a problem to capability away.
+		return nil
+	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.Chown(d, int(p.UID), int(p.GID)); err != nil {
+
+	// Parent first, still owned by root: one directory per user underneath it.
+	if err := os.MkdirAll(filepath.Dir(d), 0o755); err != nil {
 		return err
 	}
-	return os.Chmod(d, 0o700)
+	// Mode before ownership. Once the directory belongs to the user, the
+	// service can no longer change its mode, so 0700 has to be in place before
+	// the chown — not after it.
+	if err := os.Mkdir(d, 0o700); err != nil && !os.IsExist(err) {
+		return err
+	}
+	if err := os.Chmod(d, 0o700); err != nil {
+		return err
+	}
+	return os.Chown(d, int(p.UID), int(p.GID))
 }
 
 // mkdirAs creates dir, and any missing parents, as the principal rather than

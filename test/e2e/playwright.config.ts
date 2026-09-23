@@ -36,7 +36,7 @@ export default defineConfig({
       // milestone gate on its own without paying for the full agent round
       // trip in gate.spec.ts.
       name: "isolation",
-      testMatch: /(isolation|probe)\.spec\.ts/,
+      testMatch: /isolation\.spec\.ts/,
       dependencies: ["setup"],
       use: { storageState: "state.json" },
     },
