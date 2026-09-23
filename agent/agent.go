@@ -395,6 +395,13 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 			}
 		}
 
+		// Last line of defence for the tool-block adjacency contract. History
+		// can pick up orphan tool_use/tool_result blocks from compaction,
+		// session resume, or an interrupted tool loop; any one of them makes
+		// the API reject every subsequent request in the session with a 400.
+		// Repairing here keeps a single recovery path for all of those sources.
+		a.history = sanitizeToolPairs(a.history)
+
 		// Start spinner while waiting for API response
 		if a.spinnerCallback != nil {
 			a.spinnerCallback(true, "Thinking...")

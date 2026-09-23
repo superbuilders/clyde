@@ -288,6 +288,59 @@ func sanitizeToolPairs(msgs []providers.Message) []providers.Message {
 	return out
 }
 
+// strippedThinkingPlaceholder replaces an assistant message whose entire
+// content was thinking/redacted_thinking blocks. Something must remain so
+// user/assistant alternation survives the removal.
+const strippedThinkingPlaceholder = "[System: reasoning trace omitted during compaction]"
+
+// StripThinkingBlocks removes every `thinking` and `redacted_thinking` block
+// from the given messages, returning a new slice (the input is not mutated).
+//
+// Thinking blocks carry a cryptographic signature computed over the exact
+// conversation prefix that produced them. Compaction rewrites that prefix, so
+// replaying a preserved thinking block makes the API reject the request
+// ("Expected `thinking` or `redacted_thinking`", signature verification
+// failure), which permanently bricks the session. Compacted history therefore
+// never replays thinking.
+//
+// Messages that consisted solely of thinking blocks are replaced with a
+// placeholder text body rather than dropped, so alternation is preserved.
+func StripThinkingBlocks(msgs []providers.Message) []providers.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+
+	out := make([]providers.Message, len(msgs))
+	copy(out, msgs)
+
+	for i := range out {
+		blocks, ok := contentBlocks(out[i])
+		if !ok {
+			continue
+		}
+
+		kept := make([]providers.ContentBlock, 0, len(blocks))
+		stripped := false
+		for _, b := range blocks {
+			if b.Type == "thinking" || b.Type == "redacted_thinking" {
+				stripped = true
+				continue
+			}
+			kept = append(kept, b)
+		}
+		if !stripped {
+			continue
+		}
+		if len(kept) == 0 {
+			out[i].Content = strippedThinkingPlaceholder
+			continue
+		}
+		out[i].Content = kept
+	}
+
+	return out
+}
+
 // ValidateHistory asserts the invariants a message list must satisfy before it
 // is sent to the provider. It is the guard rail for compaction: a compacted
 // history that violates them hard-fails every subsequent request in the
@@ -321,6 +374,12 @@ func ValidateHistory(msgs []providers.Message) error {
 		}
 		if len(blocks) == 0 {
 			return fmt.Errorf("message %d (%s): empty content block list", i, msg.Role)
+		}
+
+		for _, b := range blocks {
+			if b.Type == "thinking" || b.Type == "redacted_thinking" {
+				return fmt.Errorf("message %d (%s): %s block replayed after compaction", i, msg.Role, b.Type)
+			}
 		}
 
 		if msg.Role == "user" {
