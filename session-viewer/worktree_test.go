@@ -229,23 +229,42 @@ func TestDetectWorktreeGroup_NonSiblingWorktrees(t *testing.T) {
 
 // startTestServer starts the session viewer on a random port with a custom HOME.
 // Returns the base URL and a cleanup function.
-func startTestServer(t *testing.T, homeDir string) (string, func()) {
+// startTestServer boots the viewer against a temp home. Any extra dirs are also
+// given to the background scanner: tests that build git repos outside homeDir
+// need the scanner to see them, or it prunes their sessions from the cache.
+func startTestServer(t *testing.T, homeDir string, extraScanDirs ...string) (string, func()) {
 	t.Helper()
 
 	// Find a free port
 	port := 18700 + os.Getpid()%1000
 
-	// Override global state for testing
-	origCachePath := cachePath
-
-	// Set up a clean cache
-	cacheMu.Lock()
-	cache = newEmptyCache()
-	cacheMu.Unlock()
+	// Confine the background scanner to this test's temp home. Handlers fire
+	// `go backgroundScan()`, and the scanner prunes any cache entry it did not
+	// find on disk: pointed at the developer's real home it is slow, machine
+	// dependent, and it deletes the fixtures tests inject by hand.
+	//
+	// cachePath and scanDirs are set under cacheMu (those goroutines outlive
+	// the request that spawned them) and deliberately never restored — every
+	// test sets both before use, so there is nothing to restore to.
+	//
+	// Wait for any scan an earlier test started before installing the fixture,
+	// so it cannot prune it afterwards.
+	waitForScanIdle(10 * time.Second)
 
 	cacheDir := filepath.Join(homeDir, ".clyde")
 	os.MkdirAll(cacheDir, 0755)
+
+	cacheMu.Lock()
+	cache = newEmptyCache()
 	cachePath = filepath.Join(cacheDir, "viewer-cache-test.json")
+	scanDirs = func() map[string]bool {
+		dirs := map[string]bool{homeDir: true}
+		for _, d := range extraScanDirs {
+			dirs[d] = true
+		}
+		return dirs
+	}
+	cacheMu.Unlock()
 
 	baseURL := fmt.Sprintf("http://localhost:%d", port)
 
@@ -267,7 +286,7 @@ func startTestServer(t *testing.T, homeDir string) (string, func()) {
 
 	cleanup := func() {
 		e.Close()
-		cachePath = origCachePath
+		waitForScanIdle(10 * time.Second)
 	}
 	return baseURL, cleanup
 }
@@ -696,7 +715,7 @@ func TestE2E_FullWorktreeFlow(t *testing.T) {
 	os.MkdirAll(filepath.Join(wtDir, ".clyde", "sessions", "2026-07-16T11-00-00_test"), 0755)
 	os.WriteFile(filepath.Join(wtDir, ".clyde", "sessions", "2026-07-16T11-00-00_test", "2026-07-16T11-00-01.000_user.md"), []byte("**You:** hello from feature"), 0644)
 
-	baseURL, cleanup := startTestServer(t, homeDir)
+	baseURL, cleanup := startTestServer(t, homeDir, parentDir, mainDir, wtDir)
 	defer cleanup()
 
 	// Run a background scan

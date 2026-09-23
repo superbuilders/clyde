@@ -276,13 +276,18 @@ func fixNilMaps(c *ViewerCache) {
 }
 
 func saveCache() {
+	// cachePath is read under the same lock as the cache itself. saveCache runs
+	// on goroutines that outlive the request that spawned them, so anything
+	// that swaps the path out from under one of them — a test moving to a fresh
+	// temp dir, say — is a data race, not a theoretical one.
 	cacheMu.RLock()
 	data, err := json.MarshalIndent(cache, "", "  ")
+	path := cachePath
 	cacheMu.RUnlock()
 	if err != nil {
 		return
 	}
-	os.WriteFile(cachePath, data, 0644)
+	os.WriteFile(path, data, 0644)
 }
 
 // ── Tmux helpers ──
@@ -623,6 +628,31 @@ func formatTimestampDir(t time.Time) string {
 
 // ── Background scanner ──
 
+// scanDirs is the set of directories the background scanner walks. It is a
+// variable so tests can point the scanner at a temp tree: a test that scans the
+// developer's real home is slow, machine-dependent, and — because the scanner
+// prunes cache entries it did not find — will silently delete sessions another
+// test injected by hand. Guarded by cacheMu, like cachePath, for the same
+// reason: scans outlive the requests that start them.
+var scanDirs = discoverProjectDirs
+
+// waitForScanIdle blocks until no background scan is in flight, or the deadline
+// passes. Scans are fired with `go backgroundScan()` from several handlers, so
+// one can outlive the test that triggered it and prune the next test's fixture
+// out from under it.
+func waitForScanIdle(d time.Duration) {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		scanMu.Lock()
+		idle := !scanning
+		scanMu.Unlock()
+		if idle {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func backgroundScan() {
 	scanMu.Lock()
 	if scanning {
@@ -638,7 +668,10 @@ func backgroundScan() {
 	}()
 
 	start := time.Now()
-	cwdSet := discoverProjectDirs()
+	cacheMu.RLock()
+	roots := scanDirs
+	cacheMu.RUnlock()
+	cwdSet := roots()
 	home, _ := os.UserHomeDir()
 	bc := make(map[string]string)
 
