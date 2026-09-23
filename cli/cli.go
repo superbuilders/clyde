@@ -94,7 +94,11 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 			"Get your API key from: https://console.anthropic.com/", configPath)
 	}
 
-	// Parse optional thinking budget tokens
+	// Parse optional thinking budget tokens.
+	//
+	// DEPRECATED: budget_tokens is rejected outright by Opus 5 and newer.
+	// The value is translated to an equivalent TS_AGENT_THINKING_EFFORT level
+	// rather than being sent to the API.
 	thinkingBudget := 0
 	if budgetStr := os.Getenv("THINKING_BUDGET_TOKENS"); budgetStr != "" {
 		budget, err := strconv.Atoi(budgetStr)
@@ -105,6 +109,20 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 			return agent.Config{}, fmt.Errorf("THINKING_BUDGET_TOKENS must be >= 1024, got %d", budget)
 		}
 		thinkingBudget = budget
+		fmt.Fprintf(os.Stderr,
+			"warning: THINKING_BUDGET_TOKENS is deprecated and unsupported on Opus 5+.\n"+
+				"         Translating %d tokens to TS_AGENT_THINKING_EFFORT=%s.\n"+
+				"         Set TS_AGENT_THINKING_EFFORT directly to silence this warning.\n",
+			budget, agent.EffortForBudget(budget))
+	}
+
+	// Parse optional reasoning effort. This is the modern replacement for
+	// THINKING_BUDGET_TOKENS and is pinned explicitly on every request.
+	thinkingEffort := os.Getenv("TS_AGENT_THINKING_EFFORT")
+	if thinkingEffort != "" && !agent.IsValidEffort(thinkingEffort) {
+		return agent.Config{}, fmt.Errorf(
+			"TS_AGENT_THINKING_EFFORT must be one of %s, got %q",
+			strings.Join(agent.ValidEfforts, ", "), thinkingEffort)
 	}
 
 	// Parse optional reserve tokens for compaction trigger
@@ -133,19 +151,47 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		modelID = "claude-opus-4-6"
 	}
 
+	// Context window is model-dependent; allow an override so a model swap
+	// does not silently mis-size the compaction threshold.
+	contextWindowSize := 200000 // Claude Opus 4.6 / Opus 5 context window
+	if cwStr := os.Getenv("TS_AGENT_CONTEXT_WINDOW"); cwStr != "" {
+		cw, err := strconv.Atoi(cwStr)
+		if err != nil {
+			return agent.Config{}, fmt.Errorf("TS_AGENT_CONTEXT_WINDOW must be a number, got %q: %w", cwStr, err)
+		}
+		if cw < 10000 {
+			return agent.Config{}, fmt.Errorf("TS_AGENT_CONTEXT_WINDOW must be >= 10000, got %d", cw)
+		}
+		contextWindowSize = cw
+	}
+
+	// Max output tokens. On Opus 5 this is a hard cap on thinking + visible
+	// text combined, so an undersized value can let reasoning starve the answer.
+	maxTokens := 64000
+	if mtStr := os.Getenv("TS_AGENT_MAX_TOKENS"); mtStr != "" {
+		mt, err := strconv.Atoi(mtStr)
+		if err != nil {
+			return agent.Config{}, fmt.Errorf("TS_AGENT_MAX_TOKENS must be a number, got %q: %w", mtStr, err)
+		}
+		if mt < 1024 {
+			return agent.Config{}, fmt.Errorf("TS_AGENT_MAX_TOKENS must be >= 1024, got %d", mt)
+		}
+		maxTokens = mt
+	}
+
 	return agent.Config{
 		APIKey:            apiKey,
 		APIURL:            apiURL,
 		ModelID:           modelID,
-		MaxTokens:         64000,
-		ContextWindowSize: 200000, // Claude Opus 4.6 context window
+		MaxTokens:         maxTokens,
+		ContextWindowSize: contextWindowSize,
 		ThinkingBudget:    thinkingBudget,
+		ThinkingEffort:    thinkingEffort,
 		NoThink:           noThink,
 		BraveSearchAPIKey: os.Getenv("BRAVE_SEARCH_API_KEY"),
 		MCPPlaywright:     os.Getenv("MCP_PLAYWRIGHT") == "true",
 		MCPPlaywrightArgs: os.Getenv("MCP_PLAYWRIGHT_ARGS"),
 		ReserveTokens:     reserveTokens,
-
 	}, nil
 }
 

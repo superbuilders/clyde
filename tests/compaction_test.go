@@ -822,8 +822,8 @@ func TestCompact_Integration(t *testing.T) {
 
 	// Create a real API client
 	client := providers.NewClient(apiKey,
-		"https://api.anthropic.com/v1/messages",
-		"claude-opus-4-6", 4096)
+		testAPIURL(),
+		testModelID(), 4096)
 
 	var compactionSummary string
 	var compactionMarker string

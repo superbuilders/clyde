@@ -11,33 +11,87 @@ import (
 
 // Client handles communication with the Claude API
 type Client struct {
-	apiKey    string
-	apiURL    string
-	modelID   string
-	maxTokens int
-	thinking  *ThinkingConfig
+	apiKey       string
+	apiURL       string
+	modelID      string
+	maxTokens    int
+	thinking     *ThinkingConfig
+	outputConfig *OutputConfig
+	toolChoice   *ToolChoice
 }
 
-// NewClient creates a new Claude API client
+// NewClient creates a new Claude API client with all model-behavior knobs
+// pinned to the harness defaults (see the "Pinned request defaults" block in
+// types.go). Callers may override individual pins with the With* methods.
 func NewClient(apiKey, apiURL, modelID string, maxTokens int) *Client {
 	return &Client{
 		apiKey:    apiKey,
 		apiURL:    apiURL,
 		modelID:   modelID,
 		maxTokens: maxTokens,
+		// Pin thinking on by default, with visible reasoning — matches Opus 4.6.
+		thinking: &ThinkingConfig{
+			Type:    DefaultThinkingType,
+			Display: DefaultThinkingDisplay,
+		},
+		outputConfig: &OutputConfig{Effort: DefaultEffort},
+		toolChoice:   &ToolChoice{Type: DefaultToolChoice},
 	}
 }
 
-// WithThinking returns a new client with thinking enabled.
-// Pass nil to disable thinking.
+// clone returns a shallow copy so the With* methods stay immutable.
+func (c *Client) clone() *Client {
+	cp := *c
+	return &cp
+}
+
+// WithThinking returns a new client with the given thinking configuration.
+//
+// Passing nil disables thinking by explicitly sending {type: "disabled"},
+// rather than omitting the field. Omitting it is NOT equivalent: Opus 5 and
+// Sonnet 5 think by default, so an absent thinking field leaves thinking on.
 func (c *Client) WithThinking(thinking *ThinkingConfig) *Client {
-	return &Client{
-		apiKey:    c.apiKey,
-		apiURL:    c.apiURL,
-		modelID:   c.modelID,
-		maxTokens: c.maxTokens,
-		thinking:  thinking,
+	cp := c.clone()
+	if thinking == nil {
+		cp.thinking = &ThinkingConfig{Type: ThinkingTypeDisabled}
+		return cp
 	}
+	// Default the display mode if the caller did not pin one, so thinking text
+	// is never silently dropped.
+	t := *thinking
+	if t.Display == "" && t.Type != ThinkingTypeDisabled {
+		t.Display = DefaultThinkingDisplay
+	}
+	cp.thinking = &t
+	return cp
+}
+
+// WithEffort returns a new client using the given reasoning effort level.
+// An empty or invalid value leaves the pinned default in place.
+func (c *Client) WithEffort(effort string) *Client {
+	cp := c.clone()
+	if IsValidEffort(effort) {
+		cp.outputConfig = &OutputConfig{Effort: effort}
+	}
+	return cp
+}
+
+// WithToolChoice returns a new client with the given tool choice policy.
+func (c *Client) WithToolChoice(tc *ToolChoice) *Client {
+	cp := c.clone()
+	cp.toolChoice = tc
+	return cp
+}
+
+// Thinking exposes the pinned thinking configuration (for diagnostics/tests).
+func (c *Client) Thinking() *ThinkingConfig { return c.thinking }
+
+// Effort exposes the pinned reasoning effort (for diagnostics/tests).
+func (c *Client) Effort() string {
+	if c.outputConfig == nil {
+		return ""
+	}
+	return c.outputConfig.Effort
 }
 
 // Call sends a request to the Claude API with the given messages and tools
@@ -50,6 +104,13 @@ func (c *Client) Call(systemPrompt string, messages []Message, tools []Tool) (*R
 		Messages:     messages,
 		Tools:        tools,
 		Thinking:     c.thinking,
+		OutputConfig: c.outputConfig,
+	}
+
+	// tool_choice is only meaningful when tools are present; sending it with an
+	// empty tool list is rejected by some routes.
+	if len(tools) > 0 {
+		reqBody.ToolChoice = c.toolChoice
 	}
 
 	jsonData, err := json.Marshal(reqBody)
