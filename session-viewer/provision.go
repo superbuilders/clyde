@@ -109,7 +109,7 @@ func provision(o provisionOpts) error {
 
 	if o.dryRun {
 		fmt.Printf("would ensure group   %s\n", o.group)
-		fmt.Printf("would ensure user    %s (home %s/%s, shell /usr/sbin/nologin)\n", username, homeRoot, username)
+		fmt.Printf("would ensure user    %s (home %s/%s, shell %s)\n", username, homeRoot, username, userShell)
 		fmt.Printf("would map            %s -> %s in %s\n", email, username, o.mapPath)
 		return nil
 	}
@@ -199,8 +199,23 @@ func ensureHomeRoot() error {
 	return os.Chown(homeRoot, 0, 0)
 }
 
-// ensureUser creates the account if absent. Shell is nologin: these accounts
-// exist to own files and run agents, not to be logged into. Idempotent.
+// userShell is the login shell for provisioned accounts.
+//
+// A real shell, not nologin. The agent's run_bash execs one, and tmux runs a
+// session's command through the user's shell — with nologin the command exits
+// immediately, the tmux server has no sessions left, and it shuts down. The
+// symptom is "tmux session not running" on every message with nothing in the
+// log except nologin's "Attempted login by UNKNOWN".
+//
+// This costs little: the box has no public IP, no SSH keys and no sshd
+// exposure, so the shell is reachable only through an agent that is already
+// running as this user. The service account has had a real shell for the same
+// reason since M2.
+const userShell = "/bin/bash"
+
+// ensureUser creates the account if absent. Idempotent, and it corrects the
+// shell on accounts that already exist — earlier revisions provisioned them
+// with nologin.
 func ensureUser(username, group string) (bool, error) {
 	if u, err := user.Lookup(username); err == nil {
 		uid, _ := strconv.Atoi(u.Uid)
@@ -211,12 +226,19 @@ func ensureUser(username, group string) (bool, error) {
 		if out, err := exec.Command("usermod", "-aG", group, username).CombinedOutput(); err != nil {
 			return false, fmt.Errorf("usermod -aG %s %s: %v: %s", group, username, err, strings.TrimSpace(string(out)))
 		}
+		if u.HomeDir != "" && filepath.Dir(u.HomeDir) != homeRoot {
+			return false, fmt.Errorf("user %q has home %q outside %s; refusing to manage it",
+				username, u.HomeDir, homeRoot)
+		}
+		if out, err := exec.Command("usermod", "-s", userShell, username).CombinedOutput(); err != nil {
+			return false, fmt.Errorf("usermod -s %s %s: %v: %s", userShell, username, err, strings.TrimSpace(string(out)))
+		}
 		return false, nil
 	}
 	args := []string{
 		"--create-home",
 		"--home-dir", filepath.Join(homeRoot, username),
-		"--shell", "/usr/sbin/nologin",
+		"--shell", userShell,
 		"--groups", group,
 		username,
 	}
