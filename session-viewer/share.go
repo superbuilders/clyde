@@ -1,0 +1,362 @@
+package main
+
+// Sharing — granting one user read access to another user's directory.
+//
+// PLAN.md §4 (M4). Classic Unix permissions can express only owner/group/other,
+// which cannot say "Alice and exactly Bob". POSIX ACLs can, so a share is:
+//
+//	1. a *grant*: recursive read+traverse for Bob on the shared directory, plus
+//	   a default ACL so files created later are readable too;
+//	2. a *corridor*: traverse-only (--x) on each directory between Alice's home
+//	   and the shared one, because a grant Bob cannot walk to is useless;
+//	3. a *symlink* in Bob's home, because a grant Bob cannot find is also
+//	   useless — his agent has no reason to go looking in Alice's tree.
+//
+// Two invariants shape the code below.
+//
+// The filesystem is the database. There is no share registry to drift out of
+// sync; a share exists iff the ACL exists. This works because the two kinds of
+// entry are self-describing: a grant is r-x, a corridor bit is --x. That
+// distinction is what lets revoke recompute the correct state from the tree
+// alone (see reconcileCorridor).
+//
+// Sharing is two-sided and neither side is root. The grant modifies Alice's
+// tree and runs as Alice; the symlink modifies Bob's tree and runs as Bob. The
+// service performs neither. This is the same rule as mkdirAs: every write into
+// a user's tree happens as that user. Alice can set ACLs on her own files
+// without privilege because POSIX lets the owner do so.
+//
+// Shares are read-only. Write access will arrive as "forking" — a copy into
+// the sharee's own tree — which touches only the sharee's home and so leaves
+// this invariant intact. Nothing here should ever grant w.
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// sharedDirName is where a user's inbound shares appear, under their home.
+const sharedDirName = "shared"
+
+// ── pure logic ──────────────────────────────────────────────────────────────
+
+// corridorFor returns the directories that need a traverse bit so that target
+// is reachable from home: home itself and every directory between it and
+// target, excluding target (which gets a full grant instead).
+//
+// Ordering is outermost-first, which is the order they must be applied in for
+// the path to be walkable at every intermediate step.
+//
+// Everything above home is out of scope: /srv/bonnie/users is 0751 precisely
+// so that it is traversable by anyone without per-share surgery.
+func corridorFor(home, target string) ([]string, error) {
+	home = filepath.Clean(home)
+	target = filepath.Clean(target)
+	if home == "" || home == "/" {
+		return nil, fmt.Errorf("refusing to build a corridor from %q", home)
+	}
+	if target == home {
+		// Sharing a whole home directory would make the corridor and the grant
+		// the same directory, and the grant (r-x) would expose every project
+		// Alice has. If we ever want this it needs its own design.
+		return nil, fmt.Errorf("refusing to share an entire home directory (%s)", home)
+	}
+	if !strings.HasPrefix(target, home+string(filepath.Separator)) {
+		return nil, fmt.Errorf("target %q is not inside %q", target, home)
+	}
+
+	var dirs []string
+	for d := filepath.Dir(target); len(d) >= len(home); d = filepath.Dir(d) {
+		dirs = append(dirs, d)
+		if d == home {
+			break
+		}
+	}
+	// Collected innermost-first; the caller wants outermost-first.
+	for i, j := 0, len(dirs)-1; i < j; i, j = i+1, j-1 {
+		dirs[i], dirs[j] = dirs[j], dirs[i]
+	}
+	return dirs, nil
+}
+
+// aclEntry is one user's access to one path, as reported by getfacl.
+type aclEntry struct {
+	Path  string
+	Perms string // as printed by getfacl, e.g. "r-x" or "--x"
+}
+
+// isGrant reports whether this entry is a share root rather than a corridor
+// bit. Read access is only ever applied to the directory actually shared, so
+// the presence of r is what distinguishes intent from scaffolding.
+func (e aclEntry) isGrant() bool { return strings.Contains(e.Perms, "r") }
+
+// parseGetfaclRecursive extracts one user's entries from `getfacl -R` output.
+//
+// The format is stanzas separated by blank lines, each beginning with
+// "# file: <path>" followed by entry lines like "user:bob:r-x". Default-ACL
+// entries are prefixed "default:" and are deliberately ignored here: they
+// describe what future files inherit, not what is currently reachable, so they
+// must not be mistaken for corridor bits.
+//
+// Paths are returned exactly as printed. Callers must pass --absolute-names,
+// because getfacl otherwise strips the leading slash and the results cannot be
+// compared against anything.
+func parseGetfaclRecursive(out, username string) []aclEntry {
+	var (
+		entries []aclEntry
+		cur     string
+		want    = "user:" + username + ":"
+	)
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		switch {
+		case strings.HasPrefix(line, "# file:"):
+			cur = strings.TrimSpace(strings.TrimPrefix(line, "# file:"))
+		case strings.HasPrefix(line, "#"), line == "":
+			// owner/group headers and stanza separators
+		case strings.HasPrefix(line, "default:"):
+			// inheritance, not current reachability
+		case strings.HasPrefix(line, want):
+			perms := strings.TrimPrefix(line, want)
+			// getfacl appends "\t#effective:r--" when the mask clips an entry.
+			if i := strings.IndexAny(perms, " \t"); i >= 0 {
+				perms = perms[:i]
+			}
+			if cur != "" {
+				entries = append(entries, aclEntry{Path: cur, Perms: perms})
+			}
+		}
+	}
+	return entries
+}
+
+// reconcileCorridor computes the corridor change needed after the set of
+// grants has changed.
+//
+// This is the heart of revocation. Rather than trying to undo what a grant
+// did — which breaks as soon as two shares overlap, because they share
+// ancestors — it derives the corridor that *should* exist from the grants that
+// *do* exist, and returns the difference.
+//
+// Being a pure function of the observed tree, it is also self-healing: a
+// corridor bit left behind by an interrupted revoke is removed by the next one.
+//
+// Stale corridor bits are not cosmetic. They name a user, and anyone who can
+// reach the directory can read that name with getfacl — so leaving them turns
+// a user's home into a permanent public record of everyone they ever shared
+// with, including people they revoked. They also leave genuine reachability
+// for anything permissive deeper in the tree, and ext4 caps a directory at
+// roughly 500 entries, which the home directory would hit first.
+func reconcileCorridor(home string, entries []aclEntry) (add, remove []string, err error) {
+	want := map[string]bool{}
+	for _, e := range entries {
+		if !e.isGrant() {
+			continue
+		}
+		dirs, cerr := corridorFor(home, e.Path)
+		if cerr != nil {
+			// A grant we cannot place is a grant we should not silently ignore:
+			// it means the tree contains something we did not put there.
+			return nil, nil, fmt.Errorf("reconciling %s: %w", e.Path, cerr)
+		}
+		for _, d := range dirs {
+			want[d] = true
+		}
+	}
+
+	have := map[string]bool{}
+	for _, e := range entries {
+		if !e.isGrant() {
+			have[e.Path] = true
+		}
+	}
+
+	for d := range want {
+		if !have[d] {
+			add = append(add, d)
+		}
+	}
+	for d := range have {
+		if !want[d] {
+			remove = append(remove, d)
+		}
+	}
+	sort.Strings(add)
+	sort.Strings(remove)
+	return add, remove, nil
+}
+
+// linkNameFor is where a share from owner appears in the sharee's home:
+// ~/shared/<owner>/<basename>. Namespacing by owner means two people sharing
+// directories with the same name do not collide, and the provenance of a
+// shared directory is visible in its path.
+func linkNameFor(shareeHome, ownerUsername, target string) string {
+	return filepath.Join(shareeHome, sharedDirName, ownerUsername, filepath.Base(target))
+}
+
+// ── effects ─────────────────────────────────────────────────────────────────
+
+// setfaclAs runs setfacl as the principal. Never through a shell (PLAN.md §1):
+// argv is explicit, and a username that somehow contained a metacharacter
+// would be an argument rather than syntax.
+func setfaclAs(p *Principal, args ...string) error {
+	cmd := p.command("setfacl", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("setfacl %s: %v: %s",
+			strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// currentACL reads every entry for username under home.
+//
+// This runs as the service rather than as the owner. Reading is the one thing
+// the service is allowed to do unilaterally (it holds CAP_DAC_READ_SEARCH
+// exactly so it can see everything), and doing it here means revocation still
+// works if the owner's account is in a state where spawning fails.
+func currentACL(home, username string) ([]aclEntry, error) {
+	cmd := exec.Command("getfacl", "-R", "-s", "--absolute-names", home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// getfacl exits non-zero on unreadable subtrees but still prints what
+		// it could read. Trusting partial output here would under-report
+		// grants and so over-remove corridor bits, breaking live shares.
+		return nil, fmt.Errorf("getfacl -R %s: %v: %s",
+			home, err, strings.TrimSpace(string(out)))
+	}
+	return parseGetfaclRecursive(string(out), username), nil
+}
+
+// grantShare gives sharee read access to target inside owner's tree, and makes
+// it visible in the sharee's home.
+//
+// Order matters: the grant is applied before the corridor, so there is never a
+// moment where the sharee can walk to a directory that is not yet marked as
+// deliberately shared. The symlink is last, because it is the only part that
+// is purely cosmetic — if it fails, access still works and the next grant
+// repairs it. The ACL is the source of truth; the link is derived.
+func grantShare(owner, sharee *Principal, target string) error {
+	if owner == nil || sharee == nil {
+		return fmt.Errorf("share requires two principals")
+	}
+	if owner.Username == sharee.Username {
+		return fmt.Errorf("refusing to share %s with its own owner", target)
+	}
+	target = filepath.Clean(target)
+	if !ownsPath(owner, target) {
+		return fmt.Errorf("refusing to share %q: not inside %s's home", target, owner.Username)
+	}
+	fi, err := os.Stat(target)
+	if err != nil {
+		return fmt.Errorf("share target: %w", err)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("share target %q is not a directory", target)
+	}
+	corridor, err := corridorFor(owner.Home, target)
+	if err != nil {
+		return err
+	}
+
+	u := "u:" + sharee.Username
+
+	// rX, not rx: capital X means "execute only where it is already set",
+	// i.e. on directories. Lowercase would mark every shared file executable.
+	if err := setfaclAs(owner, "-R", "-m", u+":rX", target); err != nil {
+		return err
+	}
+	// The default ACL makes the share durable. Without it, files the owner
+	// creates tomorrow are unreadable and the share appears to rot.
+	if err := setfaclAs(owner, "-R", "-d", "-m", u+":rX", target); err != nil {
+		return err
+	}
+	for _, dir := range corridor {
+		// Traverse only. The sharee can pass through these directories but
+		// cannot list them, so a share leaks the path it was given and nothing
+		// about the owner's other projects.
+		if err := setfaclAs(owner, "-m", u+":x", dir); err != nil {
+			return err
+		}
+	}
+
+	return linkShare(owner, sharee, target)
+}
+
+// linkShare creates the symlink in the sharee's home, as the sharee.
+func linkShare(owner, sharee *Principal, target string) error {
+	link := linkNameFor(sharee.Home, owner.Username, target)
+	if err := sharee.mkdirAs(filepath.Dir(link)); err != nil {
+		return fmt.Errorf("creating share directory: %w", err)
+	}
+	// -n -f so that re-sharing replaces a stale link rather than creating one
+	// inside the directory the old link points at.
+	cmd := sharee.command("ln", "-sfn", target, link)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("linking %s -> %s: %v: %s",
+			link, target, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// revokeShare removes the sharee's access to target and repairs the corridor.
+//
+// The grant is removed first, then the corridor is recomputed from whatever
+// grants remain. That ordering is what makes overlapping shares safe: if the
+// owner shared two directories under the same parent and revokes one, the
+// surviving grant keeps the shared ancestor's traverse bit alive.
+func revokeShare(owner, sharee *Principal, target string) error {
+	if owner == nil || sharee == nil {
+		return fmt.Errorf("revoke requires two principals")
+	}
+	target = filepath.Clean(target)
+	if !ownsPath(owner, target) {
+		return fmt.Errorf("refusing to revoke %q: not inside %s's home", target, owner.Username)
+	}
+
+	u := "u:" + sharee.Username
+	if _, err := os.Stat(target); err == nil {
+		if err := setfaclAs(owner, "-R", "-x", u, target); err != nil {
+			return err
+		}
+		if err := setfaclAs(owner, "-R", "-d", "-x", u, target); err != nil {
+			return err
+		}
+	}
+
+	// Remove the link before repairing the corridor, so a failure part-way
+	// leaves the sharee with no visible route rather than a dangling one.
+	link := linkNameFor(sharee.Home, owner.Username, target)
+	if out, err := sharee.command("rm", "-f", link).CombinedOutput(); err != nil {
+		return fmt.Errorf("removing %s: %v: %s", link, err, strings.TrimSpace(string(out)))
+	}
+
+	return repairCorridor(owner, sharee)
+}
+
+// repairCorridor brings the corridor into agreement with the surviving grants.
+func repairCorridor(owner, sharee *Principal) error {
+	entries, err := currentACL(owner.Home, sharee.Username)
+	if err != nil {
+		return err
+	}
+	add, remove, err := reconcileCorridor(owner.Home, entries)
+	if err != nil {
+		return err
+	}
+	u := "u:" + sharee.Username
+	for _, dir := range add {
+		if err := setfaclAs(owner, "-m", u+":x", dir); err != nil {
+			return err
+		}
+	}
+	for _, dir := range remove {
+		if err := setfaclAs(owner, "-x", u, dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
