@@ -1,4 +1,4 @@
-package main
+package provision
 
 // `bonnie provision` — the only root-only subcommand (PLAN.md §M3).
 //
@@ -34,7 +34,7 @@ var usernameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 // asserted by the identity provider.
 var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 
-type provisionOpts struct {
+type Opts struct {
 	email    string
 	username string
 	mapPath  string
@@ -42,9 +42,9 @@ type provisionOpts struct {
 	dryRun   bool
 }
 
-func runProvision(argv []string) int {
+func Run(argv []string) int {
 	fs := flag.NewFlagSet("provision", flag.ContinueOnError)
-	var o provisionOpts
+	var o Opts
 	fs.StringVar(&o.email, "email", "", "authenticated email address of the user (required)")
 	fs.StringVar(&o.username, "username", "", "unix username to create (default: derived from email)")
 	fs.StringVar(&o.mapPath, "map", principal.UserMapPath, "path to the email→username map")
@@ -57,14 +57,14 @@ func runProvision(argv []string) int {
 	if err := fs.Parse(argv); err != nil {
 		return 2
 	}
-	if err := provision(o); err != nil {
+	if err := do(o); err != nil {
 		fmt.Fprintf(os.Stderr, "provision: %v\n", err)
 		return 1
 	}
 	return 0
 }
 
-func provision(o provisionOpts) error {
+func do(o Opts) error {
 	if o.email == "" {
 		return errors.New("--email is required")
 	}

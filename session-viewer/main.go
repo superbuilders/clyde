@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"session-viewer/internal/auth"
 	"session-viewer/internal/principal"
+	"session-viewer/internal/provision"
 	"sort"
 	"strconv"
 	"strings"
@@ -1898,7 +1899,7 @@ func main() {
 	// endpoint: creating Unix users requires root and a shell on the box.
 	// Handled before flag parsing so it gets its own flag set.
 	if len(os.Args) > 1 && os.Args[1] == "provision" {
-		os.Exit(runProvision(os.Args[2:]))
+		os.Exit(provision.Run(os.Args[2:]))
 	}
 	// Likewise for sharing: it acts as two different users, so it needs root
 	// and a shell on the box (PLAN.md §4 M4.2, A5).
