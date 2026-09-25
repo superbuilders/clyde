@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"encoding/hex"
@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-func testAuth(t *testing.T, allowed ...string) *authConfig {
+func testAuth(t *testing.T, allowed ...string) *Config {
 	t.Helper()
 	key, err := hex.DecodeString(strings.Repeat("ab", 32))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &authConfig{Mode: "oidc", SessionKey: key, Allowed: allowed}
+	return &Config{Mode: "oidc", SessionKey: key, Allowed: allowed}
 }
 
 func TestSafeNextBlocksOpenRedirect(t *testing.T) {
@@ -249,9 +249,9 @@ func TestTruthy(t *testing.T) {
 func TestBuildAuthDefaultsToNone(t *testing.T) {
 	authFlagPtrs = nil
 	authFlagVals = authFlags{}
-	cfg, err := buildAuth(t.Context())
+	cfg, err := Build(t.Context())
 	if err != nil {
-		t.Fatalf("buildAuth: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
 	if cfg.Mode != "none" {
 		t.Fatalf("default mode = %q, want none", cfg.Mode)
@@ -273,8 +273,8 @@ func TestBuildAuthRefusesBadConfig(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			authFlagPtrs = nil
 			authFlagVals = f
-			if _, err := buildAuth(t.Context()); err == nil {
-				t.Error("buildAuth succeeded, want error")
+			if _, err := Build(t.Context()); err == nil {
+				t.Error("Build succeeded, want error")
 			}
 		})
 	}

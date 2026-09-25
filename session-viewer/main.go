@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"session-viewer/internal/auth"
 	"session-viewer/internal/principal"
 	"sort"
 	"strconv"
@@ -695,6 +697,35 @@ func discoverProjectDirsFor(p *principal.Principal) map[string]bool {
 		}
 	}
 	return s
+}
+
+// principalFor resolves the Unix identity a request acts as.
+//
+// In solo mode this is the invoking user and the email is irrelevant. In
+// multi-user mode an authenticated email with no mapping is an error, never a
+// fallback to the service account — falling back would silently give an
+// unprovisioned user access to the service's own files.
+func principalFor(c echo.Context) (*principal.Principal, error) {
+	if principals == nil {
+		// Unconfigured means "nobody asked for multi-user", which is solo: the
+		// only way to get a multi-user resolver is to pass --multi-user, and
+		// main() sets the global before serving. Defaulting to solo keeps
+		// in-process callers (tests) honest without inventing a privileged
+		// fallback for real requests, which is the case that would matter.
+		r, err := principal.NewResolver(false, "")
+		if err != nil {
+			return nil, err
+		}
+		principals = r
+	}
+	if principals.IsSolo() {
+		return principals.ForEmail("")
+	}
+	email := auth.EmailFrom(c)
+	if email == "" {
+		return nil, errors.New("no authenticated email on request")
+	}
+	return principals.ForEmail(email)
 }
 
 func readFileCapped(path string, maxBytes int64) (string, error) {
@@ -1885,7 +1916,7 @@ func main() {
 	multiUser := flag.Bool("multi-user", envBool("BONNIE_MULTI_USER"),
 		"run each user's agents as their own Unix user (M3). Off = today's solo behaviour.")
 	userMapFlag := flag.String("user-map", principal.UserMapPath, "email→username map used with --multi-user")
-	registerAuthFlags()
+	auth.RegisterFlags()
 	flag.Parse()
 	if !strings.Contains(addr, ":") {
 		addr = ":" + addr
@@ -1924,7 +1955,7 @@ func main() {
 		syscall.Umask(0o027)
 	}
 
-	auth, err := buildAuth(context.Background())
+	authCfg, err := auth.Build(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "auth configuration error: %v\n", err)
 		os.Exit(2)
@@ -1936,7 +1967,7 @@ func main() {
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Use(middleware.CORS())
-	auth.install(e)
+	authCfg.Install(e)
 
 	api := e.Group("/api")
 	api.GET("/sessions", getSessions)
@@ -1970,11 +2001,11 @@ func main() {
 	staticFS, _ := fs.Sub(staticFiles, "static")
 	e.GET("/*", echo.WrapHandler(http.FileServer(http.FS(staticFS))))
 
-	if auth.Mode == "none" {
+	if authCfg.Mode == "none" {
 		fmt.Printf("🔍 Session Viewer at http://localhost%s\n", addr)
 	} else {
 		fmt.Printf("🔒 Session Viewer at %s (auth=%s, allowed=%s)\n",
-			addr, auth.Mode, strings.Join(auth.Allowed, ","))
+			addr, authCfg.Mode, strings.Join(authCfg.Allowed, ","))
 	}
 	e.Logger.Fatal(e.Start(addr))
 }

@@ -1,4 +1,4 @@
-package main
+package auth
 
 // Bonnie M1 — authentication gate.
 //
@@ -31,7 +31,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"session-viewer/internal/principal"
 	"strings"
 	"time"
 
@@ -47,8 +46,8 @@ const (
 	oauthTTL          = 10 * time.Minute
 )
 
-// authConfig is the resolved auth configuration. Mode "none" means disabled.
-type authConfig struct {
+// Config is the resolved auth configuration. Mode "none" means disabled.
+type Config struct {
 	Mode         string // "none" | "oidc"
 	Issuer       string
 	ClientID     string
@@ -66,7 +65,7 @@ type authConfig struct {
 	oauth    *oauth2.Config
 }
 
-// authFlags holds raw flag values; resolved by buildAuth after flag.Parse.
+// authFlags holds raw flag values; resolved by Build after flag.Parse.
 type authFlags struct {
 	mode         string
 	issuer       string
@@ -81,9 +80,9 @@ type authFlags struct {
 
 var authFlagVals authFlags
 
-// registerAuthFlags wires auth flags. Every one defaults from the environment
+// RegisterFlags wires auth flags. Every one defaults from the environment
 // so systemd can supply them without a growing ExecStart line.
-func registerAuthFlags() {
+func RegisterFlags() {
 	fs := func(name, env, def, usage string) *string {
 		v := def
 		if e := os.Getenv(env); e != "" {
@@ -110,7 +109,7 @@ func registerAuthFlags() {
 
 var authFlagPtrs []*string
 
-func collectAuthFlags() {
+func collectFlags() {
 	if len(authFlagPtrs) != 9 {
 		return
 	}
@@ -127,24 +126,24 @@ func collectAuthFlags() {
 	}
 }
 
-// buildAuth validates configuration and performs OIDC discovery. It returns a
+// Build validates configuration and performs OIDC discovery. It returns a
 // disabled config for mode "none". Any misconfiguration in mode "oidc" is a
 // hard error: we refuse to start rather than serve an unauthenticated viewer
 // that was *meant* to be authenticated.
-func buildAuth(ctx context.Context) (*authConfig, error) {
-	collectAuthFlags()
+func Build(ctx context.Context) (*Config, error) {
+	collectFlags()
 	f := authFlagVals
 
 	mode := strings.TrimSpace(strings.ToLower(f.mode))
 	switch mode {
 	case "", "none":
-		return &authConfig{Mode: "none"}, nil
+		return &Config{Mode: "none"}, nil
 	case "oidc":
 	default:
 		return nil, fmt.Errorf("unknown --auth mode %q (want none|oidc)", f.mode)
 	}
 
-	cfg := &authConfig{
+	cfg := &Config{
 		Mode:         "oidc",
 		Issuer:       strings.TrimSpace(f.issuer),
 		ClientID:     strings.TrimSpace(f.clientID),
@@ -231,14 +230,14 @@ func buildAuth(ctx context.Context) (*authConfig, error) {
 
 // ── signing ──
 
-func (a *authConfig) sign(payload []byte) string {
+func (a *Config) sign(payload []byte) string {
 	mac := hmac.New(sha256.New, a.SessionKey)
 	mac.Write(payload)
 	return base64.RawURLEncoding.EncodeToString(payload) + "." +
 		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func (a *authConfig) unsign(tok string) ([]byte, error) {
+func (a *Config) unsign(tok string) ([]byte, error) {
 	parts := strings.Split(tok, ".")
 	if len(parts) != 2 {
 		return nil, errors.New("malformed token")
@@ -272,7 +271,7 @@ type oauthState struct {
 	Exp      int64  `json:"exp"`
 }
 
-func (a *authConfig) setCookie(c echo.Context, name, value string, ttl time.Duration) {
+func (a *Config) setCookie(c echo.Context, name, value string, ttl time.Duration) {
 	ck := &http.Cookie{
 		Name:     name,
 		Value:    value,
@@ -291,7 +290,7 @@ func (a *authConfig) setCookie(c echo.Context, name, value string, ttl time.Dura
 }
 
 // currentSession returns the verified session, or an error.
-func (a *authConfig) currentSession(c echo.Context) (*sessionClaims, error) {
+func (a *Config) currentSession(c echo.Context) (*sessionClaims, error) {
 	ck, err := c.Cookie(sessionCookieName)
 	if err != nil {
 		return nil, errors.New("no session cookie")
@@ -312,7 +311,7 @@ func (a *authConfig) currentSession(c echo.Context) (*sessionClaims, error) {
 
 // emailAllowed matches an exact address, or the domain part against a
 // bare-domain entry. Comparison is lowercase.
-func (a *authConfig) emailAllowed(email string) bool {
+func (a *Config) emailAllowed(email string) bool {
 	email = strings.ToLower(strings.TrimSpace(email))
 	at := strings.LastIndex(email, "@")
 	if at < 0 {
@@ -375,7 +374,7 @@ func isAPIRequest(c echo.Context) bool {
 
 // install registers auth routes and the gate. For mode "none" it does nothing
 // at all — that is the point.
-func (a *authConfig) install(e *echo.Echo) {
+func (a *Config) Install(e *echo.Echo) {
 	if a.Mode == "none" {
 		return
 	}
@@ -398,7 +397,7 @@ func (a *authConfig) install(e *echo.Echo) {
 	e.Use(a.middleware)
 }
 
-func (a *authConfig) middleware(next echo.HandlerFunc) echo.HandlerFunc {
+func (a *Config) middleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		p := c.Request().URL.Path
 		if p == "/healthz" || strings.HasPrefix(p, "/auth/") {
@@ -417,44 +416,15 @@ func (a *authConfig) middleware(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 		// Carry the verified email so handlers can resolve a principal without
 		// re-parsing the cookie.
-		c.Set(ctxEmailKey, sess.Email)
+		c.Set(CtxEmailKey, sess.Email)
 		return next(c)
 	}
 }
 
-// principalFor resolves the Unix identity a request acts as.
-//
-// In solo mode this is the invoking user and the email is irrelevant. In
-// multi-user mode an authenticated email with no mapping is an error, never a
-// fallback to the service account — falling back would silently give an
-// unprovisioned user access to the service's own files.
-func principalFor(c echo.Context) (*principal.Principal, error) {
-	if principals == nil {
-		// Unconfigured means "nobody asked for multi-user", which is solo: the
-		// only way to get a multi-user resolver is to pass --multi-user, and
-		// main() sets the global before serving. Defaulting to solo keeps
-		// in-process callers (tests) honest without inventing a privileged
-		// fallback for real requests, which is the case that would matter.
-		r, err := principal.NewResolver(false, "")
-		if err != nil {
-			return nil, err
-		}
-		principals = r
-	}
-	if principals.IsSolo() {
-		return principals.ForEmail("")
-	}
-	email, _ := c.Get(ctxEmailKey).(string)
-	if email == "" {
-		return nil, errors.New("no authenticated email on request")
-	}
-	return principals.ForEmail(email)
-}
+// CtxEmailKey is where the auth middleware stashes the verified email.
+const CtxEmailKey = "bonnie.email"
 
-// ctxEmailKey is where the auth middleware stashes the verified email.
-const ctxEmailKey = "bonnie.email"
-
-func (a *authConfig) handleLogin(c echo.Context) error {
+func (a *Config) handleLogin(c echo.Context) error {
 	// Already signed in: go straight where they were headed.
 	if _, err := a.currentSession(c); err == nil {
 		return c.Redirect(http.StatusFound, safeNext(c.QueryParam("next")))
@@ -481,7 +451,7 @@ func (a *authConfig) handleLogin(c echo.Context) error {
 	return c.Redirect(http.StatusFound, redirect)
 }
 
-func (a *authConfig) handleCallback(c echo.Context) error {
+func (a *Config) handleCallback(c echo.Context) error {
 	// Provider-side error (e.g. access_denied) — surface it, don't render blank.
 	if e := c.QueryParam("error"); e != "" {
 		desc := c.QueryParam("error_description")
@@ -572,7 +542,7 @@ func (a *authConfig) handleCallback(c echo.Context) error {
 	return c.Redirect(http.StatusFound, safeNext(st.Next))
 }
 
-func (a *authConfig) handleLogout(c echo.Context) error {
+func (a *Config) handleLogout(c echo.Context) error {
 	a.setCookie(c, sessionCookieName, "", 0)
 	a.setCookie(c, oauthCookieName, "", 0)
 	return c.Redirect(http.StatusFound, "/auth/login")
@@ -580,7 +550,7 @@ func (a *authConfig) handleLogout(c echo.Context) error {
 
 // authFail logs and renders a visible failure. Never a blank page: a silent
 // empty render is exactly how v1 shipped a login that showed nothing.
-func (a *authConfig) authFail(c echo.Context, event, human string) error {
+func (a *Config) authFail(c echo.Context, event, human string) error {
 	fmt.Printf("[auth] event=%s path=%s\n", event, c.Request().URL.Path)
 	a.setCookie(c, oauthCookieName, "", 0)
 	return c.HTML(http.StatusBadRequest,
@@ -607,7 +577,7 @@ func (a *authConfig) authFail(c echo.Context, event, human string) error {
 // of that Google account — so the provider's assertion substitutes for the
 // claim. Only explicitly trusted providers count: Clever is also wired into
 // this pool and is not trusted here.
-func (a *authConfig) emailVerified(claim any, identities any) bool {
+func (a *Config) emailVerified(claim any, identities any) bool {
 	if truthy(claim) {
 		return true
 	}
@@ -663,4 +633,16 @@ func truthy(v any) bool {
 func echoHTMLEscape(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;")
 	return r.Replace(s)
+}
+
+// EmailFrom returns the verified email the middleware stashed on the request,
+// or "" if the request was never authenticated.
+//
+// This is the whole of what the rest of the application needs from auth:
+// authentication answers "which human is this", and nothing more. Mapping that
+// human onto a Unix identity is a separate question with separate failure
+// modes, and lives in package principal.
+func EmailFrom(c echo.Context) string {
+	email, _ := c.Get(CtxEmailKey).(string)
+	return email
 }

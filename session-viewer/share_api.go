@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"session-viewer/internal/auth"
 	"session-viewer/internal/principal"
 	"sort"
 
@@ -165,7 +166,7 @@ func postShare(c echo.Context) error {
 	return c.JSON(http.StatusOK, shareInfo{
 		Path:        path,
 		Name:        filepath.Base(path),
-		ShareeEmail: c.Get(ctxEmailKey).(string),
+		ShareeEmail: auth.EmailFrom(c),
 		ShareeUser:  sharee.Username,
 	})
 }
