@@ -271,6 +271,43 @@ func TestReconcileCorridorRefusesForeignGrant(t *testing.T) {
 	}
 }
 
+// The bug the overlapping-share gate caught on the deployed box.
+//
+// Shares are granted recursively, so every directory inside a share is itself
+// a grant — and the share root is an ancestor of those. Reconcile therefore
+// sees the share root in the set of directories needing a traverse bit, and an
+// earlier version applied one, rewriting r-x down to --x. The share stayed
+// listed by getfacl while no longer granting read: visible, unreadable, and
+// silent.
+func TestReconcileCorridorNeverDowngradesAGrant(t *testing.T) {
+	const home = "/srv/bonnie/users/alice"
+
+	// Exactly what `setfacl -R` leaves behind for one share, plus the corridor.
+	entries := []aclEntry{
+		{Path: home, Perms: "--x"},
+		{Path: home + "/code", Perms: "--x"},
+		{Path: home + "/code/shared-b", Perms: "r-x"},
+		{Path: home + "/code/shared-b/.clyde", Perms: "r-x"},
+		{Path: home + "/code/shared-b/.clyde/sessions", Perms: "r-x"},
+	}
+
+	add, remove, err := reconcileCorridor(home, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range add {
+		if d == home+"/code/shared-b" || d == home+"/code/shared-b/.clyde" {
+			t.Fatalf("reconcile would apply a traverse bit to %s, downgrading a live grant to --x", d)
+		}
+	}
+	if len(add) != 0 {
+		t.Errorf("nothing needs adding, got %v", add)
+	}
+	if len(remove) != 0 {
+		t.Errorf("nothing needs removing, got %v", remove)
+	}
+}
+
 func TestLinkNameFor(t *testing.T) {
 	got := linkNameFor("/srv/bonnie/users/bob", "alice", "/srv/bonnie/users/alice/code/scratch")
 	want := "/srv/bonnie/users/bob/shared/alice/scratch"

@@ -153,10 +153,12 @@ func parseGetfaclRecursive(out, username string) []aclEntry {
 // roughly 500 entries, which the home directory would hit first.
 func reconcileCorridor(home string, entries []aclEntry) (add, remove []string, err error) {
 	want := map[string]bool{}
+	grants := map[string]bool{}
 	for _, e := range entries {
 		if !e.isGrant() {
 			continue
 		}
+		grants[e.Path] = true
 		dirs, cerr := corridorFor(home, e.Path)
 		if cerr != nil {
 			// A grant we cannot place is a grant we should not silently ignore:
@@ -176,9 +178,23 @@ func reconcileCorridor(home string, entries []aclEntry) (add, remove []string, e
 	}
 
 	for d := range want {
-		if !have[d] {
-			add = append(add, d)
+		if have[d] {
+			continue
 		}
+		// Never turn a grant into a corridor bit.
+		//
+		// A share is granted recursively, so every directory inside it is also
+		// a grant — and each one's ancestors include the share root itself.
+		// The share root therefore appears in `want`, and applying a traverse
+		// bit to it would rewrite r-x down to --x, silently revoking the share
+		// while leaving an entry that still looks present in getfacl.
+		//
+		// Found by the overlapping-share gate: revoking one share downgraded
+		// the other to traverse-only, so it stayed listed but unreadable.
+		if grants[d] {
+			continue
+		}
+		add = append(add, d)
 	}
 	for d := range have {
 		if !want[d] {

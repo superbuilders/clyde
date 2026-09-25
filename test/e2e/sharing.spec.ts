@@ -84,8 +84,14 @@ test("a share appears for the sharee, is read-only, and revoke takes it away", a
   ).toBe(403);
 
   // And the kernel agrees, independently of what the web layer decided.
-  const write = ssm(`runuser -u ${BOB} -- sh -c 'echo x > ${SHARE_A}/should-not-exist' 2>&1; echo rc=$?`);
-  expect(write.stdout, "Bob was able to write into a read-only share").toContain("rc=1");
+  // Assert on an explicit outcome word rather than an exit code: a failed
+  // redirect exits 2 under dash and 1 under bash, so a hardcoded code makes
+  // this pass or fail on which shell the box happens to use.
+  const write = ssm(
+    `if runuser -u ${BOB} -- sh -c 'echo x > ${SHARE_A}/should-not-exist' 2>/dev/null; ` +
+      `then echo OUTCOME=WROTE; else echo OUTCOME=DENIED; fi`,
+  );
+  expect(write.stdout, "Bob was able to write into a read-only share").toContain("OUTCOME=DENIED");
 
   // ── Sharing one directory shares only that directory ─────────────────────
   const stillHidden = await bobProjects(page);
@@ -101,11 +107,14 @@ test("a share appears for the sharee, is read-only, and revoke takes it away", a
 
   // Complete means the access is gone, not that the ACL entry is gone
   // (PLAN.md §8 item 4). Ask the kernel, as Bob, not the web layer.
-  const read = ssm(`runuser -u ${BOB} -- cat ${SHARE_A}/.clyde/sessions/*/*.md >/dev/null 2>&1; echo rc=$?`);
+  const read = ssm(
+    `if runuser -u ${BOB} -- sh -c 'cat ${SHARE_A}/.clyde/sessions/*/*.md' >/dev/null 2>&1; ` +
+      `then echo OUTCOME=READ; else echo OUTCOME=DENIED; fi`,
+  );
   expect(
     read.stdout,
     "Bob could still read the revoked share — revocation removed the ACL but not the access",
-  ).toContain("rc=1");
+  ).toContain("OUTCOME=DENIED");
 });
 
 test("revoking one share leaves an overlapping one working", async ({ page }) => {
@@ -132,6 +141,8 @@ test("revoking one share leaves an overlapping one working", async ({ page }) =>
   ).toContain(SHARE_B);
 
   // And B is genuinely readable, not merely listed.
-  const read = ssm(`runuser -u ${BOB} -- sh -c 'ls ${SHARE_B} >/dev/null' 2>&1; echo rc=$?`);
-  expect(read.stdout, "the surviving share is listed but no longer readable").toContain("rc=0");
+  const read = ssm(
+    `if runuser -u ${BOB} -- sh -c 'ls ${SHARE_B} >/dev/null'; then echo OUTCOME=READ; else echo OUTCOME=DENIED; fi`,
+  );
+  expect(read.stdout, "the surviving share is listed but no longer readable").toContain("OUTCOME=READ");
 });
