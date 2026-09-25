@@ -14,6 +14,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -287,6 +288,17 @@ func ensureHomeSkeleton(username string) error {
 		return err
 	}
 
+	// Close anything already in the tree (PLAN.md §4 M4.1).
+	//
+	// New content is handled by the umask, but this box has been running since
+	// M2 and an agent's default 022 left directories 0755 and files 0644. Those
+	// are unreachable only because the home is 0750 — and M4.2's traverse bits
+	// are precisely a hole in that one wall. Normalising is what makes the
+	// share boundary the ACL rather than a single ancestor's mode.
+	if err := closeToOther(u.HomeDir); err != nil {
+		return err
+	}
+
 	// A git identity, so commits the agent makes are attributable.
 	gitconfig := filepath.Join(u.HomeDir, ".gitconfig")
 	if _, err := os.Stat(gitconfig); os.IsNotExist(err) {
@@ -331,6 +343,39 @@ func ensureHomeSkeleton(username string) error {
 
 // chownTree gives every path component from root down to dir to uid:gid. It
 // stops at root so it can never walk up past a user's home.
+// closeToOther strips all `other` bits from everything under root.
+//
+// It clears only the low three bits, deliberately. Rewriting the mode wholesale
+// would also rewrite the group bits, and on a file carrying a POSIX ACL the
+// group bits *are* the ACL mask — so a blanket chmod would silently clamp every
+// share granted so far. Clearing `other` alone leaves the mask untouched.
+//
+// Idempotent, and safe to run on every provision: it only ever removes access.
+// Symlinks are skipped rather than followed; a link into another user's tree
+// would otherwise have its target's mode rewritten.
+func closeToOther(root string) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			// A tree we cannot fully read is one we cannot fully close, and
+			// reporting success there would be a lie the gate relies on.
+			return err
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		mode := info.Mode().Perm()
+		if mode&0o007 == 0 {
+			return nil
+		}
+		return os.Chmod(path, mode&^0o007)
+	})
+}
+
+// chownTree chowns dir and every ancestor up to root.
 func chownTree(dir, root string, uid, gid int) error {
 	dir = filepath.Clean(dir)
 	root = filepath.Clean(root)

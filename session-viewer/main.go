@@ -1888,6 +1888,22 @@ func main() {
 			os.Exit(2)
 		}
 		log.Printf("multi-user mode: principals from %s", *userMapFlag)
+
+		// Close the tree to `other` (PLAN.md §4 M4.1, §7).
+		//
+		// umask is inherited across fork and exec, so setting it once here
+		// covers every agent the server spawns — and setting it here rather
+		// than in the agent keeps §7 the only upstream change. 027 makes an
+		// agent's directories 0750 and its files 0640.
+		//
+		// This has to happen before sharing can be safe. ACLs only ever *add*
+		// access; they cannot take back what `other` already has, so on a
+		// world-readable tree a share's traverse bit exposes everything below
+		// the home and revoking the ACL does not take that away.
+		//
+		// Solo never reaches this branch and keeps the inherited umask, which
+		// is what makes solo byte-identical (§8 item 2).
+		syscall.Umask(0o027)
 	}
 
 	auth, err := buildAuth(context.Background())
