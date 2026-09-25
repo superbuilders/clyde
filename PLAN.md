@@ -286,6 +286,59 @@ fixtures, and v1's `internal/{rpc,agentd,acl,audit,layout,principal,repos}`.
 **Budget: ~1,000 lines net new in `session-viewer`, a few hundred in `bonnie`.**
 If it exceeds that, stop and re-read §1.
 
+#### Measured after M4.1 (and what it revealed)
+
+The raw number looked like a 2.6× overrun: 2,628 net new lines. Splitting it by what the
+code *is* tells a different story.
+
+| | lines |
+|---|---|
+| `main.go` growth (1,700 → 2,012) | +312 |
+| sharing (`share.go`, `share_api.go`, `share_cli.go`) | 795 |
+| **viewer proper** | **1,107** |
+| `internal/principal` + `internal/auth` + `internal/provision` | 1,506 |
+
+The viewer came in at ~1,100 against a ~1,000 budget — on target. Every line of the
+overrun was multi-tenancy substrate that had been sitting in `package main` because
+`session-viewer` was a single 1,700-line file with nowhere else to put it.
+
+The budget was a proxy for "Bonnie is a thin skin over clyde," and by that measure it
+held. It only read as a violation because there was no boundary separating the skin from
+the substrate. There is now (§4a).
+
+---
+
+## 4a. Package boundaries, and what is publishable
+
+`session-viewer` was one file. It is now four packages, split by *question answered*:
+
+| package | question | org-specific? |
+|---|---|---|
+| `internal/auth` | which human is this? | no |
+| `internal/principal` | which Unix user do we act as? | no |
+| `internal/provision` | how does a user come to exist? | no |
+| `main` (viewer + sharing) | what do we show, and to whom? | no |
+| `deploy/`, `scripts/` | *where does it run* | **yes** |
+
+**Correcting an earlier conclusion.** It was proposed that `auth.go` and `provision.go`
+were the Timeback-specific part and should move to a private repo. They are not. Between
+them they contain three organisation- or deployment-specific strings, one of which is a
+doc comment and two of which are `/srv/bonnie/...` — a *product* path, not a company one.
+The logic is generic Google OAuth and generic Unix provisioning. Moving them private
+would leave the public repo unable to authenticate or provision anyone, which is the
+opposite of a FOSS release.
+
+The split is not by *file*, it is by *axis*: code is public, configuration is private.
+Everything that identifies Timeback is already a value — an allowed email domain, an AWS
+account, a hostname — and values belong in `deploy/`, which is the thin private repo M7
+should carve out. The one real offender is `cloud-init.yaml:200`, which hardcodes
+`bonnie@superbuilders.school` as the agent's git identity; that is configuration wearing
+source's clothing and needs to become a variable before M7.
+
+`internal/` is deliberate: nothing here is importable by a third party yet. When M7
+decides what `superbuilders/bonnie` publishes, promoting a package out of `internal/` is
+the explicit act of committing to its API.
+
 ---
 
 ## 5. Headless e2e auth — how the agent verifies its own work
