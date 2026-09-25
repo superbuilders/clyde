@@ -258,24 +258,46 @@ ACL was never what was granting access.
 
 Sharing is only containable on a tree that is closed by default. M4.1 closes it.
 
-### M5 — Teams
-Team account with a setgid group-writable tree in everyone's roots. The umask fix moved to
-M4.1; team directories select the third regime (`umask 007`) from the same mechanism.
-**Exit:** two people drive one team session; both can write.
+### M5 — Teams ❌ **DELETED** (AJ, M4.2 review)
+Was: a team account with a setgid group-writable tree, so sub-groups *within* the org
+could share a writable space. There are no sub-groups. Everyone on the deployment is one
+org, and org-wide read sharing is M4.2, which already ships it.
 
-### M6 — Repo pre-pull
+This was never a deliverable by the milestone rule (§4): "two people drive one team
+session" is not something AJ asked for and could not be tested as a user-visible outcome
+without first inventing teams to test it with.
+
+The umask mechanism that M5 was going to use already landed in M4.1 and already supports
+the third regime (`umask 007`) if a writable shared tree is ever wanted. Nothing needs to
+be rebuilt to revive this; it is deleted because it is not needed, not because it is
+hard.
+
+### After M4.2 — not milestones
+
+M4.2 is the last milestone by AJ's rule: *a milestone is a unique, human-testable
+deliverable*. What remains is real work, but none of it is something AJ can log in and
+try, and calling it a milestone is what produced the M5/M6/M7 confusion.
+
+### M6 — Repo pre-pull *(infrastructure, not a milestone)*
 Org- and user-level `repos.toml` with **dirty-tree skip** (uncommitted agent work is
 sacred); GitHub App token minting; new-session repo picker seeded from org ∪ user repos.
 **Exit:** a fresh box comes up with configured repos present; a dirtied checkout is skipped
 and logged, not clobbered.
 
-### M7 — `superbuilders/bonnie`
-Timeback Cognito config, panopticon preload, `BonnieTeamReadOnly` IAM + `credential_process`,
-prod tfvars. Revert the repo to `a47a429` at this point — there is nothing to put in it
-before then. Tag the current head `archive/v1-rpc-agentd` first; the ACL reasoning in
-`docs/access-model.md` §3–6 is good and M3/M4 should reuse the *thinking*, not the code.
-**Exit:** an engineer logs in with their existing insights SSO account and drives a team
-session rooted in panopticon.
+### M7 — `superbuilders/bonnie` *(packaging, not a milestone)*
+Timeback Cognito config, panopticon preload, `BonnieTeamReadOnly` IAM +
+`credential_process`, prod tfvars. Tag the current head `archive/v1-rpc-agentd` first; the
+ACL reasoning in `docs/access-model.md` §3–6 is good and M3/M4 reused the *thinking*, not
+the code.
+
+Its old exit line — "an engineer logs in with their existing SSO account and drives a team
+session rooted in panopticon" — was two things welded together: a *config* change (point
+auth at Timeback's Cognito instead of Google) and a *team* session, which no longer
+exists. Neither is a new capability; M4.2 already proves login-plus-sharing works.
+
+The split itself is §4a: code public, configuration private. The one real blocker is
+`cloud-init.yaml:200`, which hardcodes `bonnie@superbuilders.school` as the agent's git
+identity and must become a variable before anything is published.
 
 ### Deleted (all drafts)
 Per-user daemons, unix-socket RPC, `SO_PEERCRED`, systemd socket activation, idle-stop,
