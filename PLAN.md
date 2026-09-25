@@ -232,6 +232,18 @@ the sharee's configured roots. Share button in the viewer's own UI.
 vacuously (the M3 fixture lesson). Plus an **overlapping-share fixture**: two shares under
 one parent, revoke one, assert the other still works.
 
+**Status: complete except the button.** Grant/revoke/list API, `bonnie share` subcommand
+(A5), shared directories in the viewer's search path, and the gate — 3/3 green against the
+deployed URL, with M3's isolation gate still 4/4. Box left with zero grants, zero corridor
+bits, zero links, zero paths open to `other`.
+
+**⛔ Blocked: the Share button.** The whole frontend is one file, `static/index.html`,
+which `bonnie-guard.sh` pins to upstream `171f610` and A2 says Bonnie does not own. §2 of
+this plan claims sharing being native "deletes the share-button problem… the button is
+just a button" — but that reasoning holds for `superbuilders/bonnie` importing the viewer
+(M7), not for this worktree, where the guard forbids the edit outright. Needs an explicit
+decision; see the options recorded in BONNIE.md.
+
 #### Why the order is not negotiable
 ACLs can only *add* access. They cannot subtract what `other` already has. Measured on the
 deployed box: the agent's default `umask 022` makes every directory it creates `0755` and
