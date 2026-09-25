@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"session-viewer/internal/principal"
 	"testing"
 )
 
@@ -24,8 +25,8 @@ func TestCanAccess(t *testing.T) {
 		}
 	}
 
-	alice := &Principal{Username: "alice", Home: aliceHome}
-	bob := &Principal{Username: "bob", Home: bobHome}
+	alice := &principal.Principal{Username: "alice", Home: aliceHome}
+	bob := &principal.Principal{Username: "bob", Home: bobHome}
 
 	// Before any share, Bob sees nothing of Alice's.
 	if canAccess(bob, shared) {
@@ -100,7 +101,7 @@ func TestCanAccess(t *testing.T) {
 // Solo has no shares and no boundary to enforce; canAccess must be a constant
 // true so single-user behaviour is unchanged (PLAN.md §8 item 2).
 func TestCanAccessSoloAllowsEverything(t *testing.T) {
-	solo := &Principal{Username: "aj", Home: "/home/aj", Solo: true}
+	solo := &principal.Principal{Username: "aj", Home: "/home/aj", Solo: true}
 	for _, p := range []string{"/home/aj/code", "/etc", "/srv/bonnie/users/someone"} {
 		if !canAccess(solo, p) {
 			t.Errorf("solo denied %s", p)
@@ -114,7 +115,7 @@ func TestCanAccessSoloAllowsEverything(t *testing.T) {
 func TestSharedRootsSkipsDanglingLinks(t *testing.T) {
 	root := t.TempDir()
 	bobHome := filepath.Join(root, "bob")
-	bob := &Principal{Username: "bob", Home: bobHome}
+	bob := &principal.Principal{Username: "bob", Home: bobHome}
 
 	link := linkNameFor(bobHome, "alice", "/nonexistent/gone")
 	if err := os.MkdirAll(filepath.Dir(link), 0o750); err != nil {
@@ -135,7 +136,7 @@ func TestSharedRootsSkipsDanglingLinks(t *testing.T) {
 // A user with no shared/ directory at all is the common case and must not
 // error or grant.
 func TestSharedRootsWithNoShares(t *testing.T) {
-	bob := &Principal{Username: "bob", Home: t.TempDir()}
+	bob := &principal.Principal{Username: "bob", Home: t.TempDir()}
 	if got := sharedRoots(bob); len(got) != 0 {
 		t.Errorf("sharedRoots = %v, want none", got)
 	}

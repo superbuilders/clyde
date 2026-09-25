@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"session-viewer/internal/principal"
 	"strings"
 	"time"
 
@@ -427,27 +428,27 @@ func (a *authConfig) middleware(next echo.HandlerFunc) echo.HandlerFunc {
 // multi-user mode an authenticated email with no mapping is an error, never a
 // fallback to the service account — falling back would silently give an
 // unprovisioned user access to the service's own files.
-func principalFor(c echo.Context) (*Principal, error) {
+func principalFor(c echo.Context) (*principal.Principal, error) {
 	if principals == nil {
 		// Unconfigured means "nobody asked for multi-user", which is solo: the
 		// only way to get a multi-user resolver is to pass --multi-user, and
 		// main() sets the global before serving. Defaulting to solo keeps
 		// in-process callers (tests) honest without inventing a privileged
 		// fallback for real requests, which is the case that would matter.
-		r, err := newPrincipalResolver(false, "")
+		r, err := principal.NewResolver(false, "")
 		if err != nil {
 			return nil, err
 		}
 		principals = r
 	}
-	if principals.solo {
-		return principals.forEmail("")
+	if principals.IsSolo() {
+		return principals.ForEmail("")
 	}
 	email, _ := c.Get(ctxEmailKey).(string)
 	if email == "" {
 		return nil, errors.New("no authenticated email on request")
 	}
-	return principals.forEmail(email)
+	return principals.ForEmail(email)
 }
 
 // ctxEmailKey is where the auth middleware stashes the verified email.

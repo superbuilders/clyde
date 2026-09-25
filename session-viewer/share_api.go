@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"session-viewer/internal/principal"
 	"sort"
 
 	"github.com/labstack/echo/v4"
@@ -32,14 +33,14 @@ type shareInfo struct {
 
 // knownUsers returns the email→username map, or nil in solo mode.
 func knownUsers() (map[string]string, error) {
-	if principals == nil || principals.solo {
+	if principals == nil || principals.IsSolo() {
 		return nil, nil
 	}
-	m, err := loadUserMap(principals.mapPath)
+	m, err := principal.LoadUserMap(principals.MapPath())
 	if err != nil {
 		return nil, err
 	}
-	return m.byEmail, nil
+	return m.ByEmail(), nil
 }
 
 // errSolo is returned by every share route in single-user mode.
@@ -106,7 +107,7 @@ type shareRequest struct {
 }
 
 // resolveShare validates a share request and returns the two principals.
-func resolveShare(c echo.Context) (owner, sharee *Principal, path string, err error) {
+func resolveShare(c echo.Context) (owner, sharee *principal.Principal, path string, err error) {
 	var body shareRequest
 	if err := c.Bind(&body); err != nil {
 		return nil, nil, "", echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -132,15 +133,15 @@ func resolveShare(c echo.Context) (owner, sharee *Principal, path string, err er
 		}
 		return nil, nil, "", echo.NewHTTPError(http.StatusBadRequest, rerr.Error())
 	}
-	if !ownsPath(owner, path) {
+	if !owner.Owns(path) {
 		// 404 rather than 403: a 403 would confirm the path exists, letting a
 		// caller probe another user's tree one guess at a time.
 		return nil, nil, "", echo.NewHTTPError(http.StatusNotFound, "no such directory")
 	}
 
-	sharee, err = principals.forEmail(body.ShareeEmail)
+	sharee, err = principals.ForEmail(body.ShareeEmail)
 	if err != nil {
-		if errors.Is(err, ErrNoMapping) {
+		if errors.Is(err, principal.ErrNoMapping) {
 			return nil, nil, "", echo.NewHTTPError(http.StatusBadRequest, "unknown user")
 		}
 		return nil, nil, "", echo.NewHTTPError(http.StatusInternalServerError, err.Error())

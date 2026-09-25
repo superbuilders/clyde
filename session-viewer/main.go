@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"session-viewer/internal/principal"
 	"sort"
 	"strconv"
 	"strings"
@@ -333,7 +334,7 @@ var _tmuxCacheTime time.Time
 
 // principals resolves an authenticated email to the Unix user we act as. In
 // solo mode it always yields the invoking user, so nothing below changes.
-var principals *principalResolver
+var principals *principal.Resolver
 
 // tmuxCmd builds a tmux invocation for a principal.
 //
@@ -341,16 +342,16 @@ var principals *principalResolver
 // server must run as them so the agent it spawns inherits their uid, and the
 // socket must be theirs so no other user can attach and drive their agent.
 // Solo mode returns a plain exec.Command, identical to before.
-func tmuxCmd(p *Principal, args ...string) *exec.Cmd {
+func tmuxCmd(p *principal.Principal, args ...string) *exec.Cmd {
 	if p == nil || p.Solo {
 		return exec.Command("tmux", args...)
 	}
-	return p.command("tmux", args...)
+	return p.Command("tmux", args...)
 }
 
 // tmuxCacheKey keeps per-user caches apart. A single shared cache would let
 // one user's session list mask another's.
-func tmuxCacheKey(p *Principal) string {
+func tmuxCacheKey(p *principal.Principal) string {
 	if p == nil || p.Solo {
 		return ""
 	}
@@ -360,7 +361,7 @@ func tmuxCacheKey(p *Principal) string {
 var _tmuxCacheByUser = map[string]map[string]bool{}
 var _tmuxCacheTimeByUser = map[string]time.Time{}
 
-func getTmuxSessions(p *Principal) map[string]bool {
+func getTmuxSessions(p *principal.Principal) map[string]bool {
 	key := tmuxCacheKey(p)
 	if t, ok := _tmuxCacheTimeByUser[key]; ok && time.Since(t) < 2*time.Second {
 		if c := _tmuxCacheByUser[key]; c != nil {
@@ -381,20 +382,20 @@ func getTmuxSessions(p *Principal) map[string]bool {
 	return result
 }
 
-func invalidateTmuxCache(p *Principal) {
+func invalidateTmuxCache(p *principal.Principal) {
 	delete(_tmuxCacheTimeByUser, tmuxCacheKey(p))
 }
 
-func isTmuxRunning(p *Principal, name string) bool {
+func isTmuxRunning(p *principal.Principal, name string) bool {
 	return getTmuxSessions(p)[name]
 }
 
-func startClyde(p *Principal, cwd, sessionID string) error {
+func startClyde(p *principal.Principal, cwd, sessionID string) error {
 	name := tmuxName(sessionID)
 	if isTmuxRunning(p, name) {
 		return nil
 	}
-	if err := p.ensureRuntimeDir(); err != nil {
+	if err := p.EnsureRuntimeDir(); err != nil {
 		return fmt.Errorf("preparing runtime dir: %w", err)
 	}
 	// Always use -r to resume into the existing session directory,
@@ -406,7 +407,7 @@ func startClyde(p *Principal, cwd, sessionID string) error {
 	return err
 }
 
-func sendToClyde(p *Principal, sessionID, message string) error {
+func sendToClyde(p *principal.Principal, sessionID, message string) error {
 	name := tmuxName(sessionID)
 	if !isTmuxRunning(p, name) {
 		return fmt.Errorf("tmux session %s not running", name)
@@ -417,7 +418,7 @@ func sendToClyde(p *Principal, sessionID, message string) error {
 	return tmuxCmd(p, "send-keys", "-t", name, "Enter").Run()
 }
 
-func stopClyde(p *Principal, sessionID string) error {
+func stopClyde(p *principal.Principal, sessionID string) error {
 	name := tmuxName(sessionID)
 	if !isTmuxRunning(p, name) {
 		return nil
@@ -431,7 +432,7 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
 
-func isTmuxBusy(p *Principal, sessionID string) bool {
+func isTmuxBusy(p *principal.Principal, sessionID string) bool {
 	name := tmuxName(sessionID)
 	if !isTmuxRunning(p, name) {
 		return false
@@ -529,7 +530,7 @@ type liveStatus struct {
 	busy        bool
 }
 
-func getLiveStatuses(p *Principal, sessions map[string]*CachedSession) map[string]liveStatus {
+func getLiveStatuses(p *principal.Principal, sessions map[string]*CachedSession) map[string]liveStatus {
 	result := make(map[string]liveStatus)
 	processes := getRunningProcesses()
 	tmuxSessions := getTmuxSessions(p)
@@ -631,7 +632,7 @@ func discoverProjectDirs() map[string]bool {
 // cwd. In multi-user mode it is scoped to the principal's home, which is what
 // makes "Alice and Bob see only their own sessions" true of the listing as
 // well as of the filesystem.
-func discoverProjectDirsFor(p *Principal) map[string]bool {
+func discoverProjectDirsFor(p *principal.Principal) map[string]bool {
 	s := make(map[string]bool)
 
 	home := ""
@@ -696,29 +697,6 @@ func discoverProjectDirsFor(p *Principal) map[string]bool {
 	return s
 }
 
-// ownsPath reports whether a principal may see a filesystem path.
-//
-// This is the application-code half of the authorization story (PLAN.md §1):
-// the webserver can read everything, so it must decide what to *show*. The
-// kernel half — what the agent can touch — is enforced by uid, separately.
-// Both must hold; neither is sufficient alone.
-func ownsPath(p *Principal, path string) bool {
-	if p == nil || p.Solo {
-		return true
-	}
-	if path == "" {
-		return false
-	}
-	home := filepath.Clean(p.Home)
-	clean := filepath.Clean(path)
-	if clean == home {
-		return true
-	}
-	// Prefix match on a path boundary, so /home/alice-evil does not match
-	// /home/alice.
-	return strings.HasPrefix(clean, home+string(filepath.Separator))
-}
-
 func readFileCapped(path string, maxBytes int64) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -742,7 +720,7 @@ func shellQuote(s string) string {
 // principalUsername is the name to stamp on a session: the user the session
 // belongs to, not whoever the service happens to run as. In solo mode it falls
 // back to the old git-derived name so single-user transcripts are unchanged.
-func principalUsername(p *Principal) string {
+func principalUsername(p *principal.Principal) string {
 	if p == nil || p.Solo {
 		return getUsername()
 	}
@@ -751,7 +729,7 @@ func principalUsername(p *Principal) string {
 
 // principalHome is the home to compare a project path against when deciding
 // whether to display it as "~".
-func principalHome(p *Principal) string {
+func principalHome(p *principal.Principal) string {
 	if p != nil && !p.Solo {
 		return p.Home
 	}
@@ -1155,7 +1133,7 @@ func getSessionMessages(c echo.Context) error {
 }
 
 // findTerminalProcess returns a non-tmux clyde process attached to this session, if any.
-func findTerminalProcess(p *Principal, cwd, sessionID string) *RunningProcess {
+func findTerminalProcess(p *principal.Principal, cwd, sessionID string) *RunningProcess {
 	// Don't bother scanning if there's already a tmux session for this ID
 	if isTmuxRunning(p, tmuxName(sessionID)) {
 		return nil
@@ -1602,14 +1580,14 @@ func createSession(c echo.Context) error {
 	// one could not write its own transcript. Refusing here gives "not your
 	// project" instead of a session that appears to start and then silently
 	// produces nothing. Writing into a share arrives as forking (M5).
-	if !ownsPath(pr, body.CWD) {
+	if !pr.Owns(body.CWD) {
 		return c.JSON(http.StatusForbidden, map[string]string{"error": "not your project"})
 	}
 	// Created as the principal, not as the service: a root-owned session
 	// directory is one the agent cannot write its transcript into.
 	dirName := formatTimestampDir(time.Now()) + "_" + principalUsername(pr)
 	sessDir := filepath.Join(body.CWD, ".clyde", "sessions", dirName)
-	if err := pr.mkdirAs(sessDir); err != nil {
+	if err := pr.MkdirAs(sessDir); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 	// Add to cache immediately
@@ -1906,14 +1884,14 @@ func main() {
 	flag.StringVar(&addr, "listen", addr, "listen address, e.g. :8787")
 	multiUser := flag.Bool("multi-user", envBool("BONNIE_MULTI_USER"),
 		"run each user's agents as their own Unix user (M3). Off = today's solo behaviour.")
-	userMapFlag := flag.String("user-map", userMapPath, "email→username map used with --multi-user")
+	userMapFlag := flag.String("user-map", principal.UserMapPath, "email→username map used with --multi-user")
 	registerAuthFlags()
 	flag.Parse()
 	if !strings.Contains(addr, ":") {
 		addr = ":" + addr
 	}
 
-	resolver, err := newPrincipalResolver(*multiUser, *userMapFlag)
+	resolver, err := principal.NewResolver(*multiUser, *userMapFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "principal configuration error: %v\n", err)
 		os.Exit(2)

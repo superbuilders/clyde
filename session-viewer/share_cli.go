@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"session-viewer/internal/principal"
 )
 
 func runShare(argv []string) int {
@@ -57,12 +58,12 @@ func runShare(argv []string) int {
 		return 2
 	}
 
-	ownerPrin, err := lookupPrincipal(*owner)
+	ownerPrin, err := principal.Lookup(*owner)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "share: owner %s: %v\n", *owner, err)
 		return 1
 	}
-	shareePrin, err := lookupPrincipal(*sharee)
+	shareePrin, err := principal.Lookup(*sharee)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "share: sharee %s: %v\n", *sharee, err)
 		return 1

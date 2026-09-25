@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"session-viewer/internal/principal"
 	"sort"
 	"strings"
 )
@@ -223,7 +224,7 @@ func linkNameFor(shareeHome, ownerUsername, target string) string {
 // comparison is against real paths. A dangling link — the owner deleted the
 // directory, or revoked by hand — is skipped rather than erroring, since one
 // stale link must not make the whole project list fail.
-func sharedRoots(p *Principal) []string {
+func sharedRoots(p *principal.Principal) []string {
 	if p == nil || p.Solo {
 		return nil
 	}
@@ -261,8 +262,8 @@ func sharedRoots(p *Principal) []string {
 //
 // A5: sharing changes exactly one thing from the viewer's perspective — how
 // many directories are in its search path. This is that one thing.
-func canAccess(p *Principal, path string) bool {
-	if ownsPath(p, path) {
+func canAccess(p *principal.Principal, path string) bool {
+	if p.Owns(path) {
 		return true
 	}
 	if p == nil || p.Solo || path == "" {
@@ -305,8 +306,8 @@ func resolveExisting(path string) string {
 // setfaclAs runs setfacl as the principal. Never through a shell (PLAN.md §1):
 // argv is explicit, and a username that somehow contained a metacharacter
 // would be an argument rather than syntax.
-func setfaclAs(p *Principal, args ...string) error {
-	cmd := p.command("setfacl", args...)
+func setfaclAs(p *principal.Principal, args ...string) error {
+	cmd := p.Command("setfacl", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("setfacl %s: %v: %s",
 			strings.Join(args, " "), err, strings.TrimSpace(string(out)))
@@ -341,7 +342,7 @@ func currentACL(home, username string) ([]aclEntry, error) {
 // deliberately shared. The symlink is last, because it is the only part that
 // is purely cosmetic — if it fails, access still works and the next grant
 // repairs it. The ACL is the source of truth; the link is derived.
-func grantShare(owner, sharee *Principal, target string) error {
+func grantShare(owner, sharee *principal.Principal, target string) error {
 	if owner == nil || sharee == nil {
 		return fmt.Errorf("share requires two principals")
 	}
@@ -349,7 +350,7 @@ func grantShare(owner, sharee *Principal, target string) error {
 		return fmt.Errorf("refusing to share %s with its own owner", target)
 	}
 	target = filepath.Clean(target)
-	if !ownsPath(owner, target) {
+	if !owner.Owns(target) {
 		return fmt.Errorf("refusing to share %q: not inside %s's home", target, owner.Username)
 	}
 	fi, err := os.Stat(target)
@@ -389,14 +390,14 @@ func grantShare(owner, sharee *Principal, target string) error {
 }
 
 // linkShare creates the symlink in the sharee's home, as the sharee.
-func linkShare(owner, sharee *Principal, target string) error {
+func linkShare(owner, sharee *principal.Principal, target string) error {
 	link := linkNameFor(sharee.Home, owner.Username, target)
-	if err := sharee.mkdirAs(filepath.Dir(link)); err != nil {
+	if err := sharee.MkdirAs(filepath.Dir(link)); err != nil {
 		return fmt.Errorf("creating share directory: %w", err)
 	}
 	// -n -f so that re-sharing replaces a stale link rather than creating one
 	// inside the directory the old link points at.
-	cmd := sharee.command("ln", "-sfn", target, link)
+	cmd := sharee.Command("ln", "-sfn", target, link)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("linking %s -> %s: %v: %s",
 			link, target, err, strings.TrimSpace(string(out)))
@@ -410,12 +411,12 @@ func linkShare(owner, sharee *Principal, target string) error {
 // grants remain. That ordering is what makes overlapping shares safe: if the
 // owner shared two directories under the same parent and revokes one, the
 // surviving grant keeps the shared ancestor's traverse bit alive.
-func revokeShare(owner, sharee *Principal, target string) error {
+func revokeShare(owner, sharee *principal.Principal, target string) error {
 	if owner == nil || sharee == nil {
 		return fmt.Errorf("revoke requires two principals")
 	}
 	target = filepath.Clean(target)
-	if !ownsPath(owner, target) {
+	if !owner.Owns(target) {
 		return fmt.Errorf("refusing to revoke %q: not inside %s's home", target, owner.Username)
 	}
 
@@ -432,7 +433,7 @@ func revokeShare(owner, sharee *Principal, target string) error {
 	// Remove the link before repairing the corridor, so a failure part-way
 	// leaves the sharee with no visible route rather than a dangling one.
 	link := linkNameFor(sharee.Home, owner.Username, target)
-	if out, err := sharee.command("rm", "-f", link).CombinedOutput(); err != nil {
+	if out, err := sharee.Command("rm", "-f", link).CombinedOutput(); err != nil {
 		return fmt.Errorf("removing %s: %v: %s", link, err, strings.TrimSpace(string(out)))
 	}
 
@@ -440,7 +441,7 @@ func revokeShare(owner, sharee *Principal, target string) error {
 }
 
 // repairCorridor brings the corridor into agreement with the surviving grants.
-func repairCorridor(owner, sharee *Principal) error {
+func repairCorridor(owner, sharee *principal.Principal) error {
 	entries, err := currentACL(owner.Home, sharee.Username)
 	if err != nil {
 		return err

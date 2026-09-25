@@ -1,4 +1,4 @@
-package main
+package principal
 
 // Principal — who a request acts as, and how to run processes as them.
 //
@@ -43,8 +43,8 @@ type Principal struct {
 	Groups []uint32
 }
 
-// soloPrincipal is the single-user identity: whoever the server runs as.
-func soloPrincipal() (*Principal, error) {
+// Solo is the single-user identity: whoever the server runs as.
+func Solo() (*Principal, error) {
 	u, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("resolving current user: %w", err)
@@ -60,8 +60,8 @@ func soloPrincipal() (*Principal, error) {
 	}, nil
 }
 
-// lookupPrincipal resolves a Unix username to a principal we can act as.
-func lookupPrincipal(username string) (*Principal, error) {
+// Lookup resolves a Unix username to a principal we can act as.
+func Lookup(username string) (*Principal, error) {
 	u, err := user.Lookup(username)
 	if err != nil {
 		return nil, fmt.Errorf("lookup user %q: %w", username, err)
@@ -109,20 +109,20 @@ func lookupPrincipal(username string) (*Principal, error) {
 // ErrNoMapping means the email is authenticated but not provisioned.
 var ErrNoMapping = errors.New("no unix user mapped to this email")
 
-// userMapPath is the authoritative email→username map, written by `provision`.
-const userMapPath = "/etc/bonnie/users.map"
+// UserMapPath is the authoritative email→username map, written by `provision`.
+const UserMapPath = "/etc/bonnie/users.map"
 
-type userMap struct {
+type UserMap struct {
 	byEmail map[string]string
 }
 
-// parseUserMap reads "email username" lines. It refuses on ambiguity: PLAN.md
+// ParseUserMap reads "email username" lines. It refuses on ambiguity: PLAN.md
 // M3 requires that an email resolving to two different users is a hard error,
 // not a silent pick. Getting this wrong means serving one person's sessions to
 // another, so a malformed map must fail closed for everyone rather than
 // quietly mis-route one account.
-func parseUserMap(r string) (*userMap, error) {
-	m := &userMap{byEmail: map[string]string{}}
+func ParseUserMap(r string) (*UserMap, error) {
+	m := &UserMap{byEmail: map[string]string{}}
 	for i, raw := range strings.Split(r, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -143,15 +143,15 @@ func parseUserMap(r string) (*userMap, error) {
 	return m, nil
 }
 
-func loadUserMap(path string) (*userMap, error) {
+func LoadUserMap(path string) (*UserMap, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return parseUserMap(string(b))
+	return ParseUserMap(string(b))
 }
 
-func (m *userMap) username(email string) (string, error) {
+func (m *UserMap) Username(email string) (string, error) {
 	u, ok := m.byEmail[strings.ToLower(strings.TrimSpace(email))]
 	if !ok {
 		return "", ErrNoMapping
@@ -161,10 +161,10 @@ func (m *userMap) username(email string) (string, error) {
 
 // ── resolver ────────────────────────────────────────────────────────────────
 
-// principalResolver turns an authenticated email into a Principal. In solo
+// Resolver turns an authenticated email into a Principal. In solo
 // mode it ignores the email entirely and always yields the invoking user,
 // which is what keeps single-user behaviour unchanged.
-type principalResolver struct {
+type Resolver struct {
 	solo     bool
 	mapPath  string
 	mu       sync.Mutex
@@ -172,14 +172,14 @@ type principalResolver struct {
 	soloPrin *Principal
 }
 
-func newPrincipalResolver(multiUser bool, mapPath string) (*principalResolver, error) {
-	r := &principalResolver{
+func NewResolver(multiUser bool, mapPath string) (*Resolver, error) {
+	r := &Resolver{
 		solo:    !multiUser,
 		mapPath: mapPath,
 		cache:   map[string]*Principal{},
 	}
 	if r.solo {
-		p, err := soloPrincipal()
+		p, err := Solo()
 		if err != nil {
 			return nil, err
 		}
@@ -188,7 +188,7 @@ func newPrincipalResolver(multiUser bool, mapPath string) (*principalResolver, e
 	return r, nil
 }
 
-func (r *principalResolver) forEmail(email string) (*Principal, error) {
+func (r *Resolver) ForEmail(email string) (*Principal, error) {
 	if r.solo {
 		return r.soloPrin, nil
 	}
@@ -200,15 +200,15 @@ func (r *principalResolver) forEmail(email string) (*Principal, error) {
 	// Re-read the map each miss: provision can add users while we are running,
 	// and a stale cache would mean a freshly provisioned user cannot log in
 	// until the service restarts.
-	m, err := loadUserMap(r.mapPath)
+	m, err := LoadUserMap(r.mapPath)
 	if err != nil {
 		return nil, fmt.Errorf("loading %s: %w", r.mapPath, err)
 	}
-	username, err := m.username(email)
+	username, err := m.Username(email)
 	if err != nil {
 		return nil, err
 	}
-	p, err := lookupPrincipal(username)
+	p, err := Lookup(username)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +228,7 @@ func (r *principalResolver) forEmail(email string) (*Principal, error) {
 // per-thread credential juggling, nothing a goroutine can escape.
 //
 // Never route this through a shell: argv is explicit.
-func (p *Principal) command(name string, args ...string) *exec.Cmd {
+func (p *Principal) Command(name string, args ...string) *exec.Cmd {
 	if p == nil || p.Solo {
 		return exec.Command(name, args...)
 	}
@@ -296,7 +296,7 @@ func (p *Principal) runtimeDir() string {
 var runtimeRoot = "/run/bonnie"
 
 // ensureRuntimeDir creates the principal's tmux directory, owned by them.
-func (p *Principal) ensureRuntimeDir() error {
+func (p *Principal) EnsureRuntimeDir() error {
 	if p == nil || p.Solo {
 		return nil
 	}
@@ -340,18 +340,70 @@ func (p *Principal) ensureRuntimeDir() error {
 // importantly, a directory the service created would be owned by root, and the
 // agent (which runs as the user) could not write into it. Every write into a
 // user's tree happens as that user; the service only ever reads.
-func (p *Principal) mkdirAs(dir string) error {
+func (p *Principal) MkdirAs(dir string) error {
 	if p == nil || p.Solo {
 		return os.MkdirAll(dir, 0o750)
 	}
-	if !ownsPath(p, dir) {
+	if !p.Owns(dir) {
 		return fmt.Errorf("refusing to create %q outside %s's home", dir, p.Username)
 	}
 	// `mkdir -p` rather than a chain of syscalls: setting the credential is a
 	// property of a child process, so the work has to happen in one.
-	cmd := p.command("mkdir", "-p", "-m", "0750", dir)
+	cmd := p.Command("mkdir", "-p", "-m", "0750", dir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("mkdir -p %s as %s: %v: %s", dir, p.Username, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// Owns reports whether a principal may see a filesystem path.
+//
+// This is the application-code half of the authorization story (PLAN.md §1):
+// the webserver can read everything, so it must decide what to *show*. The
+// kernel half — what the agent can touch — is enforced by uid, separately.
+// Both must hold; neither is sufficient alone.
+func (p *Principal) Owns(path string) bool {
+	if p == nil || p.Solo {
+		return true
+	}
+	if path == "" {
+		return false
+	}
+	home := filepath.Clean(p.Home)
+	clean := filepath.Clean(path)
+	if clean == home {
+		return true
+	}
+	// Prefix match on a path boundary, so /home/alice-evil does not match
+	// /home/alice.
+	return strings.HasPrefix(clean, home+string(filepath.Separator))
+}
+
+// IsSolo reports whether the resolver is in single-user mode.
+func (r *Resolver) IsSolo() bool { return r != nil && r.solo }
+
+// MapPath is the path the resolver reads email→username mappings from.
+func (r *Resolver) MapPath() string {
+	if r == nil {
+		return ""
+	}
+	return r.mapPath
+}
+
+// ByEmail returns a copy of the email→username mapping.
+//
+// A copy, not the live map: the map carries an invariant enforced at
+// provision time — the email→username relation is bijective, so no two
+// people can land in one home directory. A caller holding the live map
+// could break that invariant without going through provisioning, and the
+// breakage would not surface until two users' sessions had already merged.
+func (m *UserMap) ByEmail() map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m.byEmail))
+	for e, u := range m.byEmail {
+		out[e] = u
+	}
+	return out
 }

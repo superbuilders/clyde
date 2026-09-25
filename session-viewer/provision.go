@@ -20,6 +20,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"session-viewer/internal/principal"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,7 +47,7 @@ func runProvision(argv []string) int {
 	var o provisionOpts
 	fs.StringVar(&o.email, "email", "", "authenticated email address of the user (required)")
 	fs.StringVar(&o.username, "username", "", "unix username to create (default: derived from email)")
-	fs.StringVar(&o.mapPath, "map", userMapPath, "path to the email→username map")
+	fs.StringVar(&o.mapPath, "map", principal.UserMapPath, "path to the email→username map")
 	fs.StringVar(&o.group, "group", "bonnie-users", "supplementary group all bonnie users join")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "print what would happen, change nothing")
 	fs.Usage = func() {
@@ -85,18 +86,18 @@ func provision(o provisionOpts) error {
 	}
 
 	// Ambiguity check against the existing map, before touching the system.
-	existing, err := loadUserMap(o.mapPath)
+	existing, err := principal.LoadUserMap(o.mapPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("reading %s: %w", o.mapPath, err)
 	}
 	if existing != nil {
-		if prev, ok := existing.byEmail[email]; ok && prev != username {
+		if prev, ok := existing.ByEmail()[email]; ok && prev != username {
 			return fmt.Errorf("%q is already mapped to %q; refusing to remap to %q",
 				email, prev, username)
 		}
 		// The reverse edge matters too: two emails sharing one Unix user would
 		// silently merge two people's sessions into one home directory.
-		for e, u := range existing.byEmail {
+		for e, u := range existing.ByEmail() {
 			if u == username && e != email {
 				return fmt.Errorf("username %q is already mapped to %q; refusing to also map %q",
 					username, e, email)
@@ -329,11 +330,11 @@ func ensureHomeSkeleton(username string) error {
 	// Initialise the scratch repo so the project is discoverable.
 	scratch := filepath.Join(u.HomeDir, "code", "scratch")
 	if _, err := os.Stat(filepath.Join(scratch, ".git")); os.IsNotExist(err) {
-		p, err := lookupPrincipal(username)
+		p, err := principal.Lookup(username)
 		if err != nil {
 			return err
 		}
-		cmd := p.command("git", "init", "-q", scratch)
+		cmd := p.Command("git", "init", "-q", scratch)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("git init %s: %v: %s", scratch, err, strings.TrimSpace(string(out)))
 		}
@@ -437,7 +438,7 @@ func appendMapping(path, email, username string) error {
 	// Validate before publishing: never leave an unparseable map on disk,
 	// because that fails every login, not just this one.
 	out := strings.Join(lines, "\n") + "\n"
-	if _, err := parseUserMap(out); err != nil {
+	if _, err := principal.ParseUserMap(out); err != nil {
 		return fmt.Errorf("refusing to write an invalid map: %w", err)
 	}
 	tmp := path + ".tmp"
