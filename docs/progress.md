@@ -36,8 +36,7 @@ EOF
 Built a Go CLI that provides a REPL (Read-Eval-Print Loop) interface for conversing with Claude AI, featuring GitHub integration via the `gh` CLI tool.
 
 **Architecture** (as of ARCH-2 + loglevel move): Modular package-based structure with clear layer separation
-```
-.
+ .
 ├── main.go                  # Thin entrypoint (7 lines) → cli.Run()
 ├── cli/                     # All CLI/REPL orchestration + UI
 │   ├── cli.go               # Run(), runCLIMode, runREPLMode, etc.

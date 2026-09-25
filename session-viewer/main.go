@@ -1864,6 +1864,11 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "provision" {
 		os.Exit(runProvision(os.Args[2:]))
 	}
+	// Likewise for sharing: it acts as two different users, so it needs root
+	// and a shell on the box (PLAN.md §4 M4.2, A5).
+	if len(os.Args) > 1 && os.Args[1] == "share" {
+		os.Exit(runShare(os.Args[2:]))
+	}
 
 	// Flags are parsed before anything binds or scans, so a misconfigured auth
 	// setup fails before the viewer is reachable.
