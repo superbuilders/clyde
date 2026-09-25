@@ -183,7 +183,7 @@ worktree — it served 466 real sessions before this was caught.
 `session-viewer/main.go` (~12 lines), replacing the hardcoded `:8787`. Required for port
 isolation, and on the M1 path anyway.
 
-### M1 — Auth *(as early as possible)*
+### M1 — Auth *(as early as possible)* ✅ **DONE**
 OIDC (Cognito + Google federation), PKCE, JWKS, signed cookie, domain allowlist,
 `next` open-redirect protection. `auth = none` is the default and is what solo uses.
 Plus the **headless e2e login harness** (§5) — it lands here, not later, because every
@@ -192,7 +192,7 @@ milestone after this one is verified through it.
 out-of-domain refused; Playwright completes a login unattended and reaches the viewer.
 *North-star line 1.*
 
-### M2 — Deploy *(as soon as auth exists)* ← **first milestone AJ tests live**
+### M2 — Deploy *(as soon as auth exists)* ✅ **DONE** ← **first milestone AJ tests live**
 One EC2 box, ALB/ACM/Route53, SSM-only admin, separate EBS + snapshots, Secrets Manager,
 systemd unit with the §1 hardening. Still **single Unix user** — everyone who logs in
 shares one account. That is intentionally an interim state and the allowlist is restricted
@@ -201,7 +201,7 @@ to AJ plus the e2e test user until M3 lands.
 login. Merge-to-deploy works. Playwright logs into the **deployed** box unattended.
 **AJ tests and signs off here before anything else starts.**
 
-### M3 — Users are Unix users
+### M3 — Users are Unix users ✅ **DONE** (isolation gate 4/4)
 `Principal` threaded through every filesystem and tmux operation. Privileged spawn via
 `SysProcAttr.Credential` on the target user's tmux socket. `provision` (the only root-only
 subcommand): idempotent `useradd`, nologin, home skeleton, group, authoritative
@@ -216,7 +216,7 @@ with the feature, not later. *North-star line 2.*
 
 **Split into two phases in this order, for a reason discovered on the box (see below).**
 
-#### M4.1 — Closed by default *(must land before any ACL is granted)*
+#### M4.1 — Closed by default ✅ **DONE** *(must land before any ACL is granted)*
 The umask work from §7, pulled forward from M5. Multi-user agents run `umask 027`, so a
 user's tree is `0750`/`0640` and **`other` has no bits anywhere**. `provision` normalises
 existing trees. Solo keeps `umask 022` and is byte-identical (§8 item 2).
