@@ -223,7 +223,7 @@ existing trees. Solo keeps `umask 022` and is byte-identical (§8 item 2).
 **Exit:** no path in any user's tree grants anything to `other`; solo regression passes.
 **Gate test: a second user with a traverse bit on a home directory can still read nothing.**
 
-#### M4.2 — Sharing
+#### M4.2 — Sharing ✅ **DONE** *(the last milestone)*
 `setfacl` read grant + ancestor traverse bits + default ACLs on live sessions; symlink into
 the sharee's configured roots. Share button in the viewer's own UI.
 **Exit:** Alice shares; Bob refreshes; it's there, read-only; revoke is complete.
@@ -232,31 +232,29 @@ the sharee's configured roots. Share button in the viewer's own UI.
 vacuously (the M3 fixture lesson). Plus an **overlapping-share fixture**: two shares under
 one parent, revoke one, assert the other still works.
 
-**Status: complete except the button.** Grant/revoke/list API, `bonnie share` subcommand
-(A5), shared directories in the viewer's search path, and the gate — 3/3 green against the
-deployed URL, with M3's isolation gate still 4/4. Box left with zero grants, zero corridor
-bits, zero links, zero paths open to `other`.
+**Status: done.** Grant/revoke/list API, `bonnie share` subcommand (A5), shared
+directories in the viewer's search path, the Share button, and the gates — **9/9 green**
+against the deployed URL, covering M1 auth, M2 deploy, M3 isolation (still 4/4), M4.2
+sharing, and the share UI. Box left with zero grants, zero corridor bits, zero links, zero
+paths open to `other`.
 
-**⛔ Blocked: the Share button.** The whole frontend is one file, `static/index.html`,
-which `bonnie-guard.sh` pins to upstream `171f610` and A2 says Bonnie does not own. §2 of
-this plan claims sharing being native "deletes the share-button problem… the button is
-just a button" — but that reasoning holds for `superbuilders/bonnie` importing the viewer
-(M7), not for this worktree, where the guard forbids the edit outright. Needs an explicit
-decision; see the options recorded in BONNIE.md.
+**The button, resolved.** The blocker was that `bonnie-guard.sh` pinned `index.html`
+byte-for-byte to upstream `171f610`, which is stricter than A2 actually says. A2 forbids
+*porting, forking, or rewriting* the frontend; it does not forbid adding to it. The guard
+now enforces that reading — additive-only, with a line budget — so removing or rewriting
+upstream's work still fails, and adding a button does not.
 
-#### Why the order is not negotiable
-ACLs can only *add* access. They cannot subtract what `other` already has. Measured on the
-deployed box: the agent's default `umask 022` makes every directory it creates `0755` and
-every file `0644` — world-readable. The **only** thing isolating Alice today is her home
-being `0750`, which stops everyone at the door.
+The same investigation found the frontend check had never run at all: every branch of the
+binary check above it ended in a bare `exit`, so the viewer guard was unreachable dead
+code from the moment it was rewritten. Both checks are functions now.
 
-A share's ancestor traverse bit punches a hole in exactly that door. So granting Bob one
-directory does not expose one directory; it exposes **every `0755` directory Alice's agent
-has ever created**, and `0755` means he can list them, not merely guess at them. Verified:
-after a correct, complete ACL revoke, the sharee could still read the file — because the
-ACL was never what was granting access.
+Two bugs the button surfaced, neither reachable from the API tests:
 
-Sharing is only containable on a tree that is closed by default. M4.1 closes it.
+- `postShare` returned the *caller's* email as `sharee_email`. The caller is the owner, so
+  the UI would have reported every new share as "shared with yourself".
+- Sharing hung off project group headers, which are built from sessions. A user with a
+  checked-out project and no sessions had something the server would share and no way to
+  ask for it. Sharing is now also reachable from a toolbar button with a project picker.
 
 ### M5 — Teams ❌ **DELETED** (AJ, M4.2 review)
 Was: a team account with a setgid group-writable tree, so sub-groups *within* the org
