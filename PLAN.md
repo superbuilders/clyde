@@ -169,7 +169,8 @@ scratch-`HOME` test script; port `:8788`; tmux socket `-L bonnie-dev`. A `make i
 guard that **refuses to run** in this worktree.
 **Exit:** ✅ all verified. Worktree at `~/code/go/clyde/bonnie`; `make bonnie` /
 `make clyde-next` → `./bin/`; `make install` refuses; `make bonnie-guard` pins the
-installed binary at `4d180460…`. Sandbox isolated on HOME (`~/.bonnie-sandbox`), port
+installed binary by build provenance (originally a SHA-256 pin; see BONNIE.md for why
+that was replaced). Sandbox isolated on HOME (`~/.bonnie-sandbox`), port
 (`:8788`) and tmux socket (`-L bonnie-dev`), verified leaking **0** real sessions and
 rendering the **stock** UI via Playwright. Full notes in the worktree's `BONNIE.md`.
 

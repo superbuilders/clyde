@@ -79,7 +79,7 @@ Deliberately almost nothing, so the baseline is trustworthy:
 - `Makefile` — `bonnie`, `clyde-next`, `bonnie-dev`, `bonnie-guard`, `bonnie-clean`, and
   an `install` target that refuses.
 - `scripts/bonnie-dev.sh`, `scripts/bonnie-guard.sh`.
-- `.gitignore` — `bin/`, `.bonnie-sandbox`, `.bonnie-baseline`.
+- `.gitignore` — `bin/`, `.bonnie-sandbox`.
 
 **No auth, no multi-user, no sharing yet.** That's M1 onward.
 
@@ -89,5 +89,8 @@ Deliberately almost nothing, so the baseline is trustworthy:
 - [x] Sandbox leaks zero real sessions (after fixing the git-worktree hole)
 - [x] Real tmux sessions untouched; real viewer on `:8787` undisturbed
 - [x] `make install` refuses
-- [x] Installed `clyde` byte-identical to baseline
-      `4d180460c53aff8d230f8095d481cc67f94aa5a279a1a7479c43e1bb5eb7f9aa`
+- [x] Installed `clyde` provably not built from this worktree (`make bonnie-guard`)
+      M0 pinned a SHA-256 baseline. That was replaced: clyde is developed in other
+      worktrees, so the installed binary changes legitimately and the pin fired on
+      every routine update, where the only fix was to re-baseline. The guard now
+      reads Go build provenance and fails only on a binary built from here.
