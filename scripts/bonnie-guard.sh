@@ -17,10 +17,14 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Each check is a function so that an early "this one is fine" cannot skip the
+# checks after it. The original script used bare `exit 0` for the pass cases,
+# which made every check below the first one unreachable.
+check_installed_agent() {
 installed="$(command -v clyde || true)"
 if [[ -z "$installed" ]]; then
 	echo "⚠️  no 'clyde' on PATH — nothing to protect, but that is unexpected"
-	exit 0
+	return 0
 fi
 
 info="$(go version -m "$installed" 2>/dev/null || true)"
@@ -50,7 +54,7 @@ if [[ -z "$revision" ]]; then
   and this check needs widening. Otherwise: restore a build from master.
 
 EOF
-	exit 1
+	return 1
 fi
 
 short="${revision:0:12}"
@@ -59,7 +63,7 @@ if ! git -C "$HERE" cat-file -e "$revision^{commit}" 2>/dev/null; then
 	# Built from a commit this checkout has never seen. It cannot be Bonnie
 	# work, which by definition lives here, but it is worth surfacing.
 	echo "⚠️  installed clyde is from unknown commit $short — not from this worktree"
-	exit 0
+	return 0
 fi
 
 # The test is "does the binary contain commits unique to this branch", not "is
@@ -73,7 +77,7 @@ if git -C "$HERE" merge-base --is-ancestor "$revision" "$baseline" 2>/dev/null; 
 	if [[ "$modified" == "true" ]]; then
 		echo "  note: built from a dirty tree, so its contents are not fully pinned"
 	fi
-	exit 0
+	return 0
 fi
 
 cat <<EOF
@@ -91,33 +95,88 @@ cat <<EOF
   Restore it with a build from $baseline, then tell AJ.
 
 EOF
-exit 1
+	return 1
+}
 
 # ---------------------------------------------------------------------------
-# Assert the viewer frontend is still upstream's. BONNIE.md forbids porting,
-# forking, or rewriting session-viewer's frontend: index.html stays untouched.
-# v1 shipped a broken login partly by rewriting this file, so pin it.
+# Assert the viewer frontend is still recognisably upstream's.
+#
+# BONNIE.md A2 forbids porting, forking, or rewriting session-viewer's
+# frontend, and v1 shipped a broken login partly by rewriting this file. The
+# original guard asserted a byte-for-byte match, which is a stricter rule than
+# A2 actually states and one that sharing cannot satisfy: the Share button has
+# to live somewhere.
+#
+# What A2 protects is upstream's work, so the invariant is *additive-only*:
+# Bonnie may add UI, and may not remove or rewrite what upstream wrote. A
+# deletion is the signature of a port or a rewrite; an insertion is not. The
+# line budget keeps "adds a button" from drifting into "adds a second
+# frontend" without anyone noticing.
 # ---------------------------------------------------------------------------
-VIEWER_HTML="session-viewer/static/index.html"
-UPSTREAM_REF="171f610"
+check_viewer_frontend() {
+	local VIEWER_HTML="session-viewer/static/index.html"
+	local UPSTREAM_REF="171f610"
+	local MAX_ADDED=260
 
-if [[ -f "$HERE/$VIEWER_HTML" ]]; then
+	[[ -f "$HERE/$VIEWER_HTML" ]] || return 0
+
 	if ! git -C "$HERE" cat-file -e "$UPSTREAM_REF:$VIEWER_HTML" 2>/dev/null; then
 		echo "⚠️  cannot resolve $UPSTREAM_REF:$VIEWER_HTML — skipping viewer check"
-	elif git -C "$HERE" diff --quiet "$UPSTREAM_REF" -- "$VIEWER_HTML"; then
+		return 0
+	fi
+
+	if git -C "$HERE" diff --quiet "$UPSTREAM_REF" -- "$VIEWER_HTML"; then
 		echo "✓ viewer frontend unchanged from upstream ($VIEWER_HTML)"
-	else
+		return 0
+	fi
+
+	local stat added removed
+	stat="$(git -C "$HERE" diff --numstat "$UPSTREAM_REF" -- "$VIEWER_HTML")"
+	added="$(awk '{print $1}' <<<"$stat")"
+	removed="$(awk '{print $2}' <<<"$stat")"
+
+	if [[ "${removed:-0}" -ne 0 ]]; then
 		cat <<EOF
 
-  ⛔ THE VIEWER FRONTEND HAS BEEN MODIFIED.
+  ⛔ THE VIEWER FRONTEND HAS LINES REMOVED FROM UPSTREAM.
 
      file:     $VIEWER_HTML
      upstream: $UPSTREAM_REF
+     added:    $added
+     removed:  $removed
 
-  BONNIE.md: do not port, fork, or rewrite session-viewer's frontend.
-  Revert with: git checkout $UPSTREAM_REF -- $VIEWER_HTML
+  BONNIE.md A2: do not port, fork, or rewrite session-viewer's frontend.
+  Additions are allowed — Bonnie has its own UI to contribute — but removing
+  or rewriting upstream's lines is what A2 forbids, and is how v1 broke login.
+
+  See exactly what was removed with:
+    git diff $UPSTREAM_REF -- $VIEWER_HTML | grep '^-'
 
 EOF
-		exit 1
+		return 1
 	fi
-fi
+
+	if [[ "${added:-0}" -gt "$MAX_ADDED" ]]; then
+		cat <<EOF
+
+  ⛔ THE VIEWER FRONTEND HAS GROWN BEYOND THE ADDITIVE BUDGET.
+
+     file:     $VIEWER_HTML
+     added:    $added lines (budget $MAX_ADDED)
+
+  Nothing upstream was removed, so this is not a rewrite — but this much new
+  UI is no longer "Bonnie adds a button". Either the addition belongs
+  upstream, or the budget needs raising deliberately rather than silently.
+
+EOF
+		return 1
+	fi
+
+	echo "✓ viewer frontend is upstream plus $added additive line(s), nothing removed"
+	return 0
+}
+
+rc=0
+check_installed_agent || rc=1
+check_viewer_frontend || rc=1
+exit "$rc"

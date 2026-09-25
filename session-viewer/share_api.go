@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"session-viewer/internal/auth"
 	"session-viewer/internal/principal"
 	"sort"
 
@@ -108,20 +107,20 @@ type shareRequest struct {
 }
 
 // resolveShare validates a share request and returns the two principals.
-func resolveShare(c echo.Context) (owner, sharee *principal.Principal, path string, err error) {
+func resolveShare(c echo.Context) (owner, sharee *principal.Principal, path, shareeEmail string, err error) {
 	var body shareRequest
 	if err := c.Bind(&body); err != nil {
-		return nil, nil, "", echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+		return nil, nil, "", "", echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 	if body.Path == "" || body.ShareeEmail == "" {
-		return nil, nil, "", echo.NewHTTPError(http.StatusBadRequest, "path and sharee_email are required")
+		return nil, nil, "", "", echo.NewHTTPError(http.StatusBadRequest, "path and sharee_email are required")
 	}
 	owner, err = principalFor(c)
 	if err != nil {
-		return nil, nil, "", echo.NewHTTPError(http.StatusUnauthorized, err.Error())
+		return nil, nil, "", "", echo.NewHTTPError(http.StatusUnauthorized, err.Error())
 	}
 	if owner.Solo {
-		return nil, nil, "", echo.NewHTTPError(http.StatusBadRequest, errSolo.Error())
+		return nil, nil, "", "", echo.NewHTTPError(http.StatusBadRequest, errSolo.Error())
 	}
 
 	// Resolve the path before authorizing it. Without this, a symlink or a
@@ -130,33 +129,33 @@ func resolveShare(c echo.Context) (owner, sharee *principal.Principal, path stri
 	path, rerr := filepath.EvalSymlinks(filepath.Clean(body.Path))
 	if rerr != nil {
 		if os.IsNotExist(rerr) {
-			return nil, nil, "", echo.NewHTTPError(http.StatusNotFound, "no such directory")
+			return nil, nil, "", "", echo.NewHTTPError(http.StatusNotFound, "no such directory")
 		}
-		return nil, nil, "", echo.NewHTTPError(http.StatusBadRequest, rerr.Error())
+		return nil, nil, "", "", echo.NewHTTPError(http.StatusBadRequest, rerr.Error())
 	}
 	if !owner.Owns(path) {
 		// 404 rather than 403: a 403 would confirm the path exists, letting a
 		// caller probe another user's tree one guess at a time.
-		return nil, nil, "", echo.NewHTTPError(http.StatusNotFound, "no such directory")
+		return nil, nil, "", "", echo.NewHTTPError(http.StatusNotFound, "no such directory")
 	}
 
 	sharee, err = principals.ForEmail(body.ShareeEmail)
 	if err != nil {
 		if errors.Is(err, principal.ErrNoMapping) {
-			return nil, nil, "", echo.NewHTTPError(http.StatusBadRequest, "unknown user")
+			return nil, nil, "", "", echo.NewHTTPError(http.StatusBadRequest, "unknown user")
 		}
-		return nil, nil, "", echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return nil, nil, "", "", echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	if sharee.Username == owner.Username {
-		return nil, nil, "", echo.NewHTTPError(http.StatusBadRequest, "cannot share with yourself")
+		return nil, nil, "", "", echo.NewHTTPError(http.StatusBadRequest, "cannot share with yourself")
 	}
-	return owner, sharee, path, nil
+	return owner, sharee, path, body.ShareeEmail, nil
 }
 
 // postShare grants read access. Idempotent: re-granting an existing share
 // re-applies the same ACL and repairs a missing corridor or symlink.
 func postShare(c echo.Context) error {
-	owner, sharee, path, err := resolveShare(c)
+	owner, sharee, path, shareeEmail, err := resolveShare(c)
 	if err != nil {
 		return err
 	}
@@ -166,7 +165,7 @@ func postShare(c echo.Context) error {
 	return c.JSON(http.StatusOK, shareInfo{
 		Path:        path,
 		Name:        filepath.Base(path),
-		ShareeEmail: auth.EmailFrom(c),
+		ShareeEmail: shareeEmail,
 		ShareeUser:  sharee.Username,
 	})
 }
@@ -175,7 +174,7 @@ func postShare(c echo.Context) error {
 // already partly removed: revoke recomputes the corridor from the surviving
 // grants rather than trying to undo specific operations.
 func deleteShare(c echo.Context) error {
-	owner, sharee, path, err := resolveShare(c)
+	owner, sharee, path, _, err := resolveShare(c)
 	if err != nil {
 		return err
 	}

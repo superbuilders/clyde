@@ -125,6 +125,8 @@
                             class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🌿 New Worktree</button>
                     <button @click="markAllReadForScope('worktree', null, group.parentPath); wtMenuOpen = false"
                             class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">✓ Mark all read</button>
+                    <button x-show="canShare" @click="openShareModal(group.parentPath, group.project); wtMenuOpen = false"
+                            class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🔗 Share…</button>
                   </div>
                 </div>
                 <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-40" x-text="group.totalSessions"></span>
@@ -241,6 +243,8 @@
                             class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📝 New Session</button>
                     <button @click="markAllReadForScope('cwd', group.sessions[0]?.cwd); projectMenu = false"
                             class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">✓ Mark all read</button>
+                    <button x-show="canShare" @click="openShareModal(group.sessions[0]?.cwd, group.project); projectMenu = false"
+                            class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🔗 Share…</button>
                   </div>
                 </div>
                 <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-40" x-text="group.sessions.length"></span>
@@ -573,6 +577,56 @@
   </div>
 
   <!-- WT-9: Worktree creation modal -->
+  <!-- ── Share modal (Bonnie M4.2) ── -->
+  <div x-show="shareModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @keydown.escape.window="closeShareModal()">
+    <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full mx-4 p-6" style="background-color: var(--color-base-100);" @click.outside="closeShareModal()">
+      <div class="text-lg font-bold mb-1">🔗 Share project</div>
+      <div class="text-sm opacity-60 mb-4 font-mono truncate" x-text="sharePath"></div>
+
+      <div class="space-y-3">
+        <div>
+          <label class="text-sm font-semibold opacity-70 mb-1 block">Shared with</label>
+          <template x-if="shareList.length === 0">
+            <div class="text-sm opacity-50 italic">Not shared with anyone yet.</div>
+          </template>
+          <template x-for="g in shareList" :key="g.sharee_email">
+            <div class="flex items-center gap-2 py-1">
+              <span class="text-sm flex-1 truncate" x-text="g.sharee_email"></span>
+              <span class="text-xs opacity-40">read-only</span>
+              <button @click="revokeShare(g.sharee_email)" :disabled="shareBusy"
+                      class="btn btn-xs btn-ghost text-error">Revoke</button>
+            </div>
+          </template>
+        </div>
+
+        <div>
+          <label class="text-sm font-semibold opacity-70 mb-1 block">Add someone</label>
+          <div class="flex gap-2">
+            <select x-model="shareEmail" class="select select-bordered select-sm flex-1">
+              <option value="">Select a user…</option>
+              <template x-for="e in shareableUsers" :key="e">
+                <option :value="e" x-text="e" :disabled="shareList.some(g => g.sharee_email === e)"></option>
+              </template>
+            </select>
+            <button @click="grantShare()" class="btn btn-sm btn-primary" :disabled="!shareEmail || shareBusy">
+              <span x-show="!shareBusy">Share</span>
+              <span x-show="shareBusy" class="loading loading-spinner loading-xs"></span>
+            </button>
+          </div>
+        </div>
+
+        <div class="text-xs opacity-50">
+          Sharing grants read-only access to this project's files and sessions.
+        </div>
+        <div x-show="shareError" class="text-error text-sm" x-text="shareError"></div>
+      </div>
+
+      <div class="flex justify-end gap-2 mt-4">
+        <button @click="closeShareModal()" class="btn btn-sm btn-ghost">Done</button>
+      </div>
+    </div>
+  </div>
+
   <div x-show="worktreeModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @keydown.escape.window="closeWorktreeModal()">
     <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full mx-4 p-6" style="background-color: var(--color-base-100);" @click.outside="closeWorktreeModal()">
       <div class="text-lg font-bold mb-4">🌿 New Worktree</div>
@@ -627,6 +681,10 @@ function sessionViewer() {
     takeoverModal: false, takeoverPid: null, takeoverTty: '',
     // WT-9: Worktree creation modal state
     worktreeModal: false, worktreeParentPath: '', worktreeParentName: '', worktreeBranch: '',
+    // ── Sharing (Bonnie M4.2) ──
+    shareModal: false, sharePath: '', shareName: '', shareEmail: '',
+    shareBusy: false, shareError: '', shareList: [], shareableUsers: [],
+    sharesByPath: {},
     worktreeError: '', worktreeCreating: false,
     // Per-type view modes: 'expanded' | 'hidden' | 'collapsed'
     typeViewMode: { thinking: 'collapsed', tools: 'expanded', compaction: 'expanded', diagnostic: 'hidden' },
@@ -634,6 +692,7 @@ function sessionViewer() {
     async init() {
       await this.loadSessions();
       await this.loadWorktreeProjects();
+      await this.loadSharing();
       setInterval(() => this.loadSessions(), 15000);
       setInterval(() => this.loadWorktreeProjects(), 60000);
     },
@@ -1198,6 +1257,79 @@ function sessionViewer() {
         const data = await r.json();
         this._worktreeProjects = (data || []).filter(p => p.is_worktree_group || p.parent_name);
       } catch(e) {}
+    },
+
+    // ── Sharing (Bonnie M4.2) ──
+    // canShare gates the whole feature on multi-user mode. The server reports
+    // an empty user list in solo mode, which is the honest signal: there is
+    // nobody to share with, so the button should not exist at all.
+    get canShare() { return this.shareableUsers.length > 0; },
+
+    async loadSharing() {
+      try {
+        const [u, sh] = await Promise.all([
+          fetch('/api/shareable-users').then(r => r.ok ? r.json() : []),
+          fetch('/api/shares').then(r => r.ok ? r.json() : []),
+        ]);
+        this.shareableUsers = u || [];
+        const by = {};
+        for (const g of (sh || [])) (by[g.path] ||= []).push(g);
+        this.sharesByPath = by;
+      } catch (e) { this.shareableUsers = []; this.sharesByPath = {}; }
+    },
+
+    sharesFor(path) { return this.sharesByPath[path] || []; },
+
+    openShareModal(path, name) {
+      if (!path) return;
+      this.sharePath = path;
+      this.shareName = name || path.split('/').pop();
+      this.shareError = '';
+      this.shareEmail = this.shareableUsers.find(e => !this.sharesFor(path).some(g => g.sharee_email === e)) || '';
+      this.shareList = this.sharesFor(path);
+      this.shareModal = true;
+    },
+
+    closeShareModal() { this.shareModal = false; this.shareError = ''; },
+
+    async grantShare() {
+      if (!this.shareEmail || this.shareBusy) return;
+      this.shareBusy = true; this.shareError = '';
+      try {
+        const r = await fetch('/api/shares', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ path: this.sharePath, sharee_email: this.shareEmail })
+        });
+        const data = await r.json();
+        if (!r.ok) { this.shareError = data.error || data.message || 'share failed'; }
+        else {
+          await this.loadSharing();
+          this.shareList = this.sharesFor(this.sharePath);
+          this.shareEmail = '';
+          this.showToast('Shared ' + this.shareName);
+        }
+      } catch (e) { this.shareError = String(e); }
+      this.shareBusy = false;
+    },
+
+    async revokeShare(email) {
+      if (this.shareBusy) return;
+      this.shareBusy = true; this.shareError = '';
+      try {
+        const r = await fetch('/api/shares', {
+          method: 'DELETE', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ path: this.sharePath, sharee_email: email })
+        });
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          this.shareError = data.error || data.message || 'revoke failed';
+        } else {
+          await this.loadSharing();
+          this.shareList = this.sharesFor(this.sharePath);
+          this.showToast('Revoked');
+        }
+      } catch (e) { this.shareError = String(e); }
+      this.shareBusy = false;
     },
 
     async stopAgent() {
