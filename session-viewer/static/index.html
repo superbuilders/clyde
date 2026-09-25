@@ -99,6 +99,7 @@
             </template>
           </div>
         </div>
+        <button x-show="canShare" @click="openShareModal('', '')" class="btn btn-xs btn-ghost opacity-60 hover:opacity-100" title="Share a project">🔗</button>
         <button @click="markAllReadForScope('all')" class="btn btn-xs btn-ghost opacity-60 hover:opacity-100" title="Mark all as read">✉️</button>
       </div>
     </div>
@@ -581,9 +582,20 @@
   <div x-show="shareModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @keydown.escape.window="closeShareModal()">
     <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full mx-4 p-6" style="background-color: var(--color-base-100);" @click.outside="closeShareModal()">
       <div class="text-lg font-bold mb-1">🔗 Share project</div>
-      <div class="text-sm opacity-60 mb-4 font-mono truncate" x-text="sharePath"></div>
+      <div x-show="sharePath" class="text-sm opacity-60 mb-4 font-mono truncate" x-text="sharePath"></div>
+      <!-- A project with no sessions has no group header to hang a menu off,
+           so it must still be reachable here or it could never be shared. -->
+      <div x-show="!sharePath" class="mb-4">
+        <label class="text-sm font-semibold opacity-70 mb-1 block">Project</label>
+        <select id="share-project" x-model="sharePath" @change="onSharePathChange()" class="select select-bordered select-sm w-full">
+          <option value="">Select a project…</option>
+          <template x-for="p in shareProjects" :key="p.path">
+            <option :value="p.path" x-text="p.name + '  —  ' + p.path"></option>
+          </template>
+        </select>
+      </div>
 
-      <div class="space-y-3">
+      <div class="space-y-3" x-show="sharePath">
         <div>
           <label class="text-sm font-semibold opacity-70 mb-1 block">Shared with</label>
           <template x-if="shareList.length === 0">
@@ -602,7 +614,7 @@
         <div>
           <label class="text-sm font-semibold opacity-70 mb-1 block">Add someone</label>
           <div class="flex gap-2">
-            <select x-model="shareEmail" class="select select-bordered select-sm flex-1">
+            <select id="share-user" x-model="shareEmail" class="select select-bordered select-sm flex-1">
               <option value="">Select a user…</option>
               <template x-for="e in shareableUsers" :key="e">
                 <option :value="e" x-text="e" :disabled="shareList.some(g => g.sharee_email === e)"></option>
@@ -684,7 +696,7 @@ function sessionViewer() {
     // ── Sharing (Bonnie M4.2) ──
     shareModal: false, sharePath: '', shareName: '', shareEmail: '',
     shareBusy: false, shareError: '', shareList: [], shareableUsers: [],
-    sharesByPath: {},
+    sharesByPath: {}, shareProjects: [],
     worktreeError: '', worktreeCreating: false,
     // Per-type view modes: 'expanded' | 'hidden' | 'collapsed'
     typeViewMode: { thinking: 'collapsed', tools: 'expanded', compaction: 'expanded', diagnostic: 'hidden' },
@@ -1272,6 +1284,10 @@ function sessionViewer() {
           fetch('/api/shares').then(r => r.ok ? r.json() : []),
         ]);
         this.shareableUsers = u || [];
+        if (this.shareableUsers.length > 0) {
+          this.shareProjects = await fetch('/api/projects')
+            .then(r => r.ok ? r.json() : []).catch(() => []) || [];
+        }
         const by = {};
         for (const g of (sh || [])) (by[g.path] ||= []).push(g);
         this.sharesByPath = by;
@@ -1280,9 +1296,18 @@ function sessionViewer() {
 
     sharesFor(path) { return this.sharesByPath[path] || []; },
 
+    onSharePathChange() {
+      const p = this.shareProjects.find(x => x.path === this.sharePath);
+      this.shareName = p ? p.name : (this.sharePath.split('/').pop() || '');
+      this.shareError = '';
+      this.shareList = this.sharesFor(this.sharePath);
+      this.shareEmail = this.shareableUsers.find(e => !this.shareList.some(g => g.sharee_email === e)) || '';
+    },
+
+    // path may be '': the toolbar entry point opens the modal with a project
+    // picker, because a project with no sessions has no header menu.
     openShareModal(path, name) {
-      if (!path) return;
-      this.sharePath = path;
+      this.sharePath = path || '';
       this.shareName = name || path.split('/').pop();
       this.shareError = '';
       this.shareEmail = this.shareableUsers.find(e => !this.sharesFor(path).some(g => g.sharee_email === e)) || '';

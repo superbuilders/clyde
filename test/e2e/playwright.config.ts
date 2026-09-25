@@ -41,6 +41,16 @@ export default defineConfig({
       use: { storageState: "state.json" },
     },
     {
+      // M4.2 share UI. The sharing project drives the HTTP API; this one
+      // drives the *button*, which is the part a human actually touches and
+      // the part that was missing for the whole of M4.1. It needs no AWS
+      // credentials, so it can run when `sharing` cannot.
+      name: "share-ui",
+      testMatch: /share-ui\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: "state.json" },
+    },
+    {
       // M4 sharing. Separate for the same reason as isolation, and because it
       // drives privileged grants over SSM: running it needs AWS credentials,
       // which the other projects do not.
