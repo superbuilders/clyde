@@ -198,6 +198,92 @@ func linkNameFor(shareeHome, ownerUsername, target string) string {
 	return filepath.Join(shareeHome, sharedDirName, ownerUsername, filepath.Base(target))
 }
 
+// ── visibility ──────────────────────────────────────────────────────────────
+
+// sharedRoots returns the real directories a principal can reach through the
+// shares in their home: the resolved targets of ~/shared/<owner>/<name>.
+//
+// Resolved, because the symlink points into the owner's tree and every later
+// comparison is against real paths. A dangling link — the owner deleted the
+// directory, or revoked by hand — is skipped rather than erroring, since one
+// stale link must not make the whole project list fail.
+func sharedRoots(p *Principal) []string {
+	if p == nil || p.Solo {
+		return nil
+	}
+	owners, err := os.ReadDir(filepath.Join(p.Home, sharedDirName))
+	if err != nil {
+		return nil
+	}
+	var roots []string
+	for _, owner := range owners {
+		dir := filepath.Join(p.Home, sharedDirName, owner.Name())
+		links, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, l := range links {
+			target, err := filepath.EvalSymlinks(filepath.Join(dir, l.Name()))
+			if err != nil {
+				continue
+			}
+			roots = append(roots, target)
+		}
+	}
+	return roots
+}
+
+// canAccess reports whether a principal may see a path: their own tree, or
+// something shared with them.
+//
+// This is deliberately a separate function from ownsPath rather than a
+// loosening of it. ownsPath answers "is this yours", which is the question the
+// share routes must ask — you may only grant access to what you own, and
+// widening that check would let a sharee re-share someone else's directory.
+// canAccess answers the weaker "may you look at this", which is the right
+// question for listing projects and sessions.
+//
+// A5: sharing changes exactly one thing from the viewer's perspective — how
+// many directories are in its search path. This is that one thing.
+func canAccess(p *Principal, path string) bool {
+	if ownsPath(p, path) {
+		return true
+	}
+	if p == nil || p.Solo || path == "" {
+		return false
+	}
+	// Resolve before comparing: the caller's path may reach the share through
+	// the symlink in the sharee's home, which is textually under their home but
+	// really points into the owner's tree.
+	//
+	// The path need not exist — callers ask about directories that have not
+	// been created yet — and EvalSymlinks fails outright on a missing path. So
+	// resolve the longest existing ancestor and re-attach the remainder. Doing
+	// only the whole-path form leaves a missing path unresolved while the share
+	// roots are resolved, and on any system with a symlinked temp or home
+	// directory the two can then never match.
+	clean := resolveExisting(filepath.Clean(path))
+	for _, root := range sharedRoots(p) {
+		if clean == root || strings.HasPrefix(clean, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveExisting resolves symlinks in the longest prefix of path that exists,
+// leaving any non-existent tail untouched.
+func resolveExisting(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	parent := filepath.Dir(path)
+	if parent == path || parent == string(filepath.Separator) {
+		return path
+	}
+	return filepath.Join(resolveExisting(parent), filepath.Base(path))
+}
+
 // ── effects ─────────────────────────────────────────────────────────────────
 
 // setfaclAs runs setfacl as the principal. Never through a shell (PLAN.md §1):

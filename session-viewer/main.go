@@ -1005,7 +1005,10 @@ func getSessions(c echo.Context) error {
 		// Ownership filter. The cache is populated by a single background
 		// scanner that has no principal — it sees every user's sessions — so
 		// isolation has to happen here, at read time, per request.
-		if !ownsPath(pr, s.CWD) {
+		//
+		// canAccess, not ownsPath: a shared directory's sessions are part of
+		// what was shared (M4.2 grants the tree, including .clyde/sessions).
+		if !canAccess(pr, s.CWD) {
 			continue
 		}
 		// Age filter
@@ -1383,8 +1386,8 @@ func getProjects(c echo.Context) error {
 	// map iteration order.
 	for _, dir := range sortedKeys(cwdSet) {
 		// Worktree expansion above can pull in sibling checkouts outside the
-		// principal's home; drop anything they don't own.
-		if !ownsPath(pr, dir) {
+		// principal's home; drop anything they don't own or have been shared.
+		if !canAccess(pr, dir) {
 			continue
 		}
 		hasSessions := true
@@ -1567,6 +1570,11 @@ func createSession(c echo.Context) error {
 	// The caller supplies the path, and the service runs as root — so this has
 	// to be checked, not assumed. Without it a user could start a session in
 	// someone else's project.
+	//
+	// ownsPath, not canAccess: a share is read-only, so an agent started in
+	// one could not write its own transcript. Refusing here gives "not your
+	// project" instead of a session that appears to start and then silently
+	// produces nothing. Writing into a share arrives as forking (M5).
 	if !ownsPath(pr, body.CWD) {
 		return c.JSON(http.StatusForbidden, map[string]string{"error": "not your project"})
 	}
@@ -1931,6 +1939,12 @@ func main() {
 	api.POST("/sessions/new", createSession)
 	api.POST("/upload", uploadFile)
 	api.GET("/projects", getProjects)
+	// Sharing (PLAN.md §4 M4.2). Grant and revoke are the same body against
+	// the same path, so they differ only by method.
+	api.GET("/shares", getShares)
+	api.POST("/shares", postShare)
+	api.DELETE("/shares", deleteShare)
+	api.GET("/shareable-users", getShareableUsers)
 	api.POST("/worktrees", createWorktree)
 	api.POST("/worktrees/delete", deleteWorktreeHandler)
 	api.DELETE("/sessions/:id/messages/:filename", deleteSessionMessage)
