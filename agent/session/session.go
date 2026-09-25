@@ -62,9 +62,16 @@ func New() (*Session, error) {
 
 	// Create sessions root if needed
 	isNewRoot := false
+	// Mode policy lives in the caller's umask, not here (PLAN.md §7).
+	// Requesting 0777/0666 and letting umask subtract is what lets one binary
+	// serve three regimes: solo (umask 022 → 0755/0644, identical to before),
+	// multi-user (027 → 0750/0640, so `other` gets nothing and an ACL is the
+	// only way in), and team (007 → 0770/0660, so a second agent can write).
+	// Hardcoding the mode defeats all three, and silently: the directory is
+	// created world-readable no matter what the operator asked for.
 	if _, err := os.Stat(sessionsRoot); os.IsNotExist(err) {
 		isNewRoot = true
-		if err := os.MkdirAll(sessionsRoot, 0755); err != nil {
+		if err := os.MkdirAll(sessionsRoot, 0777); err != nil {
 			return nil, fmt.Errorf("failed to create sessions directory %s: %w", sessionsRoot, err)
 		}
 	}
@@ -85,7 +92,7 @@ func New() (*Session, error) {
 	dirName := FormatTimestampDir(now) + "_" + username
 	sessionDir := filepath.Join(sessionsRoot, dirName)
 
-	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+	if err := os.MkdirAll(sessionDir, 0777); err != nil {
 		return nil, fmt.Errorf("failed to create session directory %s: %w", sessionDir, err)
 	}
 
@@ -108,7 +115,8 @@ func (s *Session) WriteMessage(msgType MessageType, content string) error {
 	filename := FormatTimestampFile(now) + "_" + string(msgType) + ".md"
 	path := filepath.Join(s.Dir, filename)
 
-	return os.WriteFile(path, []byte(content), 0644)
+	// 0666, not 0644: umask decides (PLAN.md §7).
+	return os.WriteFile(path, []byte(content), 0666)
 }
 
 // RelativeDir returns the session directory relative to the current working directory,
@@ -271,7 +279,7 @@ func ensureGitignore(sessionsRoot string) error {
 	}
 
 	// Append the entry
-	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		return fmt.Errorf("failed to open .gitignore: %w", err)
 	}
