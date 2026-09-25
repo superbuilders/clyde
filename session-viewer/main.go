@@ -666,6 +666,33 @@ func discoverProjectDirsFor(p *Principal) map[string]bool {
 			}
 		}
 	}
+
+	// Directories shared with this principal (PLAN.md A5: sharing changes
+	// exactly one thing from the viewer's perspective — how many directories
+	// are in its search path). This is that one thing.
+	//
+	// Searched separately from ~/code rather than by letting find follow the
+	// symlinks in ~/shared: -maxdepth would then be measured from the sharee's
+	// home, so a project nested deeper in the owner's tree would fall outside
+	// the limit and vanish for the sharee while being visible to the owner.
+	// Each share is its own root, so depth is measured from the shared
+	// directory itself, exactly as it is for the owner.
+	for _, root := range sharedRoots(p) {
+		s[root] = true
+		out, err := exec.Command("find", root, "-maxdepth", "4", "-name", ".clyde", "-type", "d").Output()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				dir := filepath.Dir(line)
+				if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+					dir = resolved
+				}
+				s[dir] = true
+			}
+		}
+	}
 	return s
 }
 

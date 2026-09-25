@@ -26,6 +26,7 @@ AWS_PROFILE="${AWS_PROFILE:-superbuilders-prod}"
 REGION="${AWS_REGION:-us-east-1}"
 
 ALICE="${BONNIE_M4_ALICE:-anthony-beckner}"
+ALICE_EMAIL="${BONNIE_M4_ALICE_EMAIL:-anthony.beckner@superbuilders.school}"
 BOB="${BONNIE_M4_BOB:-bonnie-e2e}"
 MARKER="${BONNIE_M4_MARKER:-alice-shared-marker-m4}"
 
@@ -44,6 +45,7 @@ script=$(
 	cat <<EOS
 set -eu
 ALICE=$ALICE
+ALICE_EMAIL=$ALICE_EMAIL
 BOB=$BOB
 MARKER=$MARKER
 HOME_DIR=/srv/bonnie/users/\$ALICE
@@ -64,7 +66,21 @@ for p in shared-a shared-b; do
   printf '**You:** %s in %s\n' "\$MARKER" "\$p" >"\$F"
   chown "\$ALICE:\$ALICE" "\$F"
   chmod 0640 "\$F"
+  # -R, because install -d applies -o/-g to the final component only: the
+  # intermediate directories it creates stay root-owned. Alice must own these
+  # outright, since POSIX lets only the owner set an ACL — a root-owned share
+  # directory would make the grant fail as her.
+  chown -R "\$ALICE:\$ALICE" "\$HOME_DIR/code/\$p"
 done
+
+# Close the tree using the product's own code path, not a hand-rolled chmod.
+#
+# install -d applies its mode to the final component only, so the directories
+# just created are 0755 and would defeat the check below. Rather than fixing
+# that with chmod here — which would leave the gate asserting the fixture's
+# tidiness rather than the system's — run provision, whose closeToOther is the
+# M4.1 mechanism that must hold for real users too. Idempotent by design.
+/opt/bonnie/current/bonnie provision --email "\$ALICE_EMAIL" >/dev/null
 
 # The tree must grant nothing to other, or the gate proves nothing: on a
 # world-readable tree a traverse bit exposes everything below the home and a
@@ -121,7 +137,7 @@ sys.exit(1)
 PY
 
 echo "instance : $INSTANCE"
-echo "alice    : $ALICE"
+echo "alice    : $ALICE <$ALICE_EMAIL>"
 echo "bob      : $BOB"
 python3 "$runner" "$INSTANCE" "$AWS_PROFILE" "$REGION" "$payload"
 echo "fixture seeded"

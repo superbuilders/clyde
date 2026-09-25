@@ -40,5 +40,14 @@ export default defineConfig({
       dependencies: ["setup"],
       use: { storageState: "state.json" },
     },
+    {
+      // M4 sharing. Separate for the same reason as isolation, and because it
+      // drives privileged grants over SSM: running it needs AWS credentials,
+      // which the other projects do not.
+      name: "sharing",
+      testMatch: /sharing\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: "state.json" },
+    },
   ],
 });
