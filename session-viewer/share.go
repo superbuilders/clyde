@@ -207,46 +207,76 @@ func reconcileCorridor(home string, entries []aclEntry) (add, remove []string, e
 	return add, remove, nil
 }
 
-// linkNameFor is where a share from owner appears in the sharee's home:
-// ~/shared/<owner>/<basename>. Namespacing by owner means two people sharing
-// directories with the same name do not collide, and the provenance of a
-// shared directory is visible in its path.
+// linkNameFor is where a share from owner appears in the sharee's home.
+//
+// For a conversation that is ~/shared/<owner>/<project>/<session-id>, and for
+// anything else ~/shared/<owner>/<basename>. Namespacing by owner means two
+// people sharing directories with the same name do not collide, and the
+// provenance of a shared directory is visible in its path.
+//
+// The project component exists because a session id is a uuid and says
+// nothing. The sharee's agent finds these links by walking the filesystem, so
+// the path is the only description it gets; ~/shared/alice/api-server/<id> can
+// be reasoned about and ~/shared/alice/<id> cannot. It costs nothing in
+// safety — the name is text in the sharee's own home, not a grant — and the
+// owner's project name was already implied by the share.
+//
+// Must stay a pure function of (shareeHome, owner, target): revoke recomputes
+// the link name to delete it, so any nondeterminism here strands links.
 func linkNameFor(shareeHome, ownerUsername, target string) string {
-	return filepath.Join(shareeHome, sharedDirName, ownerUsername, filepath.Base(target))
+	root := filepath.Join(shareeHome, sharedDirName, ownerUsername)
+	if cwd, id, ok := splitSessionDir(target); ok {
+		return filepath.Join(root, filepath.Base(cwd), id)
+	}
+	return filepath.Join(root, filepath.Base(target))
 }
 
 // ── visibility ──────────────────────────────────────────────────────────────
 
 // sharedRoots returns the real directories a principal can reach through the
-// shares in their home: the resolved targets of ~/shared/<owner>/<name>.
+// shares in their home: the resolved targets of the symlinks under ~/shared.
 //
 // Resolved, because the symlink points into the owner's tree and every later
 // comparison is against real paths. A dangling link — the owner deleted the
-// directory, or revoked by hand — is skipped rather than erroring, since one
-// stale link must not make the whole project list fail.
+// conversation, or revoked by hand — is skipped rather than erroring, since
+// one stale link must not make the whole session list fail.
+//
+// The tree is walked to whatever depth the links happen to sit at rather than
+// at a fixed two levels, because linkNameFor inserts a project component for
+// conversations (~/shared/<owner>/<project>/<id>) and does not for anything
+// else. Recursion stops at the first symlink on each branch: a link *is* the
+// share, and descending through it would enumerate the owner's tree.
 func sharedRoots(p *principal.Principal) []string {
 	if p == nil || p.Solo {
 		return nil
 	}
-	owners, err := os.ReadDir(filepath.Join(p.Home, sharedDirName))
-	if err != nil {
-		return nil
-	}
 	var roots []string
-	for _, owner := range owners {
-		dir := filepath.Join(p.Home, sharedDirName, owner.Name())
-		links, err := os.ReadDir(dir)
-		if err != nil {
-			continue
+	var walk func(dir string, depth int)
+	walk = func(dir string, depth int) {
+		// A bound, not a limit: the layouts above are two or three deep, and
+		// an unbounded walk of a directory the sharee can write is a way to
+		// make every request expensive.
+		if depth > 4 {
+			return
 		}
-		for _, l := range links {
-			target, err := filepath.EvalSymlinks(filepath.Join(dir, l.Name()))
-			if err != nil {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			full := filepath.Join(dir, e.Name())
+			if e.Type()&os.ModeSymlink != 0 {
+				if target, err := filepath.EvalSymlinks(full); err == nil {
+					roots = append(roots, target)
+				}
 				continue
 			}
-			roots = append(roots, target)
+			if e.IsDir() {
+				walk(full, depth+1)
+			}
 		}
 	}
+	walk(filepath.Join(p.Home, sharedDirName), 0)
 	return roots
 }
 

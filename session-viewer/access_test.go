@@ -141,3 +141,107 @@ func TestSharedRootsWithNoShares(t *testing.T) {
 		t.Errorf("sharedRoots = %v, want none", got)
 	}
 }
+
+// ── per-conversation sharing ────────────────────────────────────────────────
+
+// splitSessionDir is the inverse of sessionDir, and getShares depends on that
+// being exactly true: a grant it cannot decompose is silently dropped from the
+// owner's list of who can see what, which is the worst possible failure for a
+// sharing UI — access that exists and is not reported.
+func TestSplitSessionDir(t *testing.T) {
+	t.Run("round-trips with sessionDir", func(t *testing.T) {
+		const cwd, id = "/srv/bonnie/users/alice/code/api", "abc-123"
+		gotCWD, gotID, ok := splitSessionDir(sessionDir(cwd, id))
+		if !ok {
+			t.Fatal("a path built by sessionDir must be recognised by splitSessionDir")
+		}
+		if gotCWD != cwd || gotID != id {
+			t.Errorf("round-trip = (%q, %q), want (%q, %q)", gotCWD, gotID, cwd, id)
+		}
+	})
+
+	// Anything else is not a conversation and must not be reported as one.
+	for _, p := range []string{
+		"/srv/bonnie/users/alice/code/api",                     // a project
+		"/srv/bonnie/users/alice/code/api/.clyde",              // the agent dir
+		"/srv/bonnie/users/alice/code/api/.clyde/sessions",     // the container
+		"/srv/bonnie/users/alice/code/api/.other/sessions/abc", // wrong parent
+		"/srv/bonnie/users/alice/code/api/.clyde/history/abc",  // wrong container
+	} {
+		if _, _, ok := splitSessionDir(p); ok {
+			t.Errorf("splitSessionDir(%q) accepted a path that is not a session directory", p)
+		}
+	}
+}
+
+// A conversation is shared without its project. This is the whole point of
+// M4.2: the sharee reads one transcript and learns nothing else about the
+// owner's tree, including that the project's other conversations exist.
+func TestCanAccessSessionIsNotProjectAccess(t *testing.T) {
+	root := t.TempDir()
+	aliceHome := filepath.Join(root, "alice")
+	bobHome := filepath.Join(root, "bob")
+
+	const cwd = "code/api"
+	project := filepath.Join(aliceHome, cwd)
+	sharedSess := sessionDir(project, "shared-one")
+	otherSess := sessionDir(project, "other-one")
+	for _, d := range []string{sharedSess, otherSess, bobHome} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	alice := &principal.Principal{Username: "alice", Home: aliceHome}
+	bob := &principal.Principal{Username: "bob", Home: bobHome}
+
+	link := linkNameFor(bobHome, "alice", sharedSess)
+	if err := os.MkdirAll(filepath.Dir(link), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(sharedSess, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	t.Run("the shared conversation is readable", func(t *testing.T) {
+		if !canAccessSession(bob, project, "shared-one") {
+			t.Error("bob cannot read the conversation shared with him")
+		}
+	})
+
+	t.Run("a sibling conversation is not", func(t *testing.T) {
+		if canAccessSession(bob, project, "other-one") {
+			t.Error("sharing one conversation exposed another in the same project")
+		}
+		_ = otherSess
+	})
+
+	t.Run("the project itself is not", func(t *testing.T) {
+		if canAccess(bob, project) {
+			t.Error("sharing a conversation exposed the project directory")
+		}
+	})
+
+	t.Run("the owner still reaches everything", func(t *testing.T) {
+		if !canAccessSession(alice, project, "other-one") {
+			t.Error("alice lost access to her own conversation")
+		}
+	})
+}
+
+// linkNameFor gained a project component for conversations. Since revoke
+// recomputes the name to delete the link, a change here that is not a pure
+// function of the target would strand links in the sharee's home forever.
+func TestLinkNameForConversation(t *testing.T) {
+	target := sessionDir("/srv/bonnie/users/alice/code/api", "abc-123")
+	got := linkNameFor("/srv/bonnie/users/bob", "alice", target)
+	want := "/srv/bonnie/users/bob/shared/alice/api/abc-123"
+	if got != want {
+		t.Fatalf("linkNameFor = %q, want %q", got, want)
+	}
+	// The uuid alone says nothing; the project name is what makes the link
+	// legible to the sharee and to their agent.
+	if filepath.Base(filepath.Dir(got)) != "api" {
+		t.Error("the link must be namespaced by the owner's project name")
+	}
+}

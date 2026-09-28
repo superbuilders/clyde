@@ -81,6 +81,17 @@ type SessionResponse struct {
 
 	WorktreeParent     string `json:"worktree_parent,omitempty"`      // parent folder path
 	WorktreeParentName string `json:"worktree_parent_name,omitempty"` // parent folder basename (for display)
+
+	// SharedBy names the owner of a conversation the caller reached through a
+	// share rather than through their own tree. Empty for a caller's own
+	// sessions, which is what the sidebar keys on to decide whether a session
+	// belongs under its project or under "Shared with me".
+	//
+	// A shared conversation cannot be grouped by project: the sharee has no
+	// access to the project directory and it will not appear in /api/projects.
+	// Without this flag such a session would land in a group the UI never
+	// renders and silently disappear.
+	SharedBy string `json:"shared_by,omitempty"`
 }
 
 type MessageFile struct {
@@ -1066,10 +1077,16 @@ func getSessions(c echo.Context) error {
 		// scanner that has no principal — it sees every user's sessions — so
 		// isolation has to happen here, at read time, per request.
 		//
-		// canAccess, not ownsPath: a shared directory's sessions are part of
-		// what was shared (M4.2 grants the tree, including .clyde/sessions).
-		if !canAccess(pr, s.CWD) {
+		// canAccessSession, not canAccess: sharing is per-conversation, so the
+		// question is whether this *session* was shared, not whether its
+		// project was. Asking about the project would hide every shared
+		// conversation, since the sharee cannot reach the project at all.
+		if !canAccessSession(pr, s.CWD, s.ID) {
 			continue
+		}
+		sharedBy := ""
+		if pr != nil && !pr.Solo && !pr.Owns(s.CWD) {
+			sharedBy = ownerOf(s.CWD)
 		}
 		// Age filter
 		if days > 0 {
@@ -1096,6 +1113,7 @@ func getSessions(c echo.Context) error {
 			Unread:             !s.Read,
 			ProcessType:        st.processType,
 			Busy:               st.busy,
+			SharedBy:           sharedBy,
 			WorktreeParent:     s.WorktreeParent,
 			WorktreeParentName: s.WorktreeParentName,
 		})
