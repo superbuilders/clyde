@@ -1121,12 +1121,47 @@ func getSessions(c echo.Context) error {
 	})
 }
 
+// guardSession is the authorization choke point for every session-scoped
+// route. It resolves the caller and refuses anything they may not read.
+//
+// This exists because the application-layer half of isolation was applied to
+// the *listing* and nowhere else. PLAN.md §1 is explicit that both halves must
+// hold — the kernel decides what the agent can touch, the webserver decides
+// what to show — but the webserver runs as root and reads transcripts
+// directly, so for read paths there is no kernel half to fall back on.
+// getSessions filtered correctly while GET /sessions/:id/messages served any
+// transcript on the box to anyone who could guess a session id, which is
+// derivable from a timestamp and a username. Verified exploitable against the
+// deployed box before this was written.
+//
+// Handlers that spawn a process as the principal are also guarded, even though
+// the kernel would stop them: a 403 is the correct answer to "may I touch this
+// at all", and relying on a downstream EACCES makes the security property an
+// accident of implementation rather than a decision.
+func guardSession(c echo.Context, cwd, sid string) (*principal.Principal, error) {
+	pr, err := principalFor(c)
+	if err != nil {
+		return nil, c.JSON(http.StatusForbidden,
+			map[string]string{"error": "no unix identity: " + err.Error()})
+	}
+	if !canAccessSession(pr, cwd, sid) {
+		// 404, not 403: a distinguishable 403 confirms the session exists,
+		// which leaks the existence of other people's conversations to anyone
+		// willing to enumerate.
+		return nil, c.JSON(http.StatusNotFound, map[string]string{"error": "not found"})
+	}
+	return pr, nil
+}
+
 func getSessionMessages(c echo.Context) error {
 	sid := c.Param("id")
 	cwd := c.QueryParam("cwd")
 	after := c.QueryParam("after")
 	if cwd == "" || sid == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd and id required"})
+	}
+	if _, err := guardSession(c, cwd, sid); err != nil {
+		return err
 	}
 	sp := filepath.Join(cwd, ".clyde", "sessions", sid)
 	if _, err := os.Stat(sp); os.IsNotExist(err) {
@@ -1255,6 +1290,16 @@ func postSessionMessage(c echo.Context) error {
 	if body.CWD == "" || body.Content == "" || sid == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd, content, and id required"})
 	}
+	// A shared conversation is read-only, so ownership — not access — is the
+	// test. The kernel would refuse the write anyway (the agent runs as the
+	// caller), but an explicit 403 beats an EACCES surfacing as a mysteriously
+	// dead agent five seconds later.
+	if !pr.Owns(body.CWD) {
+		if !canAccessSession(pr, body.CWD, sid) {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "not found"})
+		}
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "shared conversations are read-only"})
+	}
 	sessPath := filepath.Join(body.CWD, ".clyde", "sessions", sid)
 	if _, err := os.Stat(sessPath); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
@@ -1350,6 +1395,9 @@ func patchSession(c echo.Context) error {
 	cwd := c.QueryParam("cwd")
 	if sid == "" || cwd == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "id and cwd required"})
+	}
+	if _, err := guardSession(c, cwd, sid); err != nil {
+		return err
 	}
 	var body struct {
 		Name *string `json:"name"`
@@ -1578,6 +1626,13 @@ func uploadFile(c echo.Context) error {
 	if cwd == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd required"})
 	}
+	// Upload writes into the project, so it needs ownership. Without this an
+	// authenticated user could drop a file anywhere another user's tree.
+	if pr, err := principalFor(c); err != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	} else if !pr.Owns(cwd) {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "not your project"})
+	}
 	file, err := c.FormFile("file")
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "file required"})
@@ -1705,6 +1760,13 @@ func deleteSessionMessage(c echo.Context) error {
 	cwd := c.QueryParam("cwd")
 	if sid == "" || filename == "" || cwd == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "id, filename, and cwd required"})
+	}
+	// Deletion needs ownership, not read access: a conversation shared with
+	// you is read-only, and canAccessSession would say yes to it.
+	if pr, gerr := guardSession(c, cwd, sid); gerr != nil {
+		return gerr
+	} else if !pr.Owns(cwd) {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "shared conversations are read-only"})
 	}
 
 	// Validate filename (prevent path traversal)
@@ -1889,6 +1951,10 @@ func openInTerminal(c echo.Context) error {
 	pr, err := principalFor(c)
 	if err != nil {
 		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
+
+	if !canAccessSession(pr, cwd, sid) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "not found"})
 	}
 
 	name := tmuxName(sid)

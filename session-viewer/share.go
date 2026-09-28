@@ -250,6 +250,39 @@ func sharedRoots(p *principal.Principal) []string {
 	return roots
 }
 
+// sessionDir is where a conversation's transcript lives. A session is
+// identified by (cwd, id) everywhere in the viewer; this is the one place that
+// turns that pair into a path.
+func sessionDir(cwd, id string) string {
+	if cwd == "" || id == "" {
+		return ""
+	}
+	return filepath.Join(cwd, ".clyde", "sessions", id)
+}
+
+// canAccessSession reports whether a principal may read one conversation.
+//
+// Sharing is per-conversation, not per-project (AJ, M4.2 review). The
+// filesystem was never the constraint — a session directory takes an ACL like
+// any other, and the corridor simply runs two levels deeper through .clyde and
+// sessions. Project-level sharing was inherited from the viewer's discovery
+// model, which finds projects by looking for .clyde directories, and it gave
+// away far more than intended: to share one conversation you had to hand over
+// every file in the repository.
+//
+// Granting on the session directory alone means the sharee can read the
+// transcript and cannot list the project, enumerate sibling conversations, or
+// read a single line of source.
+func canAccessSession(p *principal.Principal, cwd, id string) bool {
+	if p == nil {
+		return false
+	}
+	if p.Solo || p.Owns(cwd) {
+		return true
+	}
+	return canAccess(p, sessionDir(cwd, id))
+}
+
 // canAccess reports whether a principal may see a path: their own tree, or
 // something shared with them.
 //

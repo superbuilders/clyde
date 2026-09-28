@@ -45,6 +45,12 @@ export default defineConfig({
       // drives the *button*, which is the part a human actually touches and
       // the part that was missing for the whole of M4.1. It needs no AWS
       // credentials, so it can run when `sharing` cannot.
+      name: "leak",
+      testMatch: /leak\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: "state.json" },
+    },
+    {
       name: "share-ui",
       testMatch: /share-ui\.spec\.ts/,
       dependencies: ["setup"],
