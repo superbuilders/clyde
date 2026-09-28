@@ -35,8 +35,15 @@ test("a conversation menu offers Share, and the modal lists real users", async (
 
   // A conversation to share. Unlike a project, this cannot be conjured by the
   // fixture alone being present — the sidebar has to have rendered it.
+  //
+  // /api/sessions answers with an envelope, not a bare array: the list rides
+  // alongside preferences and the last scan time. Indexing into it as an array
+  // yields undefined rather than an error, so a test that forgets this fails
+  // with "received value must be a number", several lines from the cause.
   const sessions: Array<{ id: string; cwd: string }> = await page.evaluate(() =>
-    fetch("/api/sessions?days=0").then((r) => r.json()),
+    fetch("/api/sessions?days=0")
+      .then((r) => r.json())
+      .then((b) => (Array.isArray(b) ? b : (b.sessions ?? []))),
   );
   console.log("[share-ui] sessions:", sessions.length);
   expect(sessions.length, "at least one conversation to share").toBeGreaterThan(0);

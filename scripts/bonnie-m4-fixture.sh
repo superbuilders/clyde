@@ -72,6 +72,12 @@ rm -rf "/srv/bonnie/users/\$BOB/shared"
 # strictly tighter than it was: revoking conv-one must not strip the traverse
 # bit that conv-two depends on, one directory away rather than three.
 for p in shared-a shared-b; do
+  # Start from no conversations, not just no ACLs. The fixture's session ids
+  # have changed once already (when sharing became per-conversation), and the
+  # old directory survived a re-run — leaving a transcript nothing in the gate
+  # names, which is exactly the kind of debris that makes a later assertion
+  # pass or fail for reasons no one wrote down.
+  rm -rf "\$HOME_DIR/code/\$p/.clyde/sessions"
  for c in conv-one conv-two; do
   S="\$HOME_DIR/code/\$p/.clyde/sessions/\$c"
   install -d -o "\$ALICE" -g "\$ALICE" -m 0750 "\$S"
