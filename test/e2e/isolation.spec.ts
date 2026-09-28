@@ -26,6 +26,8 @@ import { test, expect } from "@playwright/test";
 // of band as root.
 
 const ALICE_HOME = "/srv/bonnie/users/anthony-beckner";
+// Bob is the authenticated test user; his own sessions must be visible.
+const BOB_HOME = "/srv/bonnie/users/bonnie-e2e";
 const ALICE_MARKER = "alice-private-marker-do-not-leak";
 
 test("the session listing shows only the authenticated user's sessions", async ({ page }) => {
@@ -46,7 +48,21 @@ test("the session listing shows only the authenticated user's sessions", async (
       .join(", ")}`,
   ).toHaveLength(0);
 
-  console.log(`[m3] ${sessions.length} sessions visible, none under ${ALICE_HOME}`);
+  // The positive half, and the reason this file did not catch an empty
+  // sidebar: "none of Alice's sessions leaked" is satisfied just as well by
+  // seeing *nothing at all*. The background scanner spent M3 and M4 walking
+  // the service account's home instead of the users', so every real sidebar
+  // was empty and this assertion still passed. Isolation means seeing your
+  // own sessions and not other people's; test both halves.
+  const mine = sessions.filter((s) => (s.cwd || "").startsWith(BOB_HOME));
+  expect(
+    mine.length,
+    `expected to see own sessions under ${BOB_HOME}, saw ${sessions.length} total`,
+  ).toBeGreaterThan(0);
+
+  console.log(
+    `[m3] ${sessions.length} sessions visible, ${mine.length} mine, none under ${ALICE_HOME}`,
+  );
 });
 
 test("the project listing shows only the authenticated user's projects", async ({ page }) => {
