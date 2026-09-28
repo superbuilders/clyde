@@ -60,6 +60,31 @@ func (c Config) Configured() bool {
 	return c.AppID != "" && c.InstallationID != "" && c.PrivateKeyPEM != ""
 }
 
+// Validate reports which fields are absent, by name.
+//
+// Configured answers yes-or-no for control flow; this answers "why not" for a
+// human staring at a secret they just edited. Listing every missing field at
+// once matters more than it looks: fixing them one 401 at a time means one
+// round trip through the AWS console per field.
+func (c Config) Validate() error {
+	var missing []string
+	for _, f := range []struct {
+		name, value string
+	}{
+		{"GITHUB_APP_ID", c.AppID},
+		{"GITHUB_APP_INSTALLATION_ID", c.InstallationID},
+		{"GITHUB_APP_PRIVATE_KEY", c.PrivateKeyPEM},
+	} {
+		if strings.TrimSpace(f.value) == "" {
+			missing = append(missing, f.name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("the secret is missing %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // Token is an installation token and the moment it stops working.
 type Token struct {
 	Value     string
