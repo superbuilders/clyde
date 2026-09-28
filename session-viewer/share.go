@@ -542,8 +542,40 @@ func revokeShare(owner, sharee *principal.Principal, target string) error {
 	if out, err := sharee.Command("rm", "-f", link).CombinedOutput(); err != nil {
 		return fmt.Errorf("removing %s: %v: %s", link, err, strings.TrimSpace(string(out)))
 	}
+	if err := pruneShareDirs(sharee, link); err != nil {
+		return err
+	}
 
 	return repairCorridor(owner, sharee)
+}
+
+// pruneShareDirs removes the now-empty directories a removed link sat in,
+// stopping at ~/shared and never deleting anything non-empty.
+//
+// This is the sharee-side twin of the stale-corridor-bit problem. The link
+// path is ~/shared/<owner>/<project>/<id>, so a revoke that removes only the
+// link leaves two named directories behind, and those names are a permanent
+// record of who shared with this user and what their projects are called —
+// including shares that were revoked, and including project names the sharee
+// was never otherwise told. Left alone they accumulate forever, since nothing
+// else ever deletes them.
+//
+// rmdir, not rm -rf: it refuses a non-empty directory, so a second surviving
+// share from the same owner or project stops the prune exactly where it
+// should. That makes this safe without reference counting, for the same
+// reason reconcileCorridor is: the filesystem already knows.
+func pruneShareDirs(sharee *principal.Principal, link string) error {
+	stop := filepath.Join(sharee.Home, sharedDirName)
+	for dir := filepath.Dir(link); strings.HasPrefix(dir, stop+string(filepath.Separator)); dir = filepath.Dir(dir) {
+		// Failure is not an error: the directory may be non-empty, which is
+		// the expected outcome whenever another share survives. Anything else
+		// leaves harmless debris, and failing here would turn a completed
+		// revoke into a reported failure.
+		if err := sharee.Command("rmdir", dir).Run(); err != nil {
+			return nil
+		}
+	}
+	return nil
 }
 
 // repairCorridor brings the corridor into agreement with the surviving grants.

@@ -218,6 +218,24 @@ test("a shared conversation appears for the sharee, is read-only, and revoke tak
     readAfter.stdout,
     "Bob could still read the revoked conversation — revocation removed the ACL but not the access",
   ).toContain("OUTCOME=DENIED");
+
+  // ── And it leaves no trace in Bob's home ─────────────────────────────────
+  // The link lives at ~/shared/<owner>/<project>/<id>, so removing only the
+  // link leaves two named directories behind — a permanent record of who
+  // shared with Bob and what their projects are called, including shares that
+  // were revoked and project names he was never otherwise told. Nothing else
+  // ever deletes them, so they accumulate for the life of the account.
+  //
+  // This is the sharee-side twin of the stale-corridor-bit rule, and it was
+  // found by eyeballing the box after a green run: every other assertion in
+  // this file passed with the debris sitting there.
+  const residue = ssm(
+    `find /srv/bonnie/users/${BOB}/shared -mindepth 1 2>/dev/null | wc -l`,
+  );
+  expect(
+    residue.stdout.trim().split("\n").pop(),
+    "revoke left directories behind in the sharee's home",
+  ).toBe("0");
 });
 
 test("revoking one conversation leaves an overlapping one working", async ({ page }) => {
