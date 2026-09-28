@@ -233,10 +233,64 @@ vacuously (the M3 fixture lesson). Plus an **overlapping-share fixture**: two sh
 one parent, revoke one, assert the other still works.
 
 **Status: done.** Grant/revoke/list API, `bonnie share` subcommand (A5), shared
-directories in the viewer's search path, the Share button, and the gates — **9/9 green**
-against the deployed URL, covering M1 auth, M2 deploy, M3 isolation (still 4/4), M4.2
-sharing, and the share UI. Box left with zero grants, zero corridor bits, zero links, zero
-paths open to `other`.
+conversations in the viewer's listing, the Share button, and the gates — **11/11 green**
+against the deployed URL, covering M1 auth, M2 deploy, M3 isolation (5/5, including the
+transcript-guessing probe), M4.2 sharing, and the share UI. Box left with zero grants,
+zero corridor bits, zero links, zero paths open to `other`.
+
+**The unit of sharing is a conversation, not a project** (AJ, M4.2 review). The original
+design shared a directory because that is what the viewer discovers — it finds projects by
+looking for `.clyde` — and the sharing mechanism inherited the discovery model without
+anyone deciding it should. The cost was absurd in hindsight: to let a colleague read one
+transcript you handed over every file in the repository.
+
+The filesystem was never the constraint. A session directory takes an ACL like any other
+and `corridorFor` is depth-agnostic, so the corridor simply runs two levels deeper through
+`.clyde` and `sessions`. Proven on the box before any code changed: the sharee reads the
+transcript, and cannot list the sibling conversations, the project, or a line of source.
+
+What did have to change was everything that assumed a share was a project:
+
+- **Grant is now `(cwd, session_id)`**, not a path. This is a security property, not
+  ergonomics: there is no longer any request shape that asks for an ACL on an arbitrary
+  directory. The old body relied on an ownership check to refuse "share my whole home";
+  the new one cannot express it. `grantShare` also refuses a target that is not a session
+  directory, because a check at the edge is a check the next caller forgets.
+- **Discovery went away rather than growing.** `discoverProjectDirsFor` used to search each
+  `~/shared` link as an extra project root. A shared conversation contains no `.clyde`, so
+  there is nothing to find, and adding it as a root would put a uuid in the project
+  sidebar. Shared conversations now arrive by the route that already existed: the scanner
+  caches every provisioned user's sessions and `getSessions` admits them one at a time via
+  `canAccessSession`. Sharing adds nothing to the search path at all.
+- **Shared conversations are grouped by who shared them**, decided server-side in
+  `getSessions`. The owner's project is a group the sharee can never open — it will never
+  appear in their `/api/projects`, and every action on a project header addresses a
+  directory they cannot list — and the owner's project name can collide with one of their
+  own, silently merging someone else's conversations into their repo.
+
+**The toolbar button and its project picker are gone.** They existed because sharing hung
+off project group headers, which only exist once a project has sessions — a project with a
+checkout and no conversations had something the server would share and no way to ask for
+it. Per-conversation sharing dissolves the problem rather than working around it: you
+share the thing you are looking at, so there is nothing to pick. Share now lives in the
+conversation's own ⋮ menu, and the gate asserts the retired entry point is *absent*, since
+leaving it would mean two paths to one feature, one of them sending a body the server no
+longer understands.
+
+**Doing this without touching upstream's frontend.** The first attempt modified four
+upstream lines — the grouping loop and the New Session button — and the guard caught it.
+Both were avoidable. The grouping key moved to the server, which is where the decision
+belonged anyway (it is the same decision as "is this shared"), and the button was wrapped
+in a `<template x-if>` rather than given an attribute. Net: 174 additive lines, nothing
+removed. The guard did its job as a design constraint, not just a gate.
+
+**Gate rewritten.** The overlap case is now two conversations in one `.clyde/sessions`
+rather than two projects under `~/code`, which makes it strictly tighter: the shared
+ancestor is one directory away instead of three. Added assertions a project-level grant
+would fail — the sibling conversation stays invisible, the project cannot be listed by the
+kernel, and it never appears in `/api/projects` — plus one that a sharee cannot re-share,
+which is the check that would have silently loosened had `resolveShare` asked
+`canAccessSession` instead of `Owns`.
 
 **The button, resolved.** The blocker was that `bonnie-guard.sh` pinned `index.html`
 byte-for-byte to upstream `171f610`, which is stricter than A2 actually says. A2 forbids
@@ -254,7 +308,8 @@ Two bugs the button surfaced, neither reachable from the API tests:
   the UI would have reported every new share as "shared with yourself".
 - Sharing hung off project group headers, which are built from sessions. A user with a
   checked-out project and no sessions had something the server would share and no way to
-  ask for it. Sharing is now also reachable from a toolbar button with a project picker.
+  ask for it. This was first patched with a toolbar button and a project picker, and then
+  deleted outright when the unit of sharing became the conversation.
 
 ### M5 — Teams ❌ **DELETED** (AJ, M4.2 review)
 Was: a team account with a setgid group-writable tree, so sub-groups *within* the org
