@@ -59,13 +59,27 @@ setfacl -R -x "u:\$BOB" "\$HOME_DIR" 2>/dev/null || true
 setfacl -R -d -x "u:\$BOB" "\$HOME_DIR" 2>/dev/null || true
 rm -rf "/srv/bonnie/users/\$BOB/shared"
 
+# Two conversations in each project, because the unit of sharing is now the
+# conversation and both halves of the gate need a sibling:
+#
+#   conv-one  is what gets shared
+#   conv-two  is the sibling that must stay invisible, which is the whole
+#             claim of conversation-level sharing — you hand over a
+#             transcript, not a project
+#
+# The two conversations also sit under one .clyde/sessions, so they share a
+# corridor exactly as the two projects used to. That makes the overlap case
+# strictly tighter than it was: revoking conv-one must not strip the traverse
+# bit that conv-two depends on, one directory away rather than three.
 for p in shared-a shared-b; do
-  S="\$HOME_DIR/code/\$p/.clyde/sessions/2026-09-24T00-00-00_alice"
+ for c in conv-one conv-two; do
+  S="\$HOME_DIR/code/\$p/.clyde/sessions/\$c"
   install -d -o "\$ALICE" -g "\$ALICE" -m 0750 "\$S"
   F="\$S/2026-09-24T00-00-01.000_user.md"
-  printf '**You:** %s in %s\n' "\$MARKER" "\$p" >"\$F"
+  printf '**You:** %s in %s/%s\n' "\$MARKER" "\$p" "\$c" >"\$F"
   chown "\$ALICE:\$ALICE" "\$F"
   chmod 0640 "\$F"
+ done
   # -R, because install -d applies -o/-g to the final component only: the
   # intermediate directories it creates stay root-owned. Alice must own these
   # outright, since POSIX lets only the owner set an ACL — a root-owned share

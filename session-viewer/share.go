@@ -449,6 +449,23 @@ func grantShare(owner, sharee *principal.Principal, target string) error {
 	if !fi.IsDir() {
 		return fmt.Errorf("share target %q is not a directory", target)
 	}
+	// Only a conversation may be granted.
+	//
+	// The ACL machinery below is deliberately path-generic — corridorFor does
+	// not care how deep the target is — and that generality is what made it
+	// possible to move from project sharing to conversation sharing without
+	// touching it. But generality in the mechanism must not mean generality in
+	// the product: "share a conversation" is a promise about how much is
+	// exposed, and a caller that passed a project directory would keep every
+	// other guarantee (read-only, revocable, corridor-repaired) while quietly
+	// handing over the whole repository.
+	//
+	// Enforced here rather than only in the two callers because this is the
+	// function that writes the grant. A check at the edge is a check the next
+	// caller can forget.
+	if _, _, ok := splitSessionDir(target); !ok {
+		return fmt.Errorf("refusing to share %q: only a conversation can be shared, not a directory", target)
+	}
 	corridor, err := corridorFor(owner.Home, target)
 	if err != nil {
 		return err

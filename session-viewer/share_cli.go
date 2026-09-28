@@ -28,15 +28,16 @@ import (
 func runShare(argv []string) int {
 	fs := flag.NewFlagSet("share", flag.ContinueOnError)
 	var (
-		owner  = fs.String("owner", "", "unix username granting access (required)")
-		sharee = fs.String("sharee", "", "unix username receiving access (required)")
-		path   = fs.String("path", "", "directory inside the owner's home to share (required)")
-		revoke = fs.Bool("revoke", false, "remove the share instead of creating it")
-		list   = fs.Bool("list", false, "list what the owner has shared with the sharee")
+		owner   = fs.String("owner", "", "unix username granting access (required)")
+		sharee  = fs.String("sharee", "", "unix username receiving access (required)")
+		cwd     = fs.String("cwd", "", "project directory containing the conversation (required)")
+		session = fs.String("session", "", "conversation id to share (required)")
+		revoke  = fs.Bool("revoke", false, "remove the share instead of creating it")
+		list    = fs.Bool("list", false, "list what the owner has shared with the sharee")
 	)
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr,
-			"usage: bonnie share --owner <user> --sharee <user> --path <dir> [--revoke]\n"+
+			"usage: bonnie share --owner <user> --sharee <user> --cwd <dir> --session <id> [--revoke]\n"+
 				"       bonnie share --owner <user> --sharee <user> --list\n\n")
 		fs.PrintDefaults()
 	}
@@ -47,8 +48,8 @@ func runShare(argv []string) int {
 		fmt.Fprintln(os.Stderr, "share: --owner and --sharee are required")
 		return 2
 	}
-	if !*list && *path == "" {
-		fmt.Fprintln(os.Stderr, "share: --path is required unless --list")
+	if !*list && (*cwd == "" || *session == "") {
+		fmt.Fprintln(os.Stderr, "share: --cwd and --session are required unless --list")
 		return 2
 	}
 	if os.Geteuid() != 0 {
@@ -91,11 +92,16 @@ func runShare(argv []string) int {
 		return 0
 	}
 
-	abs, err := filepath.Abs(*path)
+	// A conversation, not a directory. The CLI takes the same (cwd, id) pair
+	// as the HTTP route and derives the path the same way, so the two cannot
+	// disagree about what a share is — which matters because the gate drives
+	// Alice's half through here and Bob's half through the API.
+	absCWD, err := filepath.Abs(*cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "share: %v\n", err)
 		return 1
 	}
+	abs := sessionDir(absCWD, *session)
 	// Resolve symlinks before acting, for the same reason the HTTP handler
 	// does: a link could otherwise point the ACL outside the owner's tree
 	// while the textual path looks fine.
