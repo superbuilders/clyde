@@ -260,6 +260,32 @@ func sessionDir(cwd, id string) string {
 	return filepath.Join(cwd, ".clyde", "sessions", id)
 }
 
+// splitSessionDir is the inverse of sessionDir: given a grant path, recover
+// the (cwd, id) pair the viewer identifies a conversation by.
+//
+// Needed because the filesystem is the database. getShares reads back raw ACL
+// paths, and the only way to report them as conversations rather than as
+// directories is to undo the construction. ok is false for any path that is
+// not shaped like a session directory, which is how a grant made by some
+// other means gets ignored rather than mis-reported.
+func splitSessionDir(path string) (cwd, id string, ok bool) {
+	path = filepath.Clean(path)
+	id = filepath.Base(path)
+	rest := filepath.Dir(path)
+	if filepath.Base(rest) != "sessions" {
+		return "", "", false
+	}
+	rest = filepath.Dir(rest)
+	if filepath.Base(rest) != ".clyde" {
+		return "", "", false
+	}
+	cwd = filepath.Dir(rest)
+	if cwd == "" || cwd == "." || id == "" || id == "." {
+		return "", "", false
+	}
+	return cwd, id, true
+}
+
 // canAccessSession reports whether a principal may read one conversation.
 //
 // Sharing is per-conversation, not per-project (AJ, M4.2 review). The
