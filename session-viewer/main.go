@@ -1085,8 +1085,27 @@ func getSessions(c echo.Context) error {
 			continue
 		}
 		sharedBy := ""
+		project := s.Project
 		if pr != nil && !pr.Solo && !pr.Owns(s.CWD) {
 			sharedBy = ownerOf(s.CWD)
+			// Report a shared conversation under a group named for who shared
+			// it, rather than under the owner's project.
+			//
+			// The sidebar groups on this field, and the owner's project is a
+			// group the sharee can never open: it is in the owner's tree, it
+			// will never appear in /api/projects for them, and every action on
+			// a project header addresses a directory they cannot list. The
+			// owner's project name can also collide with one of the sharee's
+			// own, which would silently merge someone else's conversations
+			// into their repository.
+			//
+			// Decided here because this is where we decide the conversation is
+			// shared at all. The alternative — rewriting the grouping key in
+			// the frontend — means editing upstream's grouping loop, which A2
+			// forbids, and splits one decision across two codebases.
+			if sharedBy != "" {
+				project = "Shared by " + sharedBy
+			}
 		}
 		// Age filter
 		if days > 0 {
@@ -1103,7 +1122,7 @@ func getSessions(c echo.Context) error {
 		result = append(result, SessionResponse{
 			ID:                 s.ID,
 			CWD:                s.CWD,
-			Project:            s.Project,
+			Project:            project,
 			Branch:             s.Branch,
 			User:               s.User,
 			Name:               s.Name,

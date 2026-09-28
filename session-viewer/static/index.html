@@ -99,7 +99,6 @@
             </template>
           </div>
         </div>
-        <button x-show="canShare" @click="openShareModal('', '')" class="btn btn-xs btn-ghost opacity-60 hover:opacity-100" title="Share a project">🔗</button>
         <button @click="markAllReadForScope('all')" class="btn btn-xs btn-ghost opacity-60 hover:opacity-100" title="Mark all as read">✉️</button>
       </div>
     </div>
@@ -126,8 +125,6 @@
                             class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🌿 New Worktree</button>
                     <button @click="markAllReadForScope('worktree', null, group.parentPath); wtMenuOpen = false"
                             class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">✓ Mark all read</button>
-                    <button x-show="canShare" @click="openShareModal(group.parentPath, group.project); wtMenuOpen = false"
-                            class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🔗 Share…</button>
                   </div>
                 </div>
                 <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-40" x-text="group.totalSessions"></span>
@@ -157,6 +154,12 @@
                             <button x-show="s.process_type" @click="killSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
                             <button @click="openInTerminal(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🖥 Open in terminal</button>
                             <button @click="renameSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
+                            <!-- Sharing is per-conversation (M4.2): the unit the user is looking
+                                 at is the unit they can hand over. Hidden on a conversation shared
+                                 *with* them — a sharee is a reader, not a re-sharer, and the server
+                                 rejects it anyway. -->
+                            <button x-show="canShare && !s.shared_by" @click="openShareModal(s); menuOpen = false"
+                                    class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🔗 Share…</button>
                           </div>
                         </div>
                       </div>
@@ -211,6 +214,12 @@
                                     <button x-show="s.process_type" @click="killSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
                                     <button @click="openInTerminal(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🖥 Open in terminal</button>
                                     <button @click="renameSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
+                                    <!-- Sharing is per-conversation (M4.2): the unit the user is looking
+                                         at is the unit they can hand over. Hidden on a conversation shared
+                                         *with* them — a sharee is a reader, not a re-sharer, and the server
+                                         rejects it anyway. -->
+                                    <button x-show="canShare && !s.shared_by" @click="openShareModal(s); menuOpen = false"
+                                            class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🔗 Share…</button>
                                   </div>
                                 </div>
                               </div>
@@ -240,12 +249,19 @@
                   <div x-show="projectMenu" @click.outside="projectMenu = false" x-transition
                        class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
                        style="background-color: var(--color-base-100, #1d232a)">
+                    <!-- Wrapped, not modified: a "Shared by …" group's cwd is
+                         inside the owner's tree, where the sharee can read one
+                         transcript and nothing else, so starting a session
+                         there would fail and offering it implies access we did
+                         not grant. The template is around upstream's button
+                         rather than an attribute on it because A2 allows
+                         adding to this file and not rewriting it. -->
+                    <template x-if="!isSharedGroup(group)">
                     <button @click="createSessionForProject(group.sessions[0]?.cwd); projectMenu = false"
                             class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📝 New Session</button>
+                    </template>
                     <button @click="markAllReadForScope('cwd', group.sessions[0]?.cwd); projectMenu = false"
                             class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">✓ Mark all read</button>
-                    <button x-show="canShare" @click="openShareModal(group.sessions[0]?.cwd, group.project); projectMenu = false"
-                            class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🔗 Share…</button>
                   </div>
                 </div>
                 <span @click="toggleProjectCollapse(group.key)" class="text-xs opacity-40" x-text="group.sessions.length"></span>
@@ -283,6 +299,12 @@
                                     class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🖥 Open in terminal</button>
                             <button @click="renameSession(s); menuOpen = false"
                                     class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">Rename</button>
+                                    <!-- Sharing is per-conversation (M4.2): the unit the user is looking
+                                         at is the unit they can hand over. Hidden on a conversation shared
+                                         *with* them — a sharee is a reader, not a re-sharer, and the server
+                                         rejects it anyway. -->
+                                    <button x-show="canShare && !s.shared_by" @click="openShareModal(s); menuOpen = false"
+                                            class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">🔗 Share…</button>
                           </div>
                         </div>
                       </div>
@@ -581,21 +603,14 @@
   <!-- ── Share modal (Bonnie M4.2) ── -->
   <div x-show="shareModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @keydown.escape.window="closeShareModal()">
     <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full mx-4 p-6" style="background-color: var(--color-base-100);" @click.outside="closeShareModal()">
-      <div class="text-lg font-bold mb-1">🔗 Share project</div>
-      <div x-show="sharePath" class="text-sm opacity-60 mb-4 font-mono truncate" x-text="sharePath"></div>
-      <!-- A project with no sessions has no group header to hang a menu off,
-           so it must still be reachable here or it could never be shared. -->
-      <div x-show="!sharePath" class="mb-4">
-        <label class="text-sm font-semibold opacity-70 mb-1 block">Project</label>
-        <select id="share-project" x-model="sharePath" @change="onSharePathChange()" class="select select-bordered select-sm w-full">
-          <option value="">Select a project…</option>
-          <template x-for="p in shareProjects" :key="p.path">
-            <option :value="p.path" x-text="p.name + '  —  ' + p.path"></option>
-          </template>
-        </select>
-      </div>
+      <div class="text-lg font-bold mb-1">🔗 Share conversation</div>
+      <!-- The conversation's own name, not its path. The modal is only ever
+           opened from a specific conversation now, so there is nothing to pick
+           and nothing to disambiguate; showing the directory would only tell
+           the user where we happen to keep transcripts. -->
+      <div class="text-sm opacity-60 mb-4 truncate" x-text="shareName"></div>
 
-      <div class="space-y-3" x-show="sharePath">
+      <div class="space-y-3">
         <div>
           <label class="text-sm font-semibold opacity-70 mb-1 block">Shared with</label>
           <template x-if="shareList.length === 0">
@@ -628,7 +643,9 @@
         </div>
 
         <div class="text-xs opacity-50">
-          Sharing grants read-only access to this project's files and sessions.
+          Read-only, and only this conversation. They will not be able to see
+          the project it belongs to, your other conversations in it, or any of
+          its files.
         </div>
         <div x-show="shareError" class="text-error text-sm" x-text="shareError"></div>
       </div>
@@ -694,9 +711,9 @@ function sessionViewer() {
     // WT-9: Worktree creation modal state
     worktreeModal: false, worktreeParentPath: '', worktreeParentName: '', worktreeBranch: '',
     // ── Sharing (Bonnie M4.2) ──
-    shareModal: false, sharePath: '', shareName: '', shareEmail: '',
+    shareModal: false, shareCWD: '', shareSessionID: '', shareName: '', shareEmail: '',
     shareBusy: false, shareError: '', shareList: [], shareableUsers: [],
-    sharesByPath: {}, shareProjects: [],
+    sharesByKey: {},
     worktreeError: '', worktreeCreating: false,
     // Per-type view modes: 'expanded' | 'hidden' | 'collapsed'
     typeViewMode: { thinking: 'collapsed', tools: 'expanded', compaction: 'expanded', diagnostic: 'hidden' },
@@ -784,6 +801,10 @@ function sessionViewer() {
       list.sort((a,b) => (b.unread?1:0) - (a.unread?1:0) || (b.last_modified||'').localeCompare(a.last_modified||''));
       return list;
     },
+
+    // A group is shared if its sessions are; the group itself carries no flag
+    // because it is built by upstream's code, which knows nothing of sharing.
+    isSharedGroup(group) { return !!(group && group.sessions && group.sessions[0] && group.sessions[0].shared_by); },
 
     get groupedSessions() {
       const normalGroups = {};
@@ -1284,34 +1305,30 @@ function sessionViewer() {
           fetch('/api/shares').then(r => r.ok ? r.json() : []),
         ]);
         this.shareableUsers = u || [];
-        if (this.shareableUsers.length > 0) {
-          this.shareProjects = await fetch('/api/projects')
-            .then(r => r.ok ? r.json() : []).catch(() => []) || [];
-        }
         const by = {};
-        for (const g of (sh || [])) (by[g.path] ||= []).push(g);
-        this.sharesByPath = by;
-      } catch (e) { this.shareableUsers = []; this.sharesByPath = {}; }
+        for (const g of (sh || [])) (by[this.shareKey(g.cwd, g.session_id)] ||= []).push(g);
+        this.sharesByKey = by;
+      } catch (e) { this.shareableUsers = []; this.sharesByKey = {}; }
     },
 
-    sharesFor(path) { return this.sharesByPath[path] || []; },
+    // A conversation is identified by (cwd, id) and neither half is unique on
+    // its own: the same id can appear under two worktrees of one repo, and a
+    // cwd has many conversations. NUL is the separator because it is the one
+    // byte that cannot occur in a path.
+    shareKey(cwd, id) { return (cwd || '') + '\u0000' + (id || ''); },
 
-    onSharePathChange() {
-      const p = this.shareProjects.find(x => x.path === this.sharePath);
-      this.shareName = p ? p.name : (this.sharePath.split('/').pop() || '');
+    sharesFor(cwd, id) { return this.sharesByKey[this.shareKey(cwd, id)] || []; },
+
+    // Opened from one conversation's menu, and from nowhere else. There is no
+    // picker any more: the modal cannot be opened without already having
+    // chosen what to share, which is why it needs no empty state.
+    openShareModal(s) {
+      this.shareCWD = s.cwd;
+      this.shareSessionID = s.id;
+      this.shareName = s.name || s.preview || s.id;
       this.shareError = '';
-      this.shareList = this.sharesFor(this.sharePath);
+      this.shareList = this.sharesFor(s.cwd, s.id);
       this.shareEmail = this.shareableUsers.find(e => !this.shareList.some(g => g.sharee_email === e)) || '';
-    },
-
-    // path may be '': the toolbar entry point opens the modal with a project
-    // picker, because a project with no sessions has no header menu.
-    openShareModal(path, name) {
-      this.sharePath = path || '';
-      this.shareName = name || path.split('/').pop();
-      this.shareError = '';
-      this.shareEmail = this.shareableUsers.find(e => !this.sharesFor(path).some(g => g.sharee_email === e)) || '';
-      this.shareList = this.sharesFor(path);
       this.shareModal = true;
     },
 
@@ -1323,13 +1340,13 @@ function sessionViewer() {
       try {
         const r = await fetch('/api/shares', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ path: this.sharePath, sharee_email: this.shareEmail })
+          body: JSON.stringify({ cwd: this.shareCWD, session_id: this.shareSessionID, sharee_email: this.shareEmail })
         });
         const data = await r.json();
         if (!r.ok) { this.shareError = data.error || data.message || 'share failed'; }
         else {
           await this.loadSharing();
-          this.shareList = this.sharesFor(this.sharePath);
+          this.shareList = this.sharesFor(this.shareCWD, this.shareSessionID);
           this.shareEmail = '';
           this.showToast('Shared ' + this.shareName);
         }
@@ -1343,14 +1360,14 @@ function sessionViewer() {
       try {
         const r = await fetch('/api/shares', {
           method: 'DELETE', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ path: this.sharePath, sharee_email: email })
+          body: JSON.stringify({ cwd: this.shareCWD, session_id: this.shareSessionID, sharee_email: email })
         });
         if (!r.ok) {
           const data = await r.json().catch(() => ({}));
           this.shareError = data.error || data.message || 'revoke failed';
         } else {
           await this.loadSharing();
-          this.shareList = this.sharesFor(this.sharePath);
+          this.shareList = this.sharesFor(this.shareCWD, this.shareSessionID);
           this.showToast('Revoked');
         }
       } catch (e) { this.shareError = String(e); }
