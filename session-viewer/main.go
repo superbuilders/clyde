@@ -1141,14 +1141,23 @@ func getSessions(c echo.Context) error {
 func guardSession(c echo.Context, cwd, sid string) (*principal.Principal, error) {
 	pr, err := principalFor(c)
 	if err != nil {
-		return nil, c.JSON(http.StatusForbidden,
+		return nil, echo.NewHTTPError(http.StatusForbidden,
 			map[string]string{"error": "no unix identity: " + err.Error()})
 	}
 	if !canAccessSession(pr, cwd, sid) {
 		// 404, not 403: a distinguishable 403 confirms the session exists,
 		// which leaks the existence of other people's conversations to anyone
 		// willing to enumerate.
-		return nil, c.JSON(http.StatusNotFound, map[string]string{"error": "not found"})
+		//
+		// echo.NewHTTPError, not c.JSON: c.JSON *writes* the response and
+		// returns nil, so a guard built on it hands its caller a nil error and
+		// every `if err != nil { return err }` falls straight through. The
+		// first version of this function did exactly that — it wrote the 404
+		// and then served the transcript underneath it, so the status line was
+		// correct and the body still leaked. Returning a real error is what
+		// makes the guard a guard.
+		return nil, echo.NewHTTPError(http.StatusNotFound,
+			map[string]string{"error": "not found"})
 	}
 	return pr, nil
 }

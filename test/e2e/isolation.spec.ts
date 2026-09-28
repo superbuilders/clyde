@@ -162,3 +162,25 @@ test("Bob's agent gets EACCES reading Alice's tree", async ({ page }) => {
 
   console.log(`[m3] agent was denied; ${transcript.length} chars of transcript`);
 });
+
+// The detail endpoint, not just the listing.
+//
+// getSessions filtered correctly for the whole of M3 and M4 while
+// GET /sessions/:id/messages served any transcript on the box to anyone who
+// could guess a session id — and an id is a timestamp plus a username. This
+// gate asserted on the listing only, so it stayed green through a live
+// information disclosure. Hiding something from a list is not access control.
+const ALICE_SID = "2026-09-23T00-00-00_alice";
+const ALICE_CWD = ALICE_HOME + "/code/scratch";
+
+test("Bob cannot read Alice's transcript by guessing its id", async ({ page }) => {
+  await page.goto("/");
+  const r = await page.request.get(
+    `/api/sessions/${encodeURIComponent(ALICE_SID)}/messages?cwd=${encodeURIComponent(ALICE_CWD)}`,
+  );
+  expect(r.status(), "reading another user's transcript must not be 200").not.toBe(200);
+  const body = await r.text();
+  console.log(`[m3] probe status=${r.status()} body=${body.slice(0, 200)}`);
+  expect(body, "must not leak transcript content").not.toContain("alice-private-marker");
+  console.log(`[m3] transcript probe for Alice's session -> ${r.status()}`);
+});
