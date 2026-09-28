@@ -180,20 +180,29 @@ write_files:
       #
       #     The secret is optional — if it is absent the box still boots, git
       #     simply cannot reach private remotes.
+      #
+      #     This installs a credential for the SERVICE account only, and only
+      #     if the secret still carries a long-lived GITHUB_TOKEN. The named
+      #     users get theirs from bonnie-git-credentials.timer, which mints a
+      #     short-lived GitHub App installation token and writes it into each
+      #     user's home as that user. A per-user file is the whole point: the
+      #     service account's 0600 file is unreadable by the named users, and
+      #     that is deliberate, so it cannot double as theirs.
       if gh=$(aws secretsmanager get-secret-value --secret-id "$GITHUB_SECRET" \
-                --query SecretString --output text --region "$REGION" 2>/dev/null); then
+                --query SecretString --output text --region "$REGION" 2>/dev/null) \
+         && tok=$(jq -re .GITHUB_TOKEN <<<"$gh" 2>/dev/null); then
         umask 077
         printf 'https://%s:%s@github.com\n' \
-          "$(jq -r .GITHUB_USER <<<"$gh")" "$(jq -r .GITHUB_TOKEN <<<"$gh")" \
+          "$(jq -r .GITHUB_USER <<<"$gh")" "$tok" \
           >/srv/bonnie/home/.git-credentials
         chown bonnie:bonnie /srv/bonnie/home/.git-credentials
         chmod 0600 /srv/bonnie/home/.git-credentials
         umask 027
-        unset gh
+        unset gh tok
         sudo -u bonnie -H env HOME=/srv/bonnie/home git config --global credential.helper store
-        echo "git credentials installed"
+        echo "git credentials installed for the service account"
       else
-        echo "WARN: no $GITHUB_SECRET — private git remotes will not work"
+        echo "note: no GITHUB_TOKEN in $GITHUB_SECRET — service account has no git credential"
       fi
 
       sudo -u bonnie -H env HOME=/srv/bonnie/home git config --global user.name "Bonnie"

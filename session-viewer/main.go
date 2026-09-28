@@ -716,6 +716,40 @@ func discoverProjectDirsFor(p *principal.Principal) map[string]bool {
 		}
 	}
 
+	// A git checkout under ~/code is a project even before it has a .clyde.
+	//
+	// Discovery keys on .clyde, which is written by the agent — so a project
+	// becomes visible only once a conversation has happened in it. That was
+	// self-consistent while the only way to get code onto the box was to put
+	// it there as root, and it becomes a trap the moment M6 lets an agent
+	// clone: the clone lands in ~/code/<repo>, has no .clyde, never appears in
+	// the sidebar, and the UI can only start sessions in projects it lists.
+	// The user is told the clone succeeded and has no way to use it.
+	//
+	// The API was always able to do this — createSession accepts any cwd the
+	// caller owns and creates the session directory itself. Only discovery
+	// could not name it.
+	//
+	// maxdepth 2 finds ~/code/<repo>/.git without descending into the repo,
+	// where a vendored or nested checkout would otherwise be listed as a
+	// sibling project. Multi-user only: in solo this is upstream's code and
+	// §8 item 2 requires it stay byte-identical.
+	if p != nil && !p.Solo {
+		out, err := exec.Command("find", filepath.Join(home, "code"),
+			"-maxdepth", "2", "-name", ".git").Output()
+		if err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if line = strings.TrimSpace(line); line != "" {
+					dir := filepath.Dir(line)
+					if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+						dir = resolved
+					}
+					s[dir] = true
+				}
+			}
+		}
+	}
+
 	// Shares are deliberately absent here. They used to be searched as extra
 	// roots, back when the unit of sharing was a project directory and a share
 	// really did add a project to the sharee's list.
@@ -1546,8 +1580,13 @@ func getProjects(c echo.Context) error {
 		}
 		hasSessions := true
 		if _, err := os.Stat(filepath.Join(dir, ".clyde", "sessions")); os.IsNotExist(err) {
+			// A git checkout with no conversations yet is still a project —
+			// otherwise a freshly cloned repo is invisible and unusable (M6).
+			// Scoped to multi-user so solo keeps upstream's exact behaviour.
+			_, gitErr := os.Stat(filepath.Join(dir, ".git"))
+			repoOK := gitErr == nil && pr != nil && !pr.Solo
 			// For worktree group members without .clyde/sessions/, still include them
-			if _, ok := worktreeGroupForDir[dir]; !ok {
+			if _, ok := worktreeGroupForDir[dir]; !ok && !repoOK {
 				continue
 			}
 			hasSessions = false
@@ -2040,6 +2079,12 @@ func main() {
 	// and a shell on the box (PLAN.md §4 M4.2, A5).
 	if len(os.Args) > 1 && os.Args[1] == "share" {
 		os.Exit(runShare(os.Args[2:]))
+	}
+	// And for credentials: it writes into every user's home as that user, so
+	// it needs root, and it runs from a timer rather than from the web
+	// process (PLAN.md §M6).
+	if len(os.Args) > 1 && os.Args[1] == "git-credentials" {
+		os.Exit(runGitCredentials(os.Args[2:]))
 	}
 
 	// Flags are parsed before anything binds or scans, so a misconfigured auth

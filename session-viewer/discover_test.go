@@ -71,3 +71,85 @@ func TestDiscoverProjectDirsNeverUsesSoloRootsInMultiUser(t *testing.T) {
 		t.Fatalf("multi-user scan included the service cwd %q (solo branch)", cwd)
 	}
 }
+
+// A freshly cloned repository must be discoverable before it has a .clyde.
+//
+// Discovery keys on .clyde, which only the agent writes — so before M6 a
+// project became visible only after a conversation had already happened in
+// it. That was self-consistent while code arrived on the box by hand, and
+// becomes a trap the moment an agent can clone: the checkout lands in
+// ~/code/<repo>, never appears in the sidebar, and the UI can only start
+// sessions in projects it lists. The user is told the clone worked and has no
+// way to use it.
+func TestDiscoverFindsGitRepoWithoutClyde(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := &principal.Principal{Username: "alice", Home: home}
+
+	// A clone: a git checkout, no .clyde anywhere in it.
+	cloned := filepath.Join(home, "code", "freshly-cloned")
+	if err := os.MkdirAll(filepath.Join(cloned, ".git"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// And a conversation-bearing project, to prove the old path still works.
+	worked := filepath.Join(home, "code", "worked-in")
+	if err := os.MkdirAll(filepath.Join(worked, ".clyde", "sessions"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs := discoverProjectDirsFor(alice)
+	if !dirs[cloned] {
+		t.Errorf("a cloned repo with no .clyde was not discovered:\n  want %q\n  got  %v", cloned, dirs)
+	}
+	if !dirs[worked] {
+		t.Errorf("a project with sessions stopped being discovered: %v", dirs)
+	}
+}
+
+// The repo search must not descend into a checkout and list its innards as
+// sibling projects. A vendored dependency or a nested checkout has a .git of
+// its own, and at the wrong depth every one of them becomes a project.
+func TestDiscoverDoesNotDescendIntoRepos(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := &principal.Principal{Username: "alice", Home: home}
+
+	nested := filepath.Join(home, "code", "outer", "vendor", "inner")
+	if err := os.MkdirAll(filepath.Join(nested, ".git"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "code", "outer", ".git"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs := discoverProjectDirsFor(alice)
+	if !dirs[filepath.Join(home, "code", "outer")] {
+		t.Error("the outer checkout was not discovered")
+	}
+	if dirs[nested] {
+		t.Errorf("a nested checkout was listed as its own project: %q", nested)
+	}
+}
+
+// Solo must stay byte-identical to upstream (PLAN.md §8 item 2). The repo
+// search is a Bonnie addition and must not fire there.
+func TestDiscoverRepoSearchIsMultiUserOnly(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloned := filepath.Join(home, "code", "freshly-cloned")
+	if err := os.MkdirAll(filepath.Join(cloned, ".git"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	// Solo resolves its own home from the environment, so point it here.
+	t.Setenv("HOME", home)
+	if dirs := discoverProjectDirsFor(&principal.Principal{Solo: true, Home: home}); dirs[cloned] {
+		t.Errorf("the repo search fired in solo mode, changing upstream behaviour: %v", dirs)
+	}
+}
