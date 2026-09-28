@@ -625,8 +625,42 @@ func getBranch(dir string, cache map[string]string) string {
 
 var messageTypeRe = regexp.MustCompile(`_([a-z-]+)\.md$`)
 
+// discoverProjectDirs is the background scanner's root set.
+//
+// In multi-user mode this is the union over every provisioned user, which is
+// what the read-time filter in getSessions already assumes: it documents the
+// cache as seeing "every user's sessions" and does isolation per request. That
+// was only ever true of the comment. Passing nil here took the *solo* branch,
+// so the scanner walked the service account's own home — /srv/bonnie/home —
+// and no user's sessions were ever scanned at all. Every real user saw an
+// empty sidebar while the cache quietly filled up with the service's projects,
+// which canAccess then correctly hid from them.
+//
+// The service's own home is deliberately not scanned in multi-user mode. It
+// belongs to no principal, so nothing in it could be shown to anyone.
 func discoverProjectDirs() map[string]bool {
-	return discoverProjectDirsFor(nil)
+	if principals == nil || principals.IsSolo() {
+		return discoverProjectDirsFor(nil)
+	}
+
+	m, err := principal.LoadUserMap(principals.MapPath())
+	if err != nil {
+		log.Printf("scan: cannot read user map %s: %v", principals.MapPath(), err)
+		return map[string]bool{}
+	}
+
+	s := make(map[string]bool)
+	for _, username := range m.ByEmail() {
+		p, err := principal.Lookup(username)
+		if err != nil {
+			log.Printf("scan: skipping %s: %v", username, err)
+			continue
+		}
+		for dir := range discoverProjectDirsFor(p) {
+			s[dir] = true
+		}
+	}
+	return s
 }
 
 // discoverProjectDirsFor finds project directories belonging to a principal.
