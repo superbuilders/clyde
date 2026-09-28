@@ -295,3 +295,16 @@ type Response struct {
 	StopReason string         `json:"stop_reason"`
 	Usage      Usage          `json:"usage"`
 }
+
+// TotalInputTokens returns the number of tokens that occupied the context
+// window on the input side of this response.
+//
+// All three input counters are summed. Cache-creation tokens are the easy one
+// to get wrong: they are billed separately because the content was written to
+// the cache, but that content was still part of the request and still consumed
+// window. A turn that reports input=2, cache_creation=16816 used ~16818 tokens
+// of window, not 2 — and metering it as 2 both suppresses compaction and grants
+// the oversized-tool-result guard a budget that does not exist.
+func (u Usage) TotalInputTokens() int {
+	return u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+}

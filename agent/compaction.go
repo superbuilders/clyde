@@ -8,6 +8,14 @@ import (
 	"github.com/superbuilders/clyde/agent/providers"
 )
 
+// MinToolResultTokenBudget is the floor for the per-tool-result size limit.
+// The remaining-budget arithmetic in GuardOversizedToolResults can legitimately
+// reach zero (or go negative) when the context window is full, which would
+// discard even a 100-byte result and make every tool look broken. Compaction is
+// what fixes a full window; starving the tool loop is not. Below this floor the
+// guard stops guarding.
+const MinToolResultTokenBudget = 4000
+
 // DefaultReserveTokens is the default number of tokens to reserve for the
 // agent's next response. When input tokens exceed (contextWindowSize - reserveTokens),
 // compaction is triggered automatically.
@@ -41,7 +49,7 @@ func (a *Agent) ShouldCompact() bool {
 		return false
 	}
 
-	totalInput := a.lastUsage.InputTokens + a.lastUsage.CacheReadInputTokens
+	totalInput := a.totalInputTokens()
 	if totalInput == 0 {
 		return false
 	}
@@ -191,7 +199,43 @@ func (a *Agent) Compact() error {
 
 	a.history = newHistory
 
+	// The usage figure is now a lie: it describes the history we just threw
+	// away. Everything that meters context off it — ShouldCompact and, more
+	// damagingly, GuardOversizedToolResults — would keep believing the window
+	// is full, so the next turn's tool results get discarded as "too large"
+	// even at a few hundred bytes, and the agent concludes it is out of context
+	// immediately after compaction. Re-baseline against what we actually kept.
+	a.resetUsageAfterCompaction()
+
 	return nil
+}
+
+// resetUsageAfterCompaction replaces lastUsage with an estimate derived from
+// the post-compaction history, so context metering reflects the history that
+// will actually be sent on the next request rather than the pre-compaction one.
+//
+// An estimate is used rather than a zero: zeroing would make the next turn
+// believe the window is empty, which over-trusts the guard in the other
+// direction. The real number arrives with the next API response.
+func (a *Agent) resetUsageAfterCompaction() {
+	estimated := EstimateTokens(serializeMessagesPlain(a.history))
+	a.lastUsage = providers.Usage{InputTokens: estimated}
+	if a.diagnosticCallback != nil {
+		a.diagnosticCallback(fmt.Sprintf("🗜️ Context re-baselined after compaction: ~%d input tokens (%d messages)",
+			estimated, len(a.history)))
+	}
+}
+
+// totalInputTokens returns the full input-side token count of the most recent
+// API response.
+//
+// CacheCreationInputTokens counts here. It is charged for content that was sent
+// and written to the cache, so it occupies the context window exactly like a
+// plain or cache-read input token. Omitting it made a turn reporting
+// input=2 / cache_create=16816 look like a 2-token context, which both
+// suppresses compaction and hands the oversize guard a fictitious budget.
+func (a *Agent) totalInputTokens() int {
+	return a.lastUsage.TotalInputTokens()
 }
 
 // degradedTruncationNotice is shown to the user (and injected into history)
@@ -232,6 +276,7 @@ func (a *Agent) compactDegraded(firstUserMsg providers.Message, keptMessages []p
 	}
 
 	a.history = newHistory
+	a.resetUsageAfterCompaction()
 }
 
 // sameMessage reports whether two messages are the same turn, compared by role
