@@ -657,7 +657,7 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 
 		// Update context percentage for next prompt
 		usage := agentInstance.LastUsage()
-		totalInput := usage.InputTokens + usage.CacheReadInputTokens
+		totalInput := usage.TotalInputTokens()
 		contextPercent = prompt.CalculateContextPercent(totalInput, cfg.ContextWindowSize)
 	}
 }
@@ -714,7 +714,7 @@ func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spin
 		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
 
 		usage := agentInstance.LastUsage()
-		totalInput := usage.InputTokens + usage.CacheReadInputTokens
+		totalInput := usage.TotalInputTokens()
 		contextPercent = prompt.CalculateContextPercent(totalInput, contextWindowSize)
 	}
 }
@@ -1113,7 +1113,7 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
 
 		usage := agentInstance.LastUsage()
-		totalInput := usage.InputTokens + usage.CacheReadInputTokens
+		totalInput := usage.TotalInputTokens()
 		contextPercent = prompt.CalculateContextPercent(totalInput, cfg.ContextWindowSize)
 	}
 }

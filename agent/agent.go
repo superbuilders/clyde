@@ -403,6 +403,14 @@ func (a *Agent) LastUsage() Usage {
 	return a.lastUsage
 }
 
+// SetLastUsage overwrites the recorded usage from the most recent API
+// response. Exported for testing: context metering (ShouldCompact,
+// GuardOversizedToolResults) is driven entirely by this value, and reaching a
+// given usage state through real API calls is not practical in a unit test.
+func (a *Agent) SetLastUsage(u Usage) {
+	a.lastUsage = u
+}
+
 // HandleMessage processes a user message and returns the response
 func (a *Agent) HandleMessage(userInput string) (string, error) {
 	// Add user message to history
@@ -480,7 +488,7 @@ func (a *Agent) HandleMessage(userInput string) (string, error) {
 		// Emit cache and diagnostic information unconditionally.
 		// The CLI layer filters based on its own log level.
 		if resp.Usage.CacheReadInputTokens > 0 && a.diagnosticCallback != nil {
-			totalInputTokens := resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens
+			totalInputTokens := resp.Usage.TotalInputTokens()
 
 			// Cache token fraction
 			a.diagnosticCallback(fmt.Sprintf("💾 Cache: %d/%d tokens",
@@ -725,7 +733,7 @@ func (a *Agent) GuardOversizedToolResults(results []providers.ContentBlock) []pr
 	}
 
 	// Estimate remaining budget: contextWindow - currentUsage - reserve.
-	totalInput := a.lastUsage.InputTokens + a.lastUsage.CacheReadInputTokens
+	totalInput := a.totalInputTokens()
 	reserve := a.reserveTokens
 	if reserve == 0 {
 		reserve = DefaultReserveTokens
@@ -743,6 +751,17 @@ func (a *Agent) GuardOversizedToolResults(results []providers.ContentBlock) []pr
 	limit := remaining
 	if hardCeiling < limit {
 		limit = hardCeiling
+	}
+
+	// Never let the limit collapse. A full window drives `remaining` to zero,
+	// and a zero limit discards every tool result regardless of size — the
+	// agent then sees a few hundred bytes rejected as "too large for context
+	// window" and reasonably concludes it has no context left. The cure for a
+	// full window is compaction, which the loop performs before the next
+	// request; the guard's job is only to stop a single result from being
+	// unsurvivably huge.
+	if limit < MinToolResultTokenBudget {
+		limit = MinToolResultTokenBudget
 	}
 
 	for i, block := range results {
