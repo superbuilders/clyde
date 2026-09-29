@@ -82,6 +82,11 @@ aws s3 cp "s3://\$BUCKET/\$PREFIX/\$VERSION.tar.gz.sha256" "\$tmp/r.sha256" --re
 tar -xzf "\$tmp/r.tar.gz" -C "/opt/bonnie/versions/\$VERSION"
 rm -rf "\$tmp"
 chmod 0755 "/opt/bonnie/versions/\$VERSION/bonnie" "/opt/bonnie/versions/\$VERSION/clyde"
+# The tarball is built on macOS and carries 501:staff. Harmless for the
+# binaries, which are chmod'd above, but the skills tree is read by provision
+# and copied into every home — it should be owned by root like everything else
+# under /opt, not by a uid that happens not to exist here.
+chown -R root:root "/opt/bonnie/versions/\$VERSION"
 ln -sfn "/opt/bonnie/versions/\$VERSION" /opt/bonnie/current
 ln -sfn /opt/bonnie/current/clyde /usr/local/bin/clyde
 
