@@ -327,6 +327,21 @@ func ensureHomeSkeleton(username string) error {
 		}
 	}
 
+	// Install the bundled agent skills into this user's home.
+	//
+	// PLAN.md §M6. Skill discovery looks in ./.agents/skills and
+	// ~/.agents/skills, and nowhere else — there is no machine-wide location —
+	// so a skill every user needs has to be copied into every user's home.
+	//
+	// This is how a user gets GitHub access at all. They have no shell here and
+	// cannot SSH in, so `gh auth login` can only be driven by their agent, and
+	// the agent only knows how to do that if the skill is present. Re-copied on
+	// every provision so a deploy carrying a corrected skill actually reaches
+	// people, rather than only new accounts.
+	if err := installSkills(u, uid, gid); err != nil {
+		return err
+	}
+
 	// Initialise the scratch repo so the project is discoverable.
 	scratch := filepath.Join(u.HomeDir, "code", "scratch")
 	if _, err := os.Stat(filepath.Join(scratch, ".git")); os.IsNotExist(err) {
@@ -337,6 +352,80 @@ func ensureHomeSkeleton(username string) error {
 		cmd := p.Command("git", "init", "-q", scratch)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("git init %s: %v: %s", scratch, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
+// skillsSourceDir is where the deployed release keeps the bundled skills.
+//
+// A variable so tests can point it somewhere writable. Resolved relative to the
+// running binary rather than hardcoded to /opt/bonnie/current, so a release
+// unpacked anywhere still finds its own skills instead of a previous release's.
+var skillsSourceDir = func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return filepath.Join(filepath.Dir(exe), "skills")
+}
+
+// installSkills copies the bundled skills into ~/.agents/skills.
+//
+// Absent source is not an error: a developer running provision from a source
+// checkout has no skills directory beside the binary, and that should not fail
+// a provision. A *present but unreadable* source is an error, because that is
+// a broken release rather than a missing one.
+func installSkills(u *user.User, uid, gid int) error {
+	src := skillsSourceDir()
+	if src == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(src)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading bundled skills from %s: %w", src, err)
+	}
+
+	dst := filepath.Join(u.HomeDir, ".agents", "skills")
+	if err := os.MkdirAll(dst, 0o750); err != nil {
+		return err
+	}
+	if err := chownTree(dst, u.HomeDir, uid, gid); err != nil {
+		return err
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(src, e.Name(), "SKILL.md"))
+		if os.IsNotExist(err) {
+			continue // not a skill folder
+		}
+		if err != nil {
+			return fmt.Errorf("reading skill %s: %w", e.Name(), err)
+		}
+		dir := filepath.Join(dst, e.Name())
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return err
+		}
+		// 0640, not 0644: the home is 0750 so `other` cannot reach it anyway,
+		// but M4.1 normalises the whole tree closed and a skill file should not
+		// be the one thing left open for a future share to expose.
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), body, 0o640); err != nil {
+			return err
+		}
+		if err := chownTree(dir, u.HomeDir, uid, gid); err != nil {
+			return err
+		}
+		if err := os.Chown(filepath.Join(dir, "SKILL.md"), uid, gid); err != nil {
+			return err
 		}
 	}
 	return nil

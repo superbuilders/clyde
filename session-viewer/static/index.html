@@ -44,27 +44,6 @@
     <div class="p-3 border-b border-base-300 space-y-2">
       <div class="flex items-center gap-2">
         <h1 class="text-lg font-bold flex-1">Sessions</h1>
-        <!-- GitHub connect (Bonnie, PLAN.md §M6). Only rendered where the
-             server has an OAuth App registered, so single-user and local
-             deployments see nothing new. -->
-        <template x-if="github.configured && !github.connected">
-          <a href="/auth/github/start" class="btn btn-xs btn-warning"
-             title="Your agent cannot reach private repositories until you connect GitHub">Connect GitHub</a>
-        </template>
-        <template x-if="github.connected">
-          <div class="relative" x-data="{ ghMenu: false }" @click.stop>
-            <button @click="ghMenu = !ghMenu" class="btn btn-xs btn-ghost opacity-60 hover:opacity-100"
-                    :title="'GitHub: ' + github.login">@<span x-text="github.login"></span></button>
-            <div x-show="ghMenu" @click.outside="ghMenu = false" x-transition
-                 class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-56 text-sm"
-                 style="background-color: var(--color-base-100, #1d232a)">
-              <a href="/auth/github/start"
-                 class="block w-full text-left px-3 py-1.5 hover:bg-base-300/50">Reconnect</a>
-              <button @click="disconnectGitHub(); ghMenu = false"
-                      class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Disconnect</button>
-            </div>
-          </div>
-        </template>
         <button class="btn btn-xs btn-ghost" @click="triggerScan()" title="Rescan">⟳</button>
       </div>
       <!-- Search -->
@@ -720,10 +699,6 @@ function sessionViewer() {
     hiddenProjects: {},
     collapsedProjects: {},
     toast: '',
-    // GitHub connect state, refreshed from the server rather than remembered
-    // locally: the credential file on disk is what makes git work, so the
-    // server reading it is the only answer that cannot be stale.
-    github: { configured: false, connected: false, login: '' },
     _toastTimer: null,
 
     replyText: '', sending: false, sendError: '',
@@ -747,30 +722,8 @@ function sessionViewer() {
       await this.loadSessions();
       await this.loadWorktreeProjects();
       await this.loadSharing();
-      await this.loadGitHub();
       setInterval(() => this.loadSessions(), 15000);
       setInterval(() => this.loadWorktreeProjects(), 60000);
-    },
-
-    // GitHub connect (Bonnie, PLAN.md §M6).
-    async loadGitHub() {
-      try {
-        const r = await fetch('/api/github');
-        if (r.ok) this.github = await r.json();
-      } catch (e) { /* a server without the endpoint simply shows no button */ }
-    },
-
-    async disconnectGitHub() {
-      if (!confirm('Remove the GitHub credential from this machine?\n\n' +
-                   'Your agent will lose access to private repositories. This does not ' +
-                   'revoke the authorization on GitHub — do that at ' +
-                   'github.com/settings/applications.')) return;
-      try {
-        const r = await fetch('/api/github', { method: 'DELETE' });
-        if (!r.ok) { this.showToast('Could not disconnect'); return; }
-        await this.loadGitHub();
-        this.showToast('GitHub disconnected');
-      } catch (e) { this.showToast('Could not disconnect'); }
     },
 
     showToast(msg) {

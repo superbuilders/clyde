@@ -20,6 +20,14 @@ packages:
   # M4 sharing: setfacl/getfacl. Absent from the base AMI, so a fresh box
   # cannot grant a share without it. See PLAN.md §4 (M4).
   - acl
+  # M6: how a user gets GitHub access. Each person runs `gh auth login` once
+  # from an agent session and the resulting token carries their own access —
+  # every repo in every org they belong to, and nothing else. Bonnie stores no
+  # GitHub credential of its own and keeps no list of who may see what, because
+  # GitHub already does both. From Ubuntu's own repos rather than GitHub's apt
+  # source: one less signing key and third-party repo on the box, and nothing
+  # here needs a version newer than 24.04 ships.
+  - gh
   - amazon-cloudwatch-agent
 
 write_files:
@@ -138,11 +146,6 @@ write_files:
         echo "BONNIE_COOKIE_SECURE=true"
         echo "BONNIE_OIDC_CLIENT_SECRET=$(jq -r .BONNIE_OIDC_CLIENT_SECRET <<<"$web")"
         echo "BONNIE_SESSION_KEY=$(jq -r .BONNIE_SESSION_KEY <<<"$web")"
-        # Not the secret's contents, only its name: the web process reads the
-        # GitHub OAuth App registration itself, through the instance role, so
-        # rotating the App needs no reboot and no new cloud-init.
-        echo "BONNIE_GITHUB_SECRET=$GITHUB_SECRET"
-        echo "AWS_REGION=$REGION"
       } >/etc/bonnie/web.env
       chown root:bonnie /etc/bonnie/web.env
       chmod 0640 /etc/bonnie/web.env
@@ -185,29 +188,20 @@ write_files:
       #
       #     The secret is optional — if it is absent the box still boots, git
       #     simply cannot reach private remotes.
-      #
-      #     This installs a credential for the SERVICE account only, and only
-      #     if the secret still carries a long-lived GITHUB_TOKEN. The named
-      #     users get theirs by connecting their own GitHub account in the web
-      #     UI, which writes a token carrying that person's access into their
-      #     own home. A per-user file is the whole point: the service account's
-      #     0600 file is unreadable by the named users, and that is deliberate,
-      #     so it cannot double as theirs.
       if gh=$(aws secretsmanager get-secret-value --secret-id "$GITHUB_SECRET" \
-                --query SecretString --output text --region "$REGION" 2>/dev/null) \
-         && tok=$(jq -re .GITHUB_TOKEN <<<"$gh" 2>/dev/null); then
+                --query SecretString --output text --region "$REGION" 2>/dev/null); then
         umask 077
         printf 'https://%s:%s@github.com\n' \
-          "$(jq -r .GITHUB_USER <<<"$gh")" "$tok" \
+          "$(jq -r .GITHUB_USER <<<"$gh")" "$(jq -r .GITHUB_TOKEN <<<"$gh")" \
           >/srv/bonnie/home/.git-credentials
         chown bonnie:bonnie /srv/bonnie/home/.git-credentials
         chmod 0600 /srv/bonnie/home/.git-credentials
         umask 027
-        unset gh tok
+        unset gh
         sudo -u bonnie -H env HOME=/srv/bonnie/home git config --global credential.helper store
-        echo "git credentials installed for the service account"
+        echo "git credentials installed"
       else
-        echo "note: no GITHUB_TOKEN in $GITHUB_SECRET — service account has no git credential"
+        echo "WARN: no $GITHUB_SECRET — private git remotes will not work"
       fi
 
       sudo -u bonnie -H env HOME=/srv/bonnie/home git config --global user.name "Bonnie"

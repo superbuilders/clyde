@@ -38,6 +38,18 @@ echo "== building linux/amd64 =="
 ( cd session-viewer && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$DIST/bonnie" . )
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$DIST/clyde" .
 
+# Agent skills travel with the binary. provision copies them into each user's
+# ~/.agents/skills, which is the only place skill discovery looks, so a release
+# that forgets them leaves every user unable to log in to GitHub (PLAN.md §M6).
+echo "== bundling skills =="
+cp -R "$HERE/deploy/skills" "$DIST/skills"
+# A skill with no SKILL.md is invisible to discovery and silently does nothing,
+# which is the kind of failure that surfaces as "the agent doesn't know how".
+for d in "$DIST"/skills/*/; do
+	[ -f "$d/SKILL.md" ] || { echo "ERROR: $d has no SKILL.md" >&2; exit 1; }
+done
+ls "$DIST/skills"
+
 file "$DIST/bonnie" "$DIST/clyde" 2>/dev/null || true
 ls -la "$DIST"
 
@@ -45,7 +57,7 @@ echo "== packaging =="
 TAR="$HERE/dist/$VERSION.tar.gz"
 # COPYFILE_DISABLE stops macOS bsdtar from emitting AppleDouble "._" resource
 # forks, which otherwise land in /opt/bonnie/current as 501:staff junk.
-COPYFILE_DISABLE=1 tar -czf "$TAR" -C "$DIST" bonnie clyde
+COPYFILE_DISABLE=1 tar -czf "$TAR" -C "$DIST" bonnie clyde skills
 # Fail loudly rather than shipping them silently.
 if tar -tzf "$TAR" | grep -q '\._'; then
 	echo "ERROR: release tarball contains AppleDouble files" >&2

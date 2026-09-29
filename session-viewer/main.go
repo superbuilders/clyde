@@ -2129,20 +2129,10 @@ func main() {
 		syscall.Umask(0o027)
 	}
 
-	authCfg, err = auth.Build(context.Background())
+	authCfg, err := auth.Build(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "auth configuration error: %v\n", err)
 		os.Exit(2)
-	}
-
-	// GitHub connect is optional: a box with no OAuth App registered still
-	// serves, and the Connect button simply does not appear. A *broken* secret
-	// is different from an absent one and is worth saying out loud, since the
-	// symptom otherwise is a button that 503s.
-	ghOAuth, err = loadGitHubOAuth(os.Getenv("BONNIE_GITHUB_SECRET"),
-		firstNonEmpty(os.Getenv("AWS_REGION"), "us-east-1"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "github connect disabled: %v\n", err)
 	}
 
 	initCache()
@@ -2175,13 +2165,6 @@ func main() {
 	api.DELETE("/sessions/:id/messages/:filename", deleteSessionMessage)
 	api.POST("/sessions/mark-all-read", markAllRead)
 	api.POST("/sessions/:id/open-terminal", openInTerminal)
-	// GitHub connect. The start and callback are plain browser navigations
-	// rather than /api calls: they redirect off-site and back, which fetch
-	// cannot follow.
-	e.GET("/auth/github/start", startGitHubConnect)
-	e.GET("/auth/github/callback", finishGitHubConnect)
-	api.GET("/github", getGitHubStatus)
-	api.DELETE("/github", disconnectGitHub)
 	api.GET("/preferences", func(c echo.Context) error {
 		cacheMu.RLock()
 		defer cacheMu.RUnlock()
