@@ -237,6 +237,31 @@ func (a *Config) sign(payload []byte) string {
 		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
+// Sign and Unsign expose the session HMAC to other flows in this binary that
+// need a tamper-evident value round-tripped through the user's browser — the
+// GitHub connect flow's CSRF state, at the time of writing.
+//
+// Exported rather than reimplemented: a second signing scheme would mean a
+// second key to configure and a second chance to get constant-time comparison
+// wrong. Exported rather than handing out SessionKey, so callers cannot invent
+// their own construction over it.
+func (a *Config) Sign(payload []byte) string { return a.sign(payload) }
+
+// Unsign verifies and returns a payload produced by Sign.
+func (a *Config) Unsign(tok string) ([]byte, error) { return a.unsign(tok) }
+
+// SetTempCookie stores a short-lived signed value under the caller's own name,
+// with the same flags the login flow uses — HttpOnly, Lax, and Secure whenever
+// the deployment is not plain-http localhost.
+func (a *Config) SetTempCookie(c echo.Context, name, value string, ttl time.Duration) {
+	a.setCookie(c, name, value, ttl)
+}
+
+// ClearCookie removes a cookie set by SetTempCookie.
+func (a *Config) ClearCookie(c echo.Context, name string) {
+	a.setCookie(c, name, "", 0)
+}
+
 func (a *Config) unsign(tok string) ([]byte, error) {
 	parts := strings.Split(tok, ".")
 	if len(parts) != 2 {

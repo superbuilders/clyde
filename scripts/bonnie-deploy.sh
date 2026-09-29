@@ -59,11 +59,6 @@ aws --profile "$AWS_PROFILE" --region "$REGION" \
 
 UNIT="$HERE/deploy/systemd/bonnie-web.service"
 UNIT_B64="$(base64 <"$UNIT" | tr -d '\n')"
-# M6: the credential refresher ships with the unit, for the same reason the
-# unit ships with the binary — cloud-init's write_files is per-instance and
-# will not re-run, so the repo has to be the source of truth for a running box.
-CREDS_UNIT_B64="$(base64 <"$HERE/deploy/systemd/bonnie-git-credentials.service" | tr -d '\n')"
-CREDS_TIMER_B64="$(base64 <"$HERE/deploy/systemd/bonnie-git-credentials.timer" | tr -d '\n')"
 PROVISION_EMAILS="$(sed -n 's/^provision_emails *= *"\(.*\)"/\1/p' "$TFVARS")"
 GITHUB_SECRET="$(sed -n 's/^github_secret_name *= *"\(.*\)"/\1/p' "$TFVARS")"
 echo "unit     : $UNIT"
@@ -74,8 +69,6 @@ script=$(
 set -eu
 VERSION=$VERSION
 UNIT_B64=$UNIT_B64
-CREDS_UNIT_B64=$CREDS_UNIT_B64
-CREDS_TIMER_B64=$CREDS_TIMER_B64
 PROVISION_EMAILS="$PROVISION_EMAILS"
 BUCKET=$BUCKET
 PREFIX=$PREFIX
@@ -98,9 +91,6 @@ ln -sfn /opt/bonnie/current/clyde /usr/local/bin/clyde
 # leaves a box whose unit and binary at least agree.
 echo "\$UNIT_B64" | base64 -d >/etc/systemd/system/bonnie-web.service
 chmod 0644 /etc/systemd/system/bonnie-web.service
-echo "\$CREDS_UNIT_B64" | base64 -d >/etc/systemd/system/bonnie-git-credentials.service
-echo "\$CREDS_TIMER_B64" | base64 -d >/etc/systemd/system/bonnie-git-credentials.timer
-chmod 0644 /etc/systemd/system/bonnie-git-credentials.service /etc/systemd/system/bonnie-git-credentials.timer
 systemctl daemon-reload
 
 # Unix accounts for the named users. Idempotent, and non-fatal: a box with a
@@ -121,12 +111,16 @@ done
 sudo -u bonnie test -r /srv/bonnie/home/.clyde/config || { echo "agent config unreadable"; exit 1; }
 echo "agent config: ok"
 
-# Credentials, once now and every 45 minutes thereafter. Non-fatal: a box with
-# no GitHub App configured should still roll out, and the subcommand says
-# exactly what is missing.
-systemctl enable --now bonnie-git-credentials.timer >/dev/null 2>&1 || true
-/opt/bonnie/current/bonnie git-credentials --secret "\$GITHUB_SECRET" --region "\$REGION" \\
-  || echo "WARN: git credentials not installed"
+# Any earlier installation-token refresher is gone: credentials are now per
+# user and arrive from the connect flow, not a timer.
+systemctl disable --now bonnie-git-credentials.timer >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/bonnie-git-credentials.service \\
+      /etc/systemd/system/bonnie-git-credentials.timer
+systemctl daemon-reload
+
+# The web process reads the OAuth App registration from this secret.
+grep -q '^BONNIE_GITHUB_SECRET=' /etc/bonnie/web.env 2>/dev/null \\
+  || echo "BONNIE_GITHUB_SECRET=\$GITHUB_SECRET" >>/etc/bonnie/web.env
 
 systemctl restart bonnie-web.service
 sleep 4

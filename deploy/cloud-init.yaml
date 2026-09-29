@@ -138,6 +138,11 @@ write_files:
         echo "BONNIE_COOKIE_SECURE=true"
         echo "BONNIE_OIDC_CLIENT_SECRET=$(jq -r .BONNIE_OIDC_CLIENT_SECRET <<<"$web")"
         echo "BONNIE_SESSION_KEY=$(jq -r .BONNIE_SESSION_KEY <<<"$web")"
+        # Not the secret's contents, only its name: the web process reads the
+        # GitHub OAuth App registration itself, through the instance role, so
+        # rotating the App needs no reboot and no new cloud-init.
+        echo "BONNIE_GITHUB_SECRET=$GITHUB_SECRET"
+        echo "AWS_REGION=$REGION"
       } >/etc/bonnie/web.env
       chown root:bonnie /etc/bonnie/web.env
       chmod 0640 /etc/bonnie/web.env
@@ -183,11 +188,11 @@ write_files:
       #
       #     This installs a credential for the SERVICE account only, and only
       #     if the secret still carries a long-lived GITHUB_TOKEN. The named
-      #     users get theirs from bonnie-git-credentials.timer, which mints a
-      #     short-lived GitHub App installation token and writes it into each
-      #     user's home as that user. A per-user file is the whole point: the
-      #     service account's 0600 file is unreadable by the named users, and
-      #     that is deliberate, so it cannot double as theirs.
+      #     users get theirs by connecting their own GitHub account in the web
+      #     UI, which writes a token carrying that person's access into their
+      #     own home. A per-user file is the whole point: the service account's
+      #     0600 file is unreadable by the named users, and that is deliberate,
+      #     so it cannot double as theirs.
       if gh=$(aws secretsmanager get-secret-value --secret-id "$GITHUB_SECRET" \
                 --query SecretString --output text --region "$REGION" 2>/dev/null) \
          && tok=$(jq -re .GITHUB_TOKEN <<<"$gh" 2>/dev/null); then
