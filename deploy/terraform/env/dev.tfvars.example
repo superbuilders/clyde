@@ -18,7 +18,6 @@ release_version = "REPLACE_WITH_GIT_SHA"
 secret_prefix     = "bonnie-dev"
 web_secret_name   = "bonnie-dev/web"
 agent_secret_name = "bonnie-dev/agent"
-github_secret_name = "bonnie-dev/github"
 
 # Auth (M1). The client secret and session key are NOT here — they are in
 # Secrets Manager under secret_prefix and read at boot.
