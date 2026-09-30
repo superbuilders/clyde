@@ -375,6 +375,8 @@ resource "aws_instance" "web" {
     systemd_unit            = indent(6, file("${path.module}/../systemd/bonnie-web.service"))
     bonnie_install          = indent(6, file("${path.module}/../bonnie-install"))
     sudoers_bonnie_ship     = indent(6, file("${path.module}/../sudoers.d/bonnie-ship"))
+    imds_nft                = indent(6, file("${path.module}/../nftables/bonnie-imds.nft"))
+    imds_guard_unit         = indent(6, file("${path.module}/../systemd/bonnie-imds-guard.service"))
   }))
 
   # Replacing the instance must not replace the data. The data volume is a

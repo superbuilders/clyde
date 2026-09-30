@@ -1,0 +1,18 @@
+[Unit]
+Description=Deny EC2 instance metadata to human users
+Documentation=https://github.com/superbuilders/clyde
+# Before the web service, so no agent can be spawned while the hole is open.
+Before=bonnie-web.service
+After=network-pre.target
+Wants=network-pre.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/bonnie/imds.nft
+# Rules live in the kernel; nothing to undo on stop beyond dropping the table.
+ExecStop=/usr/sbin/nft delete table inet bonnie_imds
+
+[Install]
+WantedBy=multi-user.target

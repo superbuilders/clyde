@@ -1,0 +1,18 @@
+#!/usr/sbin/nft -f
+# Deny the instance role to human users. See docs/imds.md for why.
+#
+# Own table, so flushing it cannot disturb any other ruleset.
+table inet bonnie_imds
+delete table inet bonnie_imds
+
+table inet bonnie_imds {
+	chain output {
+		type filter hook output priority filter; policy accept;
+
+		# uid >= 1000 is a real person. System daemons (ssm-agent and the
+		# web service as root, bonnie as 999) keep their access, so the
+		# box still boots, reports and reads its own secrets.
+		ip daddr 169.254.169.254 meta skuid >= 1000 counter reject with icmp type admin-prohibited
+		ip6 daddr fd00:ec2::254 meta skuid >= 1000 counter reject with icmpv6 type admin-prohibited
+	}
+}

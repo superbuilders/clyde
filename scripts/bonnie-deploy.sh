@@ -64,6 +64,8 @@ UNIT_B64="$(base64 <"$UNIT" | tr -d '\n')"
 # change to them unless it is shipped here.
 INSTALL_B64="$(base64 <"$HERE/deploy/bonnie-install" | tr -d '\n')"
 SUDOERS_B64="$(base64 <"$HERE/deploy/sudoers.d/bonnie-ship" | tr -d '\n')"
+IMDS_NFT_B64="$(base64 <"$HERE/deploy/nftables/bonnie-imds.nft" | tr -d '\n')"
+IMDS_UNIT_B64="$(base64 <"$HERE/deploy/systemd/bonnie-imds-guard.service" | tr -d '\n')"
 PROVISION_EMAILS="$(sed -n 's/^provision_emails *= *"\(.*\)"/\1/p' "$TFVARS")"
 echo "unit     : $UNIT"
 echo "users    : ${PROVISION_EMAILS:-(none)}"
@@ -75,6 +77,8 @@ VERSION=$VERSION
 UNIT_B64=$UNIT_B64
 INSTALL_B64=$INSTALL_B64
 SUDOERS_B64=$SUDOERS_B64
+IMDS_NFT_B64=$IMDS_NFT_B64
+IMDS_UNIT_B64=$IMDS_UNIT_B64
 PROVISION_EMAILS="$PROVISION_EMAILS"
 BUCKET=$BUCKET
 PREFIX=$PREFIX
@@ -119,6 +123,21 @@ else
 fi
 rm -f /tmp/bonnie-ship.sudoers
 getent group bonnie-ship >/dev/null || groupadd --system bonnie-ship
+
+# Deny the instance role to human users (uid >= 1000). Applied before the web
+# service is restarted below, so no agent is spawned while the hole is open.
+mkdir -p /etc/bonnie
+echo "\$IMDS_NFT_B64" | base64 -d >/etc/bonnie/imds.nft
+chmod 0644 /etc/bonnie/imds.nft
+echo "\$IMDS_UNIT_B64" | base64 -d >/etc/systemd/system/bonnie-imds-guard.service
+chmod 0644 /etc/systemd/system/bonnie-imds-guard.service
+systemctl daemon-reload
+if systemctl enable --now bonnie-imds-guard.service 2>&1; then
+  systemctl restart bonnie-imds-guard.service
+  echo "imds guard: \$(systemctl is-active bonnie-imds-guard.service)"
+else
+  echo "WARN: IMDS guard failed to start — users can reach the instance role"
+fi
 
 GO_VERSION=1.24.0
 GO_SHA256=dea9ca38a0b852a74e81c26134671af7c0fbe65d81b0dc1c5bfe22cf7d4c8858

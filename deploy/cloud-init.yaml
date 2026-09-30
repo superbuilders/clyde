@@ -61,6 +61,21 @@ write_files:
     content: |
       ${sudoers_bonnie_ship}
 
+  # Deny the instance role to human users. Without this, any user — or any
+  # agent acting on one's behalf — can read Bonnie's own secrets from IMDS,
+  # which defeats the point of per-user Unix accounts.
+  - path: /etc/bonnie/imds.nft
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${imds_nft}
+
+  - path: /etc/systemd/system/bonnie-imds-guard.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${imds_guard_unit}
+
   # ── boot-time setup, run once by the bonnie-setup unit ──────────────────
   #
   # A script rather than a pile of runcmd lines so it is readable, re-runnable
@@ -259,6 +274,10 @@ write_files:
       getent group bonnie-ship >/dev/null || groupadd --system bonnie-ship
 
       systemctl daemon-reload
+      # Before bonnie-web, so the metadata hole is shut before any agent can
+      # be spawned through it.
+      systemctl enable --now bonnie-imds-guard.service || \
+        echo "WARN: IMDS guard failed — users can reach the instance role"
       systemctl enable --now bonnie-web.service
       echo "== bonnie-setup done =="
 
