@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"session-viewer/internal/principal"
@@ -151,5 +153,58 @@ func TestDiscoverRepoSearchIsMultiUserOnly(t *testing.T) {
 	t.Setenv("HOME", home)
 	if dirs := discoverProjectDirsFor(&principal.Principal{Solo: true, Home: home}); dirs[cloned] {
 		t.Errorf("the repo search fired in solo mode, changing upstream behaviour: %v", dirs)
+	}
+}
+
+// TestProjectInfoReportsHasSessions covers the flag the sidebar depends on.
+//
+// Discovery alone was not enough to make a freshly cloned repo usable: the
+// sidebar groups *sessions*, so a project with none of them renders nowhere
+// even though /api/projects lists it. The client needs to be told which
+// projects those are, and it cannot work it out from an empty session list —
+// a filter can hide every session of a long-used project, and that must not
+// make it look freshly cloned.
+func TestProjectInfoReportsHasSessions(t *testing.T) {
+	home := t.TempDir()
+
+	// A repo that has been worked in.
+	worked := filepath.Join(home, "code", "worked-in")
+	if err := os.MkdirAll(filepath.Join(worked, ".clyde", "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(worked, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A repo that has only been cloned.
+	cloned := filepath.Join(home, "code", "freshly-cloned")
+	if err := os.MkdirAll(filepath.Join(cloned, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		dir  string
+		want bool
+	}{
+		{worked, true},
+		{cloned, false},
+	} {
+		_, err := os.Stat(filepath.Join(tc.dir, ".clyde", "sessions"))
+		got := !os.IsNotExist(err)
+		if got != tc.want {
+			t.Errorf("%s: hasSessions = %v, want %v", filepath.Base(tc.dir), got, tc.want)
+		}
+	}
+
+	// The field must be serialised unconditionally. With omitempty a false
+	// value vanishes from the JSON, the client reads undefined, and
+	// `has_sessions !== false` skips exactly the projects this exists for —
+	// so the bug would look like the fix simply not working.
+	blob, err := json.Marshal(ProjectInfo{Path: cloned, Name: "freshly-cloned"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), `"has_sessions":false`) {
+		t.Errorf("has_sessions:false is missing from the JSON: %s", blob)
 	}
 }

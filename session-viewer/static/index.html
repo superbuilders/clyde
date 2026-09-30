@@ -318,6 +318,29 @@
           </template>
         </div>
       </template>
+      <!-- ── Cloned repos with no sessions yet (Bonnie, PLAN.md §M6) ──
+           A repo the agent has just cloned has nothing in the session stream,
+           so the grouped list above cannot name it. Without this the user is
+           told the clone succeeded and the UI offers no way to open it. -->
+      <template x-if="emptyProjects.length">
+        <div>
+          <div class="px-3 py-1.5 bg-base-300/30 text-xs font-semibold opacity-50 border-b border-base-300">
+            Repositories · no sessions yet
+          </div>
+          <template x-for="p in emptyProjects" :key="p.path">
+            <div class="flex items-center gap-1.5 px-3 py-2 hover:bg-base-300/40 border-b border-base-300/40">
+              <span class="text-xs opacity-40">📁</span>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm truncate" x-text="p.name"></div>
+                <div class="text-xs opacity-40 truncate" x-text="p.branch"></div>
+              </div>
+              <button @click="createSessionForProject(p.path)"
+                      class="btn btn-xs btn-ghost opacity-60 hover:opacity-100"
+                      title="Start a session here">+ New</button>
+            </div>
+          </template>
+        </div>
+      </template>
       <div x-show="visibleSessions.length === 0 && !loading" class="p-6 text-center opacity-50">No sessions found</div>
       <div x-show="loading" class="p-6 text-center"><span class="loading loading-spinner loading-sm"></span></div>
     </div>
@@ -895,6 +918,27 @@ function sessionViewer() {
       return result;
     },
 
+    // Repos with no sessions yet (Bonnie, PLAN.md §M6).
+    //
+    // Rendered as their own short list rather than merged into
+    // groupedSessions. Merging looks tidier but means teaching the upstream
+    // group template to handle a group with no sessions — its menu reads
+    // group.sessions[0].cwd — and editing those lines is precisely what
+    // BONNIE.md A2 forbids. A separate block is additive and cannot regress
+    // the session list.
+    //
+    // Empty in solo: the server only reports has_sessions=false in multi-user
+    // mode, where discovery admits a plain checkout.
+    get emptyProjects() {
+      const q = (this.search || '').toLowerCase();
+      return (this.allProjects || [])
+        .filter(p => p.has_sessions === false)
+        .filter(p => !p.is_worktree_group && !p.parent_name)
+        .filter(p => !this.hiddenProjects[p.name])
+        .filter(p => !q || p.name.toLowerCase().includes(q))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
+
     toggleProjectVisibility(project) {
       this.hiddenProjects[project] = !this.hiddenProjects[project];
       if (!this.hiddenProjects[project]) delete this.hiddenProjects[project];
@@ -1284,11 +1328,16 @@ function sessionViewer() {
     },
 
     _worktreeProjects: null,
+    allProjects: [],
     async loadWorktreeProjects() {
       try {
         const r = await fetch('/api/projects');
         const data = await r.json();
         this._worktreeProjects = (data || []).filter(p => p.is_worktree_group || p.parent_name);
+        // Bonnie (PLAN.md §M6): the full list too. A repo that has been cloned
+        // but never worked in has no sessions, so nothing in the session
+        // stream names it and the sidebar would never show it.
+        this.allProjects = data || [];
       } catch(e) {}
     },
 

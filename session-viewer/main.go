@@ -102,13 +102,26 @@ type MessageFile struct {
 }
 
 type ProjectInfo struct {
-	Path            string          `json:"path"`
-	Name            string          `json:"name"`
-	Branch          string          `json:"branch"`
-	IsWorktreeGroup bool            `json:"is_worktree_group,omitempty"`
-	ParentPath      string          `json:"parent_path,omitempty"`
-	ParentName      string          `json:"parent_name,omitempty"`
-	Worktrees       []WorktreeEntry `json:"worktrees,omitempty"`
+	Path            string `json:"path"`
+	Name            string `json:"name"`
+	Branch          string `json:"branch"`
+	IsWorktreeGroup bool   `json:"is_worktree_group,omitempty"`
+	// HasSessions is false for a project discovered purely because it is a git
+	// checkout — a repo that has been cloned but never worked in (M6).
+	//
+	// The sidebar groups sessions, so a project with none of them renders
+	// nowhere; the flag is what lets the UI list it anyway. Reported rather
+	// than inferred client-side from an empty session list, because the two
+	// are not the same question: a project can have sessions that the current
+	// filter hides, and that must not make it look freshly cloned.
+	//
+	// Note this is only ever false in multi-user mode. Solo discovery still
+	// requires .clyde/sessions to exist, so solo clients see it true
+	// everywhere and their behaviour is unchanged (PLAN.md §8 item 2).
+	HasSessions bool            `json:"has_sessions"`
+	ParentPath  string          `json:"parent_path,omitempty"`
+	ParentName  string          `json:"parent_name,omitempty"`
+	Worktrees   []WorktreeEntry `json:"worktrees,omitempty"`
 }
 
 // sortedKeys returns the keys of a string-keyed set in deterministic order.
@@ -1591,12 +1604,11 @@ func getProjects(c echo.Context) error {
 			}
 			hasSessions = false
 		}
-		_ = hasSessions
 		name := filepath.Base(dir)
 		if dir == home {
 			name = "~"
 		}
-		pi := ProjectInfo{Path: dir, Name: name, Branch: getBranch(dir, bc)}
+		pi := ProjectInfo{Path: dir, Name: name, Branch: getBranch(dir, bc), HasSessions: hasSessions}
 
 		if group, ok := worktreeGroupForDir[dir]; ok {
 			pi.ParentPath = group.ParentDir
