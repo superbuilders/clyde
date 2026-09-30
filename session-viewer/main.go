@@ -1533,6 +1533,31 @@ func triggerScan(c echo.Context) error {
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "scanning"})
 }
 
+// dirHasEntries reports whether a directory contains anything at all.
+//
+// Cheaper than reading the whole directory: one entry is enough to answer the
+// question, and a project with thousands of sessions should not pay to list
+// them just so the sidebar can decide whether to show a "no sessions yet" row.
+func dirHasEntries(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(1)
+	return err == nil && len(names) > 0
+}
+
+// projectHasSessions reports whether a project has any conversations in it.
+//
+// Split out from getProjects so the decision can be tested directly. The
+// distinction it encodes — directory present versus directory non-empty — is
+// the one that made a cloned repo invisible, and it is worth a test that does
+// not need an HTTP request and a Unix principal to run.
+func projectHasSessions(dir string) bool {
+	return dirHasEntries(filepath.Join(dir, ".clyde", "sessions"))
+}
+
 func getProjects(c echo.Context) error {
 	// Resolve the Unix identity this request acts as, so discovery is scoped
 	// to that user's home rather than to the whole filesystem.
@@ -1603,12 +1628,27 @@ func getProjects(c echo.Context) error {
 				continue
 			}
 			hasSessions = false
+		} else if !projectHasSessions(dir) {
+			// The directory exists but is empty. This is the common case for a
+			// repo the agent has merely looked at: starting a session anywhere
+			// creates .clyde/sessions before there is anything in it, so its
+			// existence is not evidence that a conversation ever happened.
+			// Treating it as evidence is what left a cloned repo invisible
+			// even after discovery had correctly found it.
+			hasSessions = false
+		}
+		// Solo reports true unconditionally. The flag only drives a Bonnie-only
+		// section of the sidebar, and upstream's UI must not grow one
+		// (PLAN.md §8 item 2).
+		reportedHasSessions := hasSessions
+		if pr == nil || pr.Solo {
+			reportedHasSessions = true
 		}
 		name := filepath.Base(dir)
 		if dir == home {
 			name = "~"
 		}
-		pi := ProjectInfo{Path: dir, Name: name, Branch: getBranch(dir, bc), HasSessions: hasSessions}
+		pi := ProjectInfo{Path: dir, Name: name, Branch: getBranch(dir, bc), HasSessions: reportedHasSessions}
 
 		if group, ok := worktreeGroupForDir[dir]; ok {
 			pi.ParentPath = group.ParentDir

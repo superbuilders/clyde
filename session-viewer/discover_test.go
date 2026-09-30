@@ -208,3 +208,69 @@ func TestProjectInfoReportsHasSessions(t *testing.T) {
 		t.Errorf("has_sessions:false is missing from the JSON: %s", blob)
 	}
 }
+
+// TestDirHasEntries pins the distinction that broke the first attempt at this.
+//
+// A repo the agent has only looked at still gets a .clyde/sessions directory,
+// because starting a session anywhere creates it before anything is written
+// into it. Treating the directory's existence as proof of a conversation is
+// what left a freshly cloned repo invisible in the sidebar even though
+// discovery had correctly found it and /api/projects listed it.
+func TestDirHasEntries(t *testing.T) {
+	root := t.TempDir()
+
+	empty := filepath.Join(root, "empty")
+	if err := os.MkdirAll(empty, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if dirHasEntries(empty) {
+		t.Error("an empty directory reported as having entries")
+	}
+
+	full := filepath.Join(root, "full")
+	if err := os.MkdirAll(filepath.Join(full, "a-session"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !dirHasEntries(full) {
+		t.Error("a directory containing a session reported as empty")
+	}
+
+	// A path that does not exist is not an error and is not "has entries".
+	if dirHasEntries(filepath.Join(root, "absent")) {
+		t.Error("a missing directory reported as having entries")
+	}
+}
+
+// TestProjectHasSessionsIgnoresAnEmptyDirectory is the regression this whole
+// change exists for: panopticon was cloned, the agent looked at it, and
+// .clyde/sessions appeared with nothing in it. Discovery found the project and
+// the API listed it, but the sidebar had no session to group under and the
+// project reported itself as already worked-in, so it showed up nowhere.
+func TestProjectHasSessionsIgnoresAnEmptyDirectory(t *testing.T) {
+	root := t.TempDir()
+
+	cloned := filepath.Join(root, "panopticon")
+	if err := os.MkdirAll(filepath.Join(cloned, ".clyde", "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if projectHasSessions(cloned) {
+		t.Error("a repo with an empty .clyde/sessions reported as having sessions")
+	}
+
+	worked := filepath.Join(root, "scratch")
+	if err := os.MkdirAll(filepath.Join(worked, ".clyde", "sessions", "2024-01-01_x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !projectHasSessions(worked) {
+		t.Error("a repo with a session reported as having none")
+	}
+
+	// No .clyde at all — the freshly-cloned-and-untouched case.
+	bare := filepath.Join(root, "bare")
+	if err := os.MkdirAll(filepath.Join(bare, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if projectHasSessions(bare) {
+		t.Error("a repo with no .clyde reported as having sessions")
+	}
+}
