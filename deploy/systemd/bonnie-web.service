@@ -113,6 +113,24 @@ ReadWritePaths=/srv/bonnie
 # back permanently broken. RuntimeDirectory makes systemd create (and clean up)
 # /run/bonnie on every start, so there is nothing left to go stale.
 RuntimeDirectory=bonnie
+# ...but NOT torn down on stop, which is what the default would do.
+#
+# Every user's tmux socket lives in /run/bonnie/<user> (TMUX_TMPDIR), and
+# agents deliberately run outside this process's tree so that a restart costs
+# a few refused connections rather than a session. With the default
+# RuntimeDirectoryPreserve=no that guarantee was false: systemd deleted
+# /run/bonnie on stop, unlinking every live socket. The tmux servers kept
+# running — with an agent inside, still spending tokens — permanently
+# unreachable, because nothing reaps a server whose socket is gone.
+#
+# Every deploy restarts this unit, so that fired on each rollout, and it is
+# fatal to self-shipping: restarting from inside a Bonnie session would orphan
+# the very agent that issued the deploy.
+#
+# =yes only suppresses removal on stop. /run is tmpfs, so the directory is
+# still gone after a reboot, which is the staleness RuntimeDirectory was added
+# to fix in the first place.
+RuntimeDirectoryPreserve=yes
 # 0751, not 0750. Each user's tmux socket lives in /run/bonnie/<user>, and the
 # agent — running as that user, not in the bonnie group — must traverse the
 # parent to reach it. At 0750 tmux cannot see its own socket directory and

@@ -59,6 +59,11 @@ aws --profile "$AWS_PROFILE" --region "$REGION" \
 
 UNIT="$HERE/deploy/systemd/bonnie-web.service"
 UNIT_B64="$(base64 <"$UNIT" | tr -d '\n')"
+# Self-shipping assets. Same reason as the unit: these live in cloud-init's
+# write_files, which is a per-INSTANCE module, so an existing box never sees a
+# change to them unless it is shipped here.
+INSTALL_B64="$(base64 <"$HERE/deploy/bonnie-install" | tr -d '\n')"
+SUDOERS_B64="$(base64 <"$HERE/deploy/sudoers.d/bonnie-ship" | tr -d '\n')"
 PROVISION_EMAILS="$(sed -n 's/^provision_emails *= *"\(.*\)"/\1/p' "$TFVARS")"
 echo "unit     : $UNIT"
 echo "users    : ${PROVISION_EMAILS:-(none)}"
@@ -68,6 +73,8 @@ script=$(
 set -eu
 VERSION=$VERSION
 UNIT_B64=$UNIT_B64
+INSTALL_B64=$INSTALL_B64
+SUDOERS_B64=$SUDOERS_B64
 PROVISION_EMAILS="$PROVISION_EMAILS"
 BUCKET=$BUCKET
 PREFIX=$PREFIX
@@ -95,6 +102,40 @@ ln -sfn /opt/bonnie/current/clyde /usr/local/bin/clyde
 echo "$UNIT_B64" | base64 -d >/etc/systemd/system/bonnie-web.service
 chmod 0644 /etc/systemd/system/bonnie-web.service
 systemctl daemon-reload
+
+# Self-shipping: the installer, the sudoers rule, the group and the toolchain.
+echo "\$INSTALL_B64" | base64 -d >/usr/local/sbin/bonnie-install
+chown root:root /usr/local/sbin/bonnie-install
+chmod 0755 /usr/local/sbin/bonnie-install
+
+# sudoers is validated before it is installed, never after. A malformed
+# drop-in makes sudo refuse to run at all, and there is no SSH to fix it with.
+echo "\$SUDOERS_B64" | base64 -d >/tmp/bonnie-ship.sudoers
+if visudo -cf /tmp/bonnie-ship.sudoers >/dev/null; then
+  install -o root -g root -m 0440 /tmp/bonnie-ship.sudoers /etc/sudoers.d/bonnie-ship
+  echo "sudoers: installed"
+else
+  echo "ERROR: refusing to install an invalid sudoers drop-in"; exit 1
+fi
+rm -f /tmp/bonnie-ship.sudoers
+getent group bonnie-ship >/dev/null || groupadd --system bonnie-ship
+
+GO_VERSION=1.24.0
+GO_SHA256=dea9ca38a0b852a74e81c26134671af7c0fbe65d81b0dc1c5bfe22cf7d4c8858
+if [ ! -x /usr/local/go/bin/go ]; then
+  t=\$(mktemp -d)
+  if curl -fsSL -o "\$t/go.tgz" "https://go.dev/dl/go\$GO_VERSION.linux-amd64.tar.gz" &&
+     echo "\$GO_SHA256  \$t/go.tgz" | sha256sum -c - >/dev/null; then
+    rm -rf /usr/local/go
+    tar -C /usr/local -xzf "\$t/go.tgz"
+  else
+    echo "WARN: go download or checksum failed; the box cannot self-ship"
+  fi
+  rm -rf "\$t"
+fi
+printf 'export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin\n' >/etc/profile.d/go.sh
+chmod 0644 /etc/profile.d/go.sh
+/usr/local/go/bin/go version 2>/dev/null || echo "WARN: no go toolchain"
 
 # The GitHub CLI. In cloud-init's package list for new boxes, installed here
 # for ones that predate it — this is how a user authenticates to GitHub at all

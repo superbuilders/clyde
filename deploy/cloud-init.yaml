@@ -45,6 +45,22 @@ write_files:
     content: |
       ${systemd_unit}
 
+  # The privileged half of self-shipping. Root-owned 0755 so a member of
+  # bonnie-ship can run it through sudo but cannot rewrite it.
+  - path: /usr/local/sbin/bonnie-install
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${bonnie_install}
+
+  # 0440 root:root, which sudo requires — it ignores a group- or
+  # world-writable drop-in rather than failing loudly.
+  - path: /etc/sudoers.d/bonnie-ship
+    permissions: "0440"
+    owner: root:root
+    content: |
+      ${sudoers_bonnie_ship}
+
   # ── boot-time setup, run once by the bonnie-setup unit ──────────────────
   #
   # A script rather than a pile of runcmd lines so it is readable, re-runnable
@@ -205,6 +221,42 @@ write_files:
         -a fetch-config -m ec2 -s \
         -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json || \
         echo "WARN: cloudwatch agent config failed"
+
+      # 5.9 Go toolchain, so the box can build its own releases (self-shipping).
+      #
+      # Not from apt: 24.04 ships Go 1.22 and both go.mod files require 1.24.0,
+      # so the distro package cannot build this repo at all. Pinned to the same
+      # version the laptop uses, so a binary built here and one built there come
+      # out of the same compiler; bump this one variable to move both.
+      #
+      # The checksum is not decoration. This toolchain produces the binary that
+      # later runs as root, so an unverified download would be the weakest link
+      # in the whole chain.
+      GO_VERSION=1.24.0
+      GO_SHA256=dea9ca38a0b852a74e81c26134671af7c0fbe65d81b0dc1c5bfe22cf7d4c8858
+      if [ ! -x /usr/local/go/bin/go ]; then
+        echo "installing go $GO_VERSION"
+        t=$(mktemp -d)
+        if curl -fsSL -o "$t/go.tgz" \
+             "https://go.dev/dl/go$GO_VERSION.linux-amd64.tar.gz" &&
+           echo "$GO_SHA256  $t/go.tgz" | sha256sum -c - >/dev/null; then
+          rm -rf /usr/local/go
+          tar -C /usr/local -xzf "$t/go.tgz"
+          echo "go installed: $(/usr/local/go/bin/go version)"
+        else
+          echo "WARN: go download or checksum failed; the box cannot self-ship"
+        fi
+        rm -rf "$t"
+      fi
+      # On PATH for every login shell, so an agent session just finds it.
+      printf 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin\n' \
+        >/etc/profile.d/go.sh
+      chmod 0644 /etc/profile.d/go.sh
+
+      # 5.10 The self-shipping group. Empty by default: an account does not
+      # imply the right to ship, and membership is granted deliberately with
+      # `usermod -aG bonnie-ship <user>`.
+      getent group bonnie-ship >/dev/null || groupadd --system bonnie-ship
 
       systemctl daemon-reload
       systemctl enable --now bonnie-web.service

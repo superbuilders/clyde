@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Install an already-built Bonnie release from the box itself.
+#
+# This is the privileged half of self-shipping. A user builds unprivileged in
+# their own home; this script — and only this script — is allowed to put the
+# result under /opt and restart the service. It is reachable through a single
+# NOPASSWD sudoers rule granted to the bonnie-ship group.
+#
+# Root deliberately never builds. It copies three already-built artefacts out
+# of a user's tree and nothing else: no `go build`, no `make`, no script from
+# the build directory is ever executed. That keeps the trusted action small
+# enough to read in one sitting.
+#
+# Usage:
+#   sudo bonnie-install <git-sha> <build-dir>
+#
+# <build-dir> must contain exactly what the release tarball contains:
+#   bonnie, clyde, skills/
+#
+# Rollback is the same command with an older sha and its still-present
+# directory, or directly:
+#   sudo bonnie-install --activate <old-sha>
+set -euo pipefail
+
+say() { printf '%s\n' "$*"; }
+die() {
+	printf 'bonnie-install: %s\n' "$*" >&2
+	exit 1
+}
+
+VERSIONS=/opt/bonnie/versions
+CURRENT=/opt/bonnie/current
+
+activate() {
+	sha="$1"
+	target="$VERSIONS/$sha"
+	[ -d "$target" ] || die "no such version: $target"
+	[ -x "$target/bonnie" ] || die "$target/bonnie missing or not executable"
+
+	# Symlink flip is the switch. ln -sfn replaces atomically via rename(2),
+	# so a concurrent exec sees either the old tree or the new one, never a
+	# half-installed one.
+	ln -sfn "$target" "$CURRENT"
+	ln -sfn "$CURRENT/clyde" /usr/local/bin/clyde
+	say "current -> $sha"
+
+	# Skills are copied into every home by provision, so a release that
+	# changes a skill only takes effect once this runs.
+	# users.map is "email username" per line, # for comments.
+	emails="$(awk '!/^[[:space:]]*#/ && NF==2 {print $1}' /etc/bonnie/users.map 2>/dev/null || true)"
+	for e in $emails; do
+		BONNIE_SERVICE_HOME=/srv/bonnie/home "$CURRENT/bonnie" provision --email "$e" \
+			>/dev/null 2>&1 || say "WARN: provision $e failed"
+	done
+
+	# The agent config must be readable or sessions produce no output. Checked
+	# by reading the file, never by running clyde: clyde parses no flags, so
+	# `clyde --version` is taken as a PROMPT and spends a model call.
+	sudo -u bonnie test -r /srv/bonnie/home/.clyde/config ||
+		die "agent config unreadable — refusing to restart"
+
+	systemctl restart bonnie-web.service
+	sleep 4
+	systemctl is-active bonnie-web.service >/dev/null ||
+		die "bonnie-web did not come back; roll back with: bonnie-install --activate <old-sha>"
+	code="$(curl -sf -o /dev/null -w '%{http_code}' localhost:8080/healthz || true)"
+	[ "$code" = "200" ] || die "healthz returned ${code:-nothing}"
+	say "healthz=200"
+}
+
+case "${1:-}" in
+--activate)
+	[ $# -eq 2 ] || die "usage: bonnie-install --activate <sha>"
+	activate "$2"
+	exit 0
+	;;
+"") die "usage: bonnie-install <git-sha> <build-dir>  |  --activate <sha>" ;;
+esac
+
+[ $# -eq 2 ] || die "usage: bonnie-install <git-sha> <build-dir>"
+SHA="$1"
+BUILD="$2"
+
+# A sha names the directory, so it must not be able to escape it.
+case "$SHA" in
+*[!0-9a-fA-F]* | "") die "sha must be hex: $SHA" ;;
+esac
+[ "${#SHA}" -ge 7 ] || die "sha too short: $SHA"
+
+[ -d "$BUILD" ] || die "no such build dir: $BUILD"
+for f in bonnie clyde; do
+	[ -f "$BUILD/$f" ] || die "$BUILD/$f missing — did the build run?"
+done
+[ -d "$BUILD/skills" ] || die "$BUILD/skills missing"
+
+# Refuse artefacts built for the wrong target. A macOS binary copied here
+# would install cleanly and then fail to exec, taking the service down.
+for f in bonnie clyde; do
+	case "$(file -b "$BUILD/$f" 2>/dev/null)" in
+	*ELF*x86-64*) ;;
+	*) die "$BUILD/$f is not a linux/amd64 ELF binary" ;;
+	esac
+done
+
+TARGET="$VERSIONS/$SHA"
+say "installing $SHA from $BUILD"
+rm -rf "$TARGET"
+mkdir -p "$TARGET"
+cp "$BUILD/bonnie" "$BUILD/clyde" "$TARGET/"
+cp -R "$BUILD/skills" "$TARGET/skills"
+
+# Owned by root, not by the building user: everything under /opt is root's,
+# and provision reads the skills tree on behalf of every user.
+chown -R root:root "$TARGET"
+chmod 0755 "$TARGET/bonnie" "$TARGET/clyde"
+find "$TARGET/skills" -type d -exec chmod 0755 {} +
+find "$TARGET/skills" -type f -exec chmod 0644 {} +
+
+activate "$SHA"

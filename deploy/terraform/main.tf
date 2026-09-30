@@ -373,6 +373,8 @@ resource "aws_instance" "web" {
     provision_emails        = var.provision_emails
     cloudwatch_agent_config = local.cloudwatch_agent_config
     systemd_unit            = indent(6, file("${path.module}/../systemd/bonnie-web.service"))
+    bonnie_install          = indent(6, file("${path.module}/../bonnie-install"))
+    sudoers_bonnie_ship     = indent(6, file("${path.module}/../sudoers.d/bonnie-ship"))
   }))
 
   # Replacing the instance must not replace the data. The data volume is a

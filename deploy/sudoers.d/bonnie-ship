@@ -1,0 +1,17 @@
+# Self-shipping. The only privilege any Bonnie user has.
+#
+# Members of bonnie-ship may run one root command, with no password. No
+# argument is trusted beyond what bonnie-install itself validates. Everything
+# else — the build, the tests, the git checkout — happens unprivileged in the
+# user's own home, and root never builds.
+#
+# Group membership, not blanket access: having a Bonnie account does not imply
+# the ability to ship. Grant with `usermod -aG bonnie-ship <user>`.
+#
+# NOPASSWD is required, not merely convenient: these accounts authenticate
+# through OIDC and have no Unix password to type.
+#
+# bonnie-install is root-owned 0755 inside a root-owned directory, so a member
+# cannot rewrite the thing they are permitted to run. sudo does not pass the
+# arguments through a shell, so the wildcard is not a shell escape.
+%bonnie-ship ALL=(root) NOPASSWD: /usr/local/sbin/bonnie-install
