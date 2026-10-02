@@ -292,10 +292,35 @@ func cacheKey(cwd, id string) string { return cwd + "::" + id }
 
 // ── Cache management ──
 
+// serviceStateDir is where the service keeps state it owns in multi-user
+// mode: root-owned, 0700, outside every user's tree.
+const serviceStateDir = "/var/lib/bonnie"
+
 func initCache() {
-	home, _ := os.UserHomeDir()
-	cacheDir := filepath.Join(home, ".clyde")
-	os.MkdirAll(cacheDir, 0755)
+	// Where the viewer's own cache lives.
+	//
+	// Solo mode keeps ~/.clyde/viewer-cache.json, unchanged from upstream.
+	//
+	// Multi-user cannot. The service runs as root, its HOME is the bonnie
+	// service account's 0750 home, and it holds no CAP_DAC_OVERRIDE — so
+	// os.WriteFile there returns EACCES on every save. Both errors were
+	// discarded, so the cache silently never persisted and every restart
+	// rescanned from nothing. It also does not belong in a user-ish home: it
+	// is the service's state, covering every user's sessions, and no user
+	// should be able to read or forge it.
+	//
+	// /var/lib/bonnie is root-owned and 0700: state the service owns, that
+	// outlives a restart, that nobody else can touch.
+	cacheDir := ""
+	if principals != nil && !principals.IsSolo() {
+		cacheDir = serviceStateDir
+	} else {
+		home, _ := os.UserHomeDir()
+		cacheDir = filepath.Join(home, ".clyde")
+	}
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  cache directory %s: %v (sessions will rescan on every restart)\n", cacheDir, err)
+	}
 	cachePath = filepath.Join(cacheDir, "viewer-cache.json")
 
 	data, err := os.ReadFile(cachePath)
@@ -345,8 +370,24 @@ func saveCache() {
 	if err != nil {
 		return
 	}
-	os.WriteFile(path, data, 0644)
+	// Report, but only on change. This previously discarded the error, which
+	// is how a cache that never once persisted went unnoticed; logging every
+	// failure would spam, because saveCache runs after each scan.
+	err = os.WriteFile(path, data, 0o600)
+	cacheMu.Lock()
+	if (err == nil) != (lastSaveErr == nil) || (err != nil && lastSaveErr != nil && err.Error() != lastSaveErr.Error()) {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  could not save cache to %s: %v\n", path, err)
+		} else {
+			fmt.Printf("💾 cache saved to %s\n", path)
+		}
+		lastSaveErr = err
+	}
+	cacheMu.Unlock()
 }
+
+// lastSaveErr deduplicates saveCache's logging; guarded by cacheMu.
+var lastSaveErr error
 
 // ── Tmux helpers ──
 
@@ -1687,6 +1728,19 @@ func createWorktree(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "parent_path and branch_name are required"})
 	}
 
+	// Creating a worktree writes into the parent project, so it needs
+	// ownership. There was no check here at all: the operation only failed
+	// because the service cannot write into a user's tree, which is the
+	// kernel covering for missing application-code authorization. Running it
+	// as the user below removes that accident, so the check has to be real.
+	pr, err := principalFor(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
+	if !pr.Owns(body.ParentPath) {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "not your project"})
+	}
+
 	// Validate branch name: no spaces, no .., no ~, no ^, no :, no backslash, no control chars
 	branchInvalid := strings.ContainsAny(body.BranchName, " \t\n~^:\\*?[") || strings.Contains(body.BranchName, "..")
 	if branchInvalid {
@@ -1722,7 +1776,9 @@ func createWorktree(c echo.Context) error {
 
 	// Create the worktree
 	worktreePath := filepath.Join(body.ParentPath, dirName)
-	cmd := exec.Command("git", "-C", gitDir, "worktree", "add", "-b", body.BranchName, worktreePath)
+	// As the user: git writes the worktree directory, and anything the
+	// service created would be root-owned and unusable by the agent.
+	cmd := pr.Command("git", "-C", gitDir, "worktree", "add", "-b", body.BranchName, worktreePath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		errMsg := strings.TrimSpace(string(output))
@@ -1732,8 +1788,14 @@ func createWorktree(c echo.Context) error {
 		return c.JSON(http.StatusConflict, map[string]string{"error": errMsg})
 	}
 
-	// Create .clyde/sessions/ so the viewer discovers it
-	os.MkdirAll(filepath.Join(worktreePath, ".clyde", "sessions"), 0755)
+	// Create .clyde/sessions/ so the viewer discovers it. As the user, and
+	// not silently: without this directory the worktree never appears in the
+	// sidebar, so a discarded error here looks like "create did nothing".
+	if err := pr.MkdirAs(filepath.Join(worktreePath, ".clyde", "sessions")); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "worktree created but not registered: " + err.Error(),
+		})
+	}
 
 	// Trigger rescan
 	go backgroundScan()
@@ -1983,6 +2045,19 @@ func deleteWorktreeHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "worktree_path and parent_path required"})
 	}
 
+	// Same missing-authorization problem as create, with more at stake:
+	// this deletes a directory and moves sessions between projects.
+	pr, err := principalFor(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
+	// Both ends: the worktree being destroyed and the project receiving its
+	// sessions. Checking only one would let a user move their sessions into
+	// someone else's tree, or destroy a worktree by naming their own parent.
+	if !pr.Owns(body.WorktreePath) || !pr.Owns(body.ParentPath) {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "not your worktree"})
+	}
+
 	// Detect the worktree group
 	group := detectWorktreeGroup(body.WorktreePath)
 	if group == nil {
@@ -2015,19 +2090,29 @@ func deleteWorktreeHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "no target worktree to move sessions to"})
 	}
 
+	// primaryDir is picked by the server from the worktree group rather than
+	// supplied by the caller, so it has not been through the check above.
+	if !pr.Owns(primaryDir) {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "not your worktree"})
+	}
+
 	// Move .clyde/sessions from worktree to primary
 	srcSessions := filepath.Join(body.WorktreePath, ".clyde", "sessions")
 	dstSessions := filepath.Join(primaryDir, ".clyde", "sessions")
 	movedCount := 0
 	if entries, err := os.ReadDir(srcSessions); err == nil {
-		os.MkdirAll(dstSessions, 0755)
+		if err := pr.MkdirAs(dstSessions); err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "cannot prepare destination: " + err.Error(),
+			})
+		}
 		for _, e := range entries {
 			if !e.IsDir() {
 				continue
 			}
 			src := filepath.Join(srcSessions, e.Name())
 			dst := filepath.Join(dstSessions, e.Name())
-			if err := os.Rename(src, dst); err == nil {
+			if err := pr.RenameAs(src, dst); err == nil {
 				movedCount++
 				cacheMu.Lock()
 				oldKey := cacheKey(body.WorktreePath, e.Name())
@@ -2044,11 +2129,11 @@ func deleteWorktreeHandler(c echo.Context) error {
 	}
 
 	// Remove the git worktree
-	cmd := exec.Command("git", "-C", primaryDir, "worktree", "remove", body.WorktreePath)
+	cmd := pr.Command("git", "-C", primaryDir, "worktree", "remove", body.WorktreePath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// Try force remove
-		cmd = exec.Command("git", "-C", primaryDir, "worktree", "remove", "--force", body.WorktreePath)
+		cmd = pr.Command("git", "-C", primaryDir, "worktree", "remove", "--force", body.WorktreePath)
 		output, err = cmd.CombinedOutput()
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{

@@ -147,3 +147,87 @@ func TestWriteHelpersRejectSiblingPrefix(t *testing.T) {
 		t.Fatal("RemoveAs accepted a sibling-prefix path")
 	}
 }
+
+// RenameAs is the worktree-deletion path: sessions are moved from a worktree
+// being destroyed into the surviving one. Both ends matter, so both are
+// asserted separately — a guard on only one end still passes a test that
+// merely checks "some error happened".
+
+func TestRenameAsSoloMovesTheFile(t *testing.T) {
+	dir := t.TempDir()
+	p := &Principal{Solo: true, Home: dir}
+	src := filepath.Join(dir, "from.md")
+	dst := filepath.Join(dir, "to.md")
+	if err := os.WriteFile(src, []byte("session"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RenameAs(src, dst); err != nil {
+		t.Fatalf("RenameAs: %v", err)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatalf("source still present, want it moved")
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("reading destination: %v", err)
+	}
+	if string(got) != "session" {
+		t.Fatalf("content = %q, want %q", got, "session")
+	}
+}
+
+func TestRenameAsRefusesSourceOutsideHome(t *testing.T) {
+	root := t.TempDir()
+	alice := filepath.Join(root, "home", "alice")
+	bob := filepath.Join(root, "home", "bob")
+	for _, d := range []string{alice, bob} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	victim := filepath.Join(bob, "secret.md")
+	if err := os.WriteFile(victim, []byte("bob's"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Principal{Username: "alice", Home: alice, UID: 4001, GID: 4001}
+	err := p.RenameAs(victim, filepath.Join(alice, "stolen.md"))
+	if err == nil {
+		t.Fatal("want a refusal moving out of bob's home, got nil")
+	}
+	// Assert on the reason. setpriv is absent on the dev machine, so any
+	// unguarded call also errors; only the refusal text proves the guard ran.
+	if !strings.Contains(err.Error(), "refusing to move") {
+		t.Fatalf("want a refusal, got %v", err)
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Fatalf("bob's file should be untouched: %v", err)
+	}
+}
+
+func TestRenameAsRefusesDestinationOutsideHome(t *testing.T) {
+	root := t.TempDir()
+	alice := filepath.Join(root, "home", "alice")
+	bob := filepath.Join(root, "home", "bob")
+	for _, d := range []string{alice, bob} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := filepath.Join(alice, "mine.md")
+	if err := os.WriteFile(src, []byte("alice's"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Principal{Username: "alice", Home: alice, UID: 4001, GID: 4001}
+	err := p.RenameAs(src, filepath.Join(bob, "planted.md"))
+	if err == nil {
+		t.Fatal("want a refusal moving into bob's home, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to move into") {
+		t.Fatalf("want a destination refusal, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bob, "planted.md")); !os.IsNotExist(err) {
+		t.Fatal("file landed in bob's home")
+	}
+}

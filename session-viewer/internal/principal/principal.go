@@ -413,6 +413,33 @@ func (p *Principal) RemoveAs(path string) error {
 	return nil
 }
 
+// RenameAs moves old to new as the principal.
+//
+// Both paths must be inside the principal's home. A rename is a write to two
+// directories, so the service cannot do it for the same reason it cannot
+// create or remove.
+func (p *Principal) RenameAs(oldPath, newPath string) error {
+	if p == nil || p.Solo {
+		return os.Rename(oldPath, newPath)
+	}
+	// Both ends are checked. Checking only the source would let a caller move
+	// a user's session into someone else's tree, and checking only the
+	// destination would let them move someone else's in.
+	if !p.Owns(oldPath) {
+		return fmt.Errorf("refusing to move %q outside %s's home", oldPath, p.Username)
+	}
+	if !p.Owns(newPath) {
+		return fmt.Errorf("refusing to move into %q outside %s's home", newPath, p.Username)
+	}
+	// -T so a destination that already exists is an error rather than a move
+	// *into* it, which would silently nest one session inside another.
+	cmd := p.Command("mv", "-n", "-T", "--", oldPath, newPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mv %s %s as %s: %v: %s", oldPath, newPath, p.Username, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Owns reports whether a principal may see a filesystem path.
 //
 // This is the application-code half of the authorization story (PLAN.md §1):
