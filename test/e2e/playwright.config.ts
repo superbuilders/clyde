@@ -51,6 +51,16 @@ export default defineConfig({
       use: { storageState: "state.json" },
     },
     {
+      // Writes into a user's tree from the UI: upload and message deletion.
+      // Both worked solo and failed multi-user, so only a run against the
+      // deployed box can tell you they are fixed. Needs AWS credentials, to
+      // check ownership of what landed on disk.
+      name: "writes",
+      testMatch: /writes\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: "state.json" },
+    },
+    {
       // M4 sharing. Separate for the same reason as isolation, and because it
       // drives privileged grants over SSM: running it needs AWS credentials,
       // which the other projects do not.

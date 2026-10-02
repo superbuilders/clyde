@@ -16,6 +16,7 @@ package principal
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -352,6 +353,62 @@ func (p *Principal) MkdirAs(dir string) error {
 	cmd := p.Command("mkdir", "-p", "-m", "0750", dir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("mkdir -p %s as %s: %v: %s", dir, p.Username, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// WriteFrom writes src to path as the principal, creating or truncating it.
+//
+// Same reason as MkdirAs, and the same failure without it: the service has no
+// CAP_DAC_OVERRIDE, so os.Create inside a user's 0750 tree returns EACCES. A
+// file it did manage to create would be owned by root, which the agent could
+// then not rewrite — so even a successful privileged write would be a bug.
+//
+// `tee` rather than a syscall, because a credential is a property of a child
+// process: the write itself has to happen over there. The redirection is the
+// security boundary, not a detail — the child holds only the user's own
+// authority, so a path that resolves somewhere unexpected (a symlink planted
+// in their own tree) can still only reach what that user could already reach.
+func (p *Principal) WriteFrom(path string, src io.Reader) error {
+	if p == nil || p.Solo {
+		dst, err := os.Create(path)
+		if err != nil {
+			return err
+		}
+		defer dst.Close()
+		_, err = io.Copy(dst, src)
+		return err
+	}
+	if !p.Owns(path) {
+		return fmt.Errorf("refusing to write %q outside %s's home", path, p.Username)
+	}
+	// `--` so a filename that begins with a dash is a path, not a flag.
+	cmd := p.Command("tee", "--", path)
+	cmd.Stdin = src
+	cmd.Stdout = io.Discard
+	var errb strings.Builder
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("write %s as %s: %v: %s", path, p.Username, err, strings.TrimSpace(errb.String()))
+	}
+	return nil
+}
+
+// RemoveAs deletes path as the principal.
+//
+// Removing a file is a write to its *directory*, so this fails for exactly the
+// same reason a create does: the service cannot modify a user-owned 0750
+// directory, and should not be able to.
+func (p *Principal) RemoveAs(path string) error {
+	if p == nil || p.Solo {
+		return os.Remove(path)
+	}
+	if !p.Owns(path) {
+		return fmt.Errorf("refusing to remove %q outside %s's home", path, p.Username)
+	}
+	cmd := p.Command("rm", "-f", "--", path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("rm %s as %s: %v: %s", path, p.Username, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

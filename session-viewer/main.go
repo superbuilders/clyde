@@ -8,7 +8,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -1754,9 +1753,11 @@ func uploadFile(c echo.Context) error {
 	}
 	// Upload writes into the project, so it needs ownership. Without this an
 	// authenticated user could drop a file anywhere another user's tree.
-	if pr, err := principalFor(c); err != nil {
+	pr, err := principalFor(c)
+	if err != nil {
 		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
-	} else if !pr.Owns(cwd) {
+	}
+	if !pr.Owns(cwd) {
 		return c.JSON(http.StatusForbidden, map[string]string{"error": "not your project"})
 	}
 	file, err := c.FormFile("file")
@@ -1788,13 +1789,11 @@ func uploadFile(c echo.Context) error {
 		}
 	}
 
-	dst, err := os.Create(dstPath)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to create file: " + err.Error()})
-	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, src); err != nil {
+	// Written by a child running as the user, not by the service. The service
+	// has no CAP_DAC_OVERRIDE, so os.Create here fails with EACCES — and a
+	// root-owned file in the user's project would be useless to the agent
+	// anyway, which is the half that has to read it back.
+	if err := pr.WriteFrom(dstPath, src); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to write file: " + err.Error()})
 	}
 
@@ -1914,7 +1913,9 @@ func deleteSessionMessage(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "message not found"})
 	}
 
-	if err := os.Remove(filePath); err != nil {
+	// Removed by a child running as the user: deleting a file is a write to
+	// its directory, which the service cannot do without CAP_DAC_OVERRIDE.
+	if err := pr.RemoveAs(filePath); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to delete: " + err.Error()})
 	}
 
