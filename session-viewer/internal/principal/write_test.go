@@ -231,3 +231,28 @@ func TestRenameAsRefusesDestinationOutsideHome(t *testing.T) {
 		t.Fatal("file landed in bob's home")
 	}
 }
+
+// OwnerOf underpins running git as the repo's owner. The interesting case is
+// the refusal: a root-owned path must not yield a principal, or the service
+// would end up acting as root on a tree it merely happens to own.
+
+func TestOwnerOfRefusesSystemOwnedPaths(t *testing.T) {
+	// /etc is root-owned on every platform this runs on, including macOS.
+	p, err := OwnerOf("/etc")
+	if err == nil {
+		t.Fatalf("want a refusal for a root-owned path, got principal %+v", p)
+	}
+	if !strings.Contains(err.Error(), "refusing to act as system account") {
+		t.Fatalf("want the system-account refusal, got %v", err)
+	}
+}
+
+func TestOwnerOfReportsMissingPaths(t *testing.T) {
+	_, err := OwnerOf(filepath.Join(t.TempDir(), "nope"))
+	if err == nil {
+		t.Fatal("want an error for a missing path")
+	}
+	if !strings.Contains(err.Error(), "stat") {
+		t.Fatalf("want a stat error, got %v", err)
+	}
+}

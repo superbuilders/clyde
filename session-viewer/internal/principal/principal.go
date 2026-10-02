@@ -491,3 +491,38 @@ func (m *UserMap) ByEmail() map[string]string {
 	}
 	return out
 }
+
+// OwnerOf resolves the principal that owns a filesystem path.
+//
+// git is the reason this exists. Its safe.directory check is based on
+// ownership, not permissions, so git refuses to operate on a user-owned
+// repository even when run as root with CAP_DAC_READ_SEARCH:
+//
+//	fatal: detected dubious ownership in repository at '/srv/bonnie/users/...'
+//
+// That broke every read-only git helper in multi-user mode — worktree
+// detection, branch lookup — which made the worktree UI silently degrade to
+// "not part of a worktree group". The alternative, marking every user's repo
+// safe.directory for root, would hand root's git arbitrary user-controlled
+// hooks to execute. Running git as the owner is both the smaller privilege
+// and the honest description of whose repository it is.
+//
+// Deriving the identity from the path rather than from the request lets the
+// background scanner — which has no request context — use it too.
+func OwnerOf(path string) (*Principal, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat %q: %w", path, err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, fmt.Errorf("stat %q: no unix owner information", path)
+	}
+	u, err := user.LookupId(strconv.FormatUint(uint64(st.Uid), 10))
+	if err != nil {
+		return nil, fmt.Errorf("owner of %q (uid %d): %w", path, st.Uid, err)
+	}
+	// Lookup re-applies the uid >= 1000 rule, so a root-owned path cannot
+	// produce a principal to act as.
+	return Lookup(u.Username)
+}

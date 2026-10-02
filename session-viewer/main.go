@@ -193,13 +193,13 @@ func detectWorktreeGroup(dir string) *WorktreeGroup {
 	dir, _ = filepath.EvalSymlinks(dir)
 
 	// Step 1: Is this inside a git repo?
-	gitDirOut, err := exec.Command("git", "-C", dir, "rev-parse", "--git-dir").Output()
+	gitDirOut, err := gitIn(dir, "rev-parse", "--git-dir").Output()
 	if err != nil {
 		return nil // not a git repo at all
 	}
 	gitDir := strings.TrimSpace(string(gitDirOut))
 
-	commonDirOut, err := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir").Output()
+	commonDirOut, err := gitIn(dir, "rev-parse", "--git-common-dir").Output()
 	if err != nil {
 		return nil
 	}
@@ -219,7 +219,7 @@ func detectWorktreeGroup(dir string) *WorktreeGroup {
 	commonDir, _ = filepath.EvalSymlinks(commonDir)
 
 	// Step 2: Get worktree list
-	wtOut, err := exec.Command("git", "-C", dir, "worktree", "list", "--porcelain").Output()
+	wtOut, err := gitIn(dir, "worktree", "list", "--porcelain").Output()
 	if err != nil {
 		return nil
 	}
@@ -678,7 +678,7 @@ func getBranch(dir string, cache map[string]string) string {
 	if b, ok := cache[dir]; ok {
 		return b
 	}
-	out, err := exec.Command("git", "-C", dir, "branch", "--show-current").Output()
+	out, err := gitIn(dir, "branch", "--show-current").Output()
 	b := ""
 	if err == nil {
 		b = strings.TrimSpace(string(out))
@@ -982,7 +982,7 @@ func backgroundScan() {
 			continue
 		}
 		// Deduplicate: compute commonDir key for this group
-		commonDirOut, err := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir").Output()
+		commonDirOut, err := gitIn(dir, "rev-parse", "--git-common-dir").Output()
 		commonKey := dir
 		if err == nil {
 			cd := strings.TrimSpace(string(commonDirOut))
@@ -1622,7 +1622,7 @@ func getProjects(c echo.Context) error {
 		if group == nil {
 			continue
 		}
-		commonDirOut, err := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir").Output()
+		commonDirOut, err := gitIn(dir, "rev-parse", "--git-common-dir").Output()
 		commonKey := dir
 		if err == nil {
 			cd := strings.TrimSpace(string(commonDirOut))
@@ -2320,4 +2320,26 @@ func main() {
 			addr, authCfg.Mode, strings.Join(authCfg.Allowed, ","))
 	}
 	e.Logger.Fatal(e.Start(addr))
+}
+
+// gitIn builds a read-only git command for a repository, run as the user who
+// owns it.
+//
+// Running git as root against a user's repo fails outright — ownership-based
+// safe.directory, not a permission problem — so this is not a hardening nicety
+// but the difference between the worktree UI working and reporting "not part
+// of a worktree group" for every project.
+//
+// Solo mode and any path we cannot attribute fall back to a plain command,
+// which is exactly the previous behaviour.
+func gitIn(dir string, args ...string) *exec.Cmd {
+	full := append([]string{"-C", dir}, args...)
+	if principals == nil || principals.IsSolo() {
+		return exec.Command("git", full...)
+	}
+	owner, err := principal.OwnerOf(dir)
+	if err != nil {
+		return exec.Command("git", full...)
+	}
+	return owner.Command("git", full...)
 }
