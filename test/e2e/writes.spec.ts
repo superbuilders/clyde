@@ -221,8 +221,8 @@ test("creating and deleting a worktree runs as the user, not as root", async ({
 
     const deleted = await page.evaluate(
       async ([worktree_path, parent_path]) => {
-        const r = await fetch("/api/worktrees", {
-          method: "DELETE",
+        const r = await fetch("/api/worktrees/delete", {
+          method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ worktree_path, parent_path }),
         });

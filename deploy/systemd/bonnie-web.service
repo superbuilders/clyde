@@ -113,6 +113,16 @@ ReadWritePaths=/srv/bonnie
 # back permanently broken. RuntimeDirectory makes systemd create (and clean up)
 # /run/bonnie on every start, so there is nothing left to go stale.
 RuntimeDirectory=bonnie
+# The viewer's session cache lives in /var/lib/bonnie. ProtectSystem=strict
+# makes /var/lib read-only, so without this the service cannot create it and
+# every restart rescans every session from scratch. StateDirectory both
+# creates the directory and adds it to the read-write set, so it cannot drift
+# out of sync with ReadWritePaths the way a hand-rolled entry would.
+#
+# 0700: this is service state spanning every user's sessions. No user should
+# be able to read it, and none should be able to forge it.
+StateDirectory=bonnie
+StateDirectoryMode=0700
 # ...but NOT torn down on stop, which is what the default would do.
 #
 # Every user's tmux socket lives in /run/bonnie/<user> (TMUX_TMPDIR), and
