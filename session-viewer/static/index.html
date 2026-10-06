@@ -2,7 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Clyde Session Viewer</title>
   <link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css" />
   <link href="https://cdn.jsdelivr.net/npm/daisyui@5/full.css" rel="stylesheet" type="text/css" />
@@ -31,20 +31,58 @@
     /* Toast animation */
     @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     .toast-anim { animation: toast-in .2s ease-out; }
+
+    /* ── Mobile ─────────────────────────────────────────────────────────────
+       Transcripts are full of things with no spaces in them — absolute paths,
+       URLs, base64, go test output. On a phone a single one of those is wide
+       enough to stretch the flex row it lives in, which stretches the column,
+       which makes the WHOLE PAGE scroll sideways. Breaking anywhere inside
+       message content is the one rule that keeps the layout at viewport width. */
+    .msg-content { overflow-wrap: anywhere; word-break: break-word; }
+    .msg-content pre { max-width: 100%; }
+    /* A table can't wrap its way narrow, so it gets its own scroller rather
+       than widening the page. */
+    .msg-content table { display: block; overflow-x: auto; }
+
+    @media (max-width: 640px) {
+      /* iOS Safari zooms the viewport when a focused control's font is under
+         16px, and never zooms back out — the composer would leave the user
+         stranded at 1.3x with the send button off-screen. */
+      input, textarea, select { font-size: 16px !important; }
+      .msg-content pre { padding: .5rem .6rem; }
+      .msg-content pre code { font-size: .78em; }
+    }
+
+    /* Honour the home-indicator / notch insets (viewport-fit=cover above). */
+    .safe-b { padding-bottom: env(safe-area-inset-bottom, 0px); }
   </style>
 </head>
 <body class="min-h-screen bg-base-300">
 
-<div x-data="sessionViewer()" x-init="init()" class="flex h-screen">
+<div x-data="sessionViewer()" x-init="init()" class="flex h-[100dvh] overflow-hidden"
+     @keydown.escape.window="sidebarOpen = false">
 
-  <!-- ─── Left sidebar ─── -->
-  <div class="w-96 min-w-80 flex flex-col bg-base-200 border-r border-base-300">
+  <!-- ─── Drawer backdrop (mobile only) ───
+       The sidebar is `fixed` under md, so it no longer takes part in the flex
+       row and nothing behind it is clickable while it is open. The scrim makes
+       that explicit and gives the usual tap-outside-to-close. -->
+  <div x-show="sidebarOpen" x-transition.opacity @click="sidebarOpen = false"
+       class="md:hidden fixed inset-0 z-30 bg-black/60"></div>
+
+  <!-- ─── Left sidebar (off-canvas drawer under md) ─── -->
+  <div class="fixed inset-y-0 left-0 z-40 w-[85vw] max-w-sm transform transition-transform duration-200 ease-out
+              md:static md:translate-x-0 md:w-96 md:min-w-80 md:max-w-none
+              flex flex-col bg-base-200 border-r border-base-300"
+       :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'">
 
     <!-- Header -->
     <div class="p-3 border-b border-base-300 space-y-2">
       <div class="flex items-center gap-2">
         <h1 class="text-lg font-bold flex-1">Sessions</h1>
         <button class="btn btn-xs btn-ghost" @click="triggerScan()" title="Rescan">⟳</button>
+        <!-- Closing from inside the drawer: the scrim is easy to miss on a
+             narrow phone where the drawer covers 85% of the width. -->
+        <button class="btn btn-xs btn-ghost md:hidden" @click="sidebarOpen = false" title="Close">✕</button>
       </div>
       <!-- Search -->
       <input type="text" x-model="search" placeholder="Search…"
@@ -68,7 +106,7 @@
                   x-text="activeFilterCount + Object.keys(hiddenProjects).length"></span>
           </button>
           <div x-show="filterOpen" @click.outside="filterOpen = false" x-transition
-               class="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-xl p-3 w-56 border border-base-300"
+               class="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-xl p-3 w-56 max-w-[calc(100vw_-_2rem)] max-h-[60vh] overflow-y-auto nice-scroll border border-base-300"
                style="background-color: var(--color-base-100, #1d232a)">
             <!-- Status filters -->
             <div class="text-xs font-semibold mb-1.5 opacity-60">Status</div>
@@ -117,7 +155,7 @@
                 <div class="relative" x-data="{ wtMenuOpen: false }" @click.stop>
                   <button @click="wtMenuOpen = !wtMenuOpen" class="btn btn-xs btn-ghost opacity-40 hover:opacity-100 px-1" title="Options">⋮</button>
                   <div x-show="wtMenuOpen" @click.outside="wtMenuOpen = false" x-transition
-                       class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
+                       class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 max-w-[calc(100vw_-_1.5rem)] max-h-[70vh] overflow-y-auto nice-scroll text-sm"
                        style="background-color: var(--color-base-100, #1d232a)">
                     <button @click="createSessionForProject(group.parentPath); wtMenuOpen = false"
                             class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📝 New Session</button>
@@ -146,9 +184,9 @@
                         <span x-show="s.busy" class="loading loading-spinner loading-xs text-warning"></span>
                         <span x-show="s.unread" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
                         <div class="relative" x-data="{ menuOpen: false }" @click.stop>
-                          <button @click="menuOpen = !menuOpen" class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
+                          <button @click="menuOpen = !menuOpen" class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 max-md:opacity-70 text-xs px-2 py-1 -my-1 transition-opacity">⋮</button>
                           <div x-show="menuOpen" @click.outside="menuOpen = false" x-transition
-                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
+                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 max-w-[calc(100vw_-_1.5rem)] max-h-[70vh] overflow-y-auto nice-scroll text-sm"
                                style="background-color: var(--color-base-100, #1d232a)">
                             <button @click="toggleReadState(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50" x-text="s.unread ? 'Mark read' : 'Mark unread'"></button>
                             <button x-show="s.process_type" @click="killSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
@@ -178,7 +216,7 @@
                         <div class="relative" x-data="{ wtChildMenu: false }" @click.stop>
                           <button @click="wtChildMenu = !wtChildMenu" class="btn btn-xs btn-ghost opacity-30 hover:opacity-100 px-1" title="Options">⋮</button>
                           <div x-show="wtChildMenu" @click.outside="wtChildMenu = false" x-transition
-                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
+                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 max-w-[calc(100vw_-_1.5rem)] max-h-[70vh] overflow-y-auto nice-scroll text-sm"
                                style="background-color: var(--color-base-100, #1d232a)">
                             <button @click="createSessionForProject(child.cwd); wtChildMenu = false"
                                     class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📝 New Session</button>
@@ -206,9 +244,9 @@
                                 <span x-show="s.busy" class="loading loading-spinner loading-xs text-warning"></span>
                                 <span x-show="s.unread" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
                                 <div class="relative" x-data="{ menuOpen: false }" @click.stop>
-                                  <button @click="menuOpen = !menuOpen" class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
+                                  <button @click="menuOpen = !menuOpen" class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 max-md:opacity-70 text-xs px-2 py-1 -my-1 transition-opacity">⋮</button>
                                   <div x-show="menuOpen" @click.outside="menuOpen = false" x-transition
-                                       class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
+                                       class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 max-w-[calc(100vw_-_1.5rem)] max-h-[70vh] overflow-y-auto nice-scroll text-sm"
                                        style="background-color: var(--color-base-100, #1d232a)">
                                     <button @click="toggleReadState(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50" x-text="s.unread ? 'Mark read' : 'Mark unread'"></button>
                                     <button x-show="s.process_type" @click="killSession(s); menuOpen = false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">Kill</button>
@@ -247,7 +285,7 @@
                 <div class="relative" x-data="{ projectMenu: false }" @click.stop>
                   <button @click="projectMenu = !projectMenu" class="btn btn-xs btn-ghost opacity-40 hover:opacity-100 px-1" title="Options">⋮</button>
                   <div x-show="projectMenu" @click.outside="projectMenu = false" x-transition
-                       class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
+                       class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 max-w-[calc(100vw_-_1.5rem)] max-h-[70vh] overflow-y-auto nice-scroll text-sm"
                        style="background-color: var(--color-base-100, #1d232a)">
                     <!-- Wrapped, not modified: a "Shared by …" group's cwd is
                          inside the owner's tree, where the sharee can read one
@@ -284,10 +322,10 @@
                         <span x-show="s.unread" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
                         <div class="relative" x-data="{ menuOpen: false }" @click.stop>
                           <button @click="menuOpen = !menuOpen"
-                                  class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 text-xs px-1 transition-opacity"
+                                  class="opacity-0 group-hover/card:opacity-60 hover:!opacity-100 max-md:opacity-70 text-xs px-2 py-1 -my-1 transition-opacity"
                                   title="Session options">⋮</button>
                           <div x-show="menuOpen" @click.outside="menuOpen = false" x-transition
-                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 text-sm"
+                               class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-44 max-w-[calc(100vw_-_1.5rem)] max-h-[70vh] overflow-y-auto nice-scroll text-sm"
                                style="background-color: var(--color-base-100, #1d232a)">
                             <button @click="toggleReadState(s); menuOpen = false"
                                     class="w-full text-left px-3 py-1.5 hover:bg-base-300/50"
@@ -350,36 +388,50 @@
   <div class="flex-1 flex flex-col min-w-0">
     <!-- No session selected -->
     <template x-if="!selected">
-      <div class="flex-1 flex items-center justify-center text-base-content/30">
-        <div class="text-center">
-          <div class="text-5xl mb-3">🤖</div>
-          <div class="text-lg">Select a session to view</div>
-          <div class="text-sm mt-1 opacity-60" x-text="sessions.length + ' sessions discovered'"></div>
+      <div class="flex-1 flex flex-col min-h-0">
+        <!-- Mobile-only header: with the sidebar off-canvas and nothing
+             selected there would otherwise be no way back to the session
+             list on a phone. -->
+        <div class="md:hidden flex items-center gap-2 px-3 py-2 border-b border-base-300 bg-base-200">
+          <button @click="sidebarOpen = true" class="btn btn-sm btn-ghost px-2" title="Sessions" aria-label="Open sessions">☰</button>
+          <span class="font-bold">Sessions</span>
+        </div>
+        <div class="flex-1 flex items-center justify-center text-base-content/30 p-6">
+          <div class="text-center">
+            <div class="text-5xl mb-3">🤖</div>
+            <div class="text-lg">Select a session to view</div>
+            <div class="text-sm mt-1 opacity-60" x-text="sessions.length + ' sessions discovered'"></div>
+            <button @click="sidebarOpen = true" class="btn btn-sm btn-primary mt-4 md:hidden">Browse sessions</button>
+          </div>
         </div>
       </div>
     </template>
 
     <!-- Session selected -->
     <template x-if="selected">
-      <div class="flex flex-col h-full">
+      <div class="flex flex-col h-full min-h-0">
         <!-- Top bar -->
-        <div class="px-4 py-2.5 border-b border-base-300 bg-base-200 flex items-center gap-2">
+        <div class="px-3 md:px-4 py-2 md:py-2.5 border-b border-base-300 bg-base-200 flex items-center gap-2">
+          <button @click="sidebarOpen = true" class="btn btn-sm btn-ghost px-2 md:hidden shrink-0" title="Sessions" aria-label="Open sessions">☰</button>
           <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2">
-              <span class="font-bold truncate"
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="font-bold truncate text-sm md:text-base"
                     x-text="selected.name || selected.project + ' — ' + (selected.preview || selected.id).substring(0, 40)"></span>
-              <span x-show="selected.branch" class="badge badge-sm badge-outline" x-text="selected.branch"></span>
-              <span x-show="selected.process_type === 'tmux' && agentBusy" class="badge badge-sm badge-warning animate-pulse">⚡ busy</span>
-              <span x-show="selected.process_type === 'tmux' && !agentBusy" class="badge badge-sm badge-info">tmux</span>
-              <span x-show="selected.process_type === 'sh'" class="badge badge-sm badge-success">sh</span>
+              <!-- Badges are the first thing to go on a narrow screen: the
+                   title and the hamburger have to survive, these are a nicety.
+                   The branch stays, it is the one that disambiguates. -->
+              <span x-show="selected.branch" class="badge badge-sm badge-outline hidden sm:inline-flex shrink-0" x-text="selected.branch"></span>
+              <span x-show="selected.process_type === 'tmux' && agentBusy" class="badge badge-sm badge-warning animate-pulse shrink-0">⚡</span>
+              <span x-show="selected.process_type === 'tmux' && !agentBusy" class="badge badge-sm badge-info hidden sm:inline-flex shrink-0">tmux</span>
+              <span x-show="selected.process_type === 'sh'" class="badge badge-sm badge-success hidden sm:inline-flex shrink-0">sh</span>
             </div>
-            <div class="text-xs opacity-50 truncate" x-text="selected.cwd + ' · ' + selected.id"></div>
+            <div class="text-xs opacity-50 truncate hidden sm:block" x-text="selected.cwd + ' · ' + selected.id"></div>
           </div>
           <!-- Session hamburger menu -->
-          <div class="relative" x-data="{ topMenu: false }" @click.stop>
-            <button @click="topMenu = !topMenu" class="btn btn-xs btn-ghost" title="Session options">☰</button>
+          <div class="relative shrink-0" x-data="{ topMenu: false }" @click.stop>
+            <button @click="topMenu = !topMenu" class="btn btn-sm btn-ghost" title="Session options">⋮</button>
             <div x-show="topMenu" @click.outside="topMenu = false" x-transition
-                 class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-52 text-sm"
+                 class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-52 max-w-[calc(100vw_-_1.5rem)] max-h-[70vh] overflow-y-auto nice-scroll text-sm"
                  style="background-color: var(--color-base-100, #1d232a)">
               <!-- Actions -->
               <button x-show="selected.process_type" @click="stopAgent(); topMenu = false"
@@ -420,7 +472,7 @@
         </div>
 
         <!-- Messages -->
-        <div class="flex-1 overflow-y-auto nice-scroll p-4 space-y-3" x-ref="msgContainer">
+        <div class="flex-1 overflow-y-auto overflow-x-hidden nice-scroll p-2 sm:p-4 space-y-3" x-ref="msgContainer">
           <div x-show="loadingMsgs" class="text-center py-6"><span class="loading loading-spinner loading-md"></span></div>
           <div x-show="hasOlder && !loadingMsgs" class="text-center pb-2">
             <button @click="loadOlderMessages()" class="btn btn-xs btn-ghost opacity-60" :disabled="loadingOlder">
@@ -441,8 +493,8 @@
               <template x-if="msg.type === 'tool-use' && modeFor('tool-use') !== 'hidden'">
                 <div class="group/msg relative">
                   <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
-                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
-                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 max-md:opacity-50 text-xs px-2 py-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 max-w-[calc(100vw_-_1.5rem)] text-sm" style="background-color:var(--color-base-100,#1d232a)">
                       <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
                       <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
                     </div>
@@ -463,8 +515,8 @@
               <template x-if="msg.type === 'tool-result' && modeFor('tool-result') !== 'hidden'">
                 <div class="group/msg relative">
                   <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
-                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
-                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 max-md:opacity-50 text-xs px-2 py-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 max-w-[calc(100vw_-_1.5rem)] text-sm" style="background-color:var(--color-base-100,#1d232a)">
                       <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
                       <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
                     </div>
@@ -485,8 +537,8 @@
               <template x-if="msg.type === 'thinking' && modeFor('thinking') !== 'hidden'">
                 <div class="group/msg relative">
                   <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
-                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
-                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 max-md:opacity-50 text-xs px-2 py-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 max-w-[calc(100vw_-_1.5rem)] text-sm" style="background-color:var(--color-base-100,#1d232a)">
                       <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
                       <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
                     </div>
@@ -507,8 +559,8 @@
               <template x-if="msg.type === 'compaction' && modeFor('compaction') !== 'hidden'">
                 <div class="group/msg relative">
                   <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
-                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
-                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 max-md:opacity-50 text-xs px-2 py-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 max-w-[calc(100vw_-_1.5rem)] text-sm" style="background-color:var(--color-base-100,#1d232a)">
                       <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
                       <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
                     </div>
@@ -523,8 +575,8 @@
               <template x-if="msg.type === 'diagnostic' && modeFor('diagnostic') !== 'hidden'">
                 <div class="group/msg relative">
                   <div class="absolute top-0 right-0 z-10" x-data="{m:false}" @click.stop>
-                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
-                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 max-md:opacity-50 text-xs px-2 py-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 max-w-[calc(100vw_-_1.5rem)] text-sm" style="background-color:var(--color-base-100,#1d232a)">
                       <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
                       <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
                     </div>
@@ -536,15 +588,15 @@
               <template x-if="msg.type === 'user'">
                 <div class="my-2 group/msg relative">
                   <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
-                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
-                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 max-md:opacity-50 text-xs px-2 py-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 max-w-[calc(100vw_-_1.5rem)] text-sm" style="background-color:var(--color-base-100,#1d232a)">
                       <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
                       <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
                     </div>
                   </div>
                   <div class="font-bold text-cyan-400 text-sm mb-1">You:</div>
                   <div class="chat chat-end">
-                    <div class="chat-bubble chat-bubble-primary">
+                    <div class="chat-bubble chat-bubble-primary max-w-[88%] sm:max-w-[75%] break-words">
                       <div class="msg-content" x-html="renderMarkdown(msg.content.replace(/^\*\*You:\*\*\s*/,''))"></div>
                     </div>
                   </div>
@@ -554,15 +606,15 @@
               <template x-if="msg.type === 'assistant'">
                 <div class="my-2 group/msg relative">
                   <div class="absolute top-1 right-1 z-10" x-data="{m:false}" @click.stop>
-                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 text-xs px-1 transition-opacity">⋮</button>
-                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 text-sm" style="background-color:var(--color-base-100,#1d232a)">
+                    <button @click="m=!m" class="opacity-0 group-hover/msg:opacity-40 hover:!opacity-100 max-md:opacity-50 text-xs px-2 py-1 transition-opacity">⋮</button>
+                    <div x-show="m" @click.outside="m=false" x-transition class="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border border-base-300 py-1 w-36 max-w-[calc(100vw_-_1.5rem)] text-sm" style="background-color:var(--color-base-100,#1d232a)">
                       <button @click="copyMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50">📋 Copy</button>
                       <button x-show="!selected.process_type" @click="deleteMessage(msg);m=false" class="w-full text-left px-3 py-1.5 hover:bg-base-300/50 text-error">🗑 Delete</button>
                     </div>
                   </div>
                   <div class="font-bold text-green-400 text-sm mb-1">Clyde:</div>
                   <div class="chat chat-start">
-                    <div class="chat-bubble chat-bubble-neutral max-w-4xl">
+                    <div class="chat-bubble chat-bubble-neutral max-w-[88%] sm:max-w-4xl break-words">
                       <div class="msg-content" x-html="renderMarkdown(msg.content.replace(/^\*\*(Claude|Assistant):\*\*\s*/,''))"></div>
                     </div>
                   </div>
@@ -577,18 +629,21 @@
         </div>
 
         <!-- Reply box -->
-        <div class="border-t border-base-300 bg-base-200 p-3">
-          <div class="flex gap-2">
+        <div class="border-t border-base-300 bg-base-200 p-2 sm:p-3 safe-b">
+          <div class="flex gap-1.5 sm:gap-2 items-end">
             <input type="file" class="hidden" x-ref="fileInput" @change="handleFileUpload($event)" multiple />
-            <button @click="$refs.fileInput.click()" class="btn btn-ghost btn-sm self-end px-2" title="Upload file" :disabled="!selected || sending">📎</button>
+            <button @click="$refs.fileInput.click()" class="btn btn-ghost btn-sm self-end px-2 shrink-0" title="Upload file" :disabled="!selected || sending">📎</button>
             <textarea x-model="replyText" @keydown.meta.enter="sendReply()" @keydown.ctrl.enter="sendReply()"
                       @input="saveDraft(); autoResize($event.target)"
-                      placeholder="Send a message… (⌘+Enter)" class="textarea textarea-bordered flex-1 min-h-[3rem] text-sm"
-                      style="max-height: 50vh; overflow-y: auto;"
+                      placeholder="Send a message…"
+                      :placeholder="isTouch ? 'Send a message…' : 'Send a message… (⌘+Enter)'"
+                      class="textarea textarea-bordered flex-1 min-w-0 min-h-[3rem] text-sm"
+                      style="max-height: 40vh; overflow-y: auto;"
                       :disabled="sending" rows="2"
                       x-ref="replyTextarea"></textarea>
-            <button @click="sendReply()" class="btn btn-primary self-end" :disabled="!replyText.trim() || sending">
-              <span x-show="!sending">Send</span>
+            <button @click="sendReply()" class="btn btn-primary self-end shrink-0 px-3" :disabled="!replyText.trim() || sending">
+              <span x-show="!sending" class="hidden sm:inline">Send</span>
+              <span x-show="!sending" class="sm:hidden">➤</span>
               <span x-show="sending" class="loading loading-spinner loading-sm"></span>
             </button>
           </div>
@@ -599,13 +654,13 @@
   </div>
 
   <!-- Toast notification -->
-  <div x-show="toast" x-transition class="fixed bottom-6 right-6 z-50 toast-anim">
-    <div class="bg-base-100 border border-base-300 rounded-lg shadow-xl px-4 py-2 text-sm" x-text="toast"></div>
+  <div x-show="toast" x-transition class="fixed bottom-4 right-4 left-4 sm:left-auto sm:bottom-6 sm:right-6 z-50 toast-anim">
+    <div class="bg-base-100 border border-base-300 rounded-lg shadow-xl px-4 py-2 text-sm text-center sm:text-left break-words" x-text="toast"></div>
   </div>
 
   <!-- Takeover confirmation modal -->
-  <div x-show="takeoverModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @keydown.escape.window="cancelTakeover()">
-    <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full mx-4 p-6" @click.outside="cancelTakeover()">
+  <div x-show="takeoverModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 overflow-y-auto" @keydown.escape.window="cancelTakeover()">
+    <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full p-4 sm:p-6 max-h-[90dvh] overflow-y-auto nice-scroll" @click.outside="cancelTakeover()">
       <div class="text-lg font-bold mb-1">⚠️ Session Running in Terminal</div>
       <p class="text-sm opacity-70 mb-4">
         This session has a clyde process running in your terminal
@@ -624,8 +679,8 @@
 
   <!-- WT-9: Worktree creation modal -->
   <!-- ── Share modal (Bonnie M4.2) ── -->
-  <div x-show="shareModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @keydown.escape.window="closeShareModal()">
-    <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full mx-4 p-6" style="background-color: var(--color-base-100);" @click.outside="closeShareModal()">
+  <div x-show="shareModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 overflow-y-auto" @keydown.escape.window="closeShareModal()">
+    <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full p-4 sm:p-6 max-h-[90dvh] overflow-y-auto nice-scroll" style="background-color: var(--color-base-100);" @click.outside="closeShareModal()">
       <div class="text-lg font-bold mb-1">🔗 Share conversation</div>
       <!-- The conversation's own name, not its path. The modal is only ever
            opened from a specific conversation now, so there is nothing to pick
@@ -679,8 +734,8 @@
     </div>
   </div>
 
-  <div x-show="worktreeModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @keydown.escape.window="closeWorktreeModal()">
-    <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full mx-4 p-6" style="background-color: var(--color-base-100);" @click.outside="closeWorktreeModal()">
+  <div x-show="worktreeModal" x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 overflow-y-auto" @keydown.escape.window="closeWorktreeModal()">
+    <div class="bg-base-100 rounded-xl shadow-2xl border border-base-300 max-w-md w-full p-4 sm:p-6 max-h-[90dvh] overflow-y-auto nice-scroll" style="background-color: var(--color-base-100);" @click.outside="closeWorktreeModal()">
       <div class="text-lg font-bold mb-4">🌿 New Worktree</div>
       <div class="space-y-3">
         <div>
@@ -723,6 +778,18 @@ function sessionViewer() {
     collapsedProjects: {},
     toast: '',
     _toastTimer: null,
+
+    // ── Mobile ──
+    // Under md the sidebar is a fixed off-canvas drawer; at md and up it is a
+    // static flex child and `sidebarOpen` is inert (the translate utilities it
+    // drives are overridden by md:translate-x-0). So there is no breakpoint
+    // listener and no desktop/mobile mode to keep in sync — one boolean that
+    // only CSS decides whether to honour.
+    sidebarOpen: false,
+    // Coarse pointer == no hover, so keyboard-shortcut hints are noise and
+    // hover-revealed affordances have to be forced visible (see max-md: in the
+    // markup). Sampled once: a device does not grow a mouse mid-session.
+    isTouch: window.matchMedia('(hover: none)').matches,
 
     replyText: '', sending: false, sendError: '',
     pollTimer: null, statusTimer: null,
@@ -983,6 +1050,9 @@ function sessionViewer() {
 
     async selectSession(s) {
       if (this.selected) this.saveDraft();
+      // On a phone the drawer is covering the transcript the user just asked
+      // for. Closing it here is the whole point of picking a session.
+      this.sidebarOpen = false;
       this.selected = s;
       this.messages = [];
       this.lastFilename = '';
