@@ -129,6 +129,12 @@ func ThinkingStyle(text string) string {
 	return wrap(text, dim, fgMagenta)
 }
 
+// ErrorStyle styles text as an error (bold red).
+// Errors are visually distinct from debug notes, which are plain red.
+func ErrorStyle(text string) string {
+	return wrap(text, bold, fgRed)
+}
+
 // DebugStyle styles text as debug-level output (red).
 // Used for harness diagnostics at Debug log level.
 func DebugStyle(text string) string {
@@ -173,6 +179,15 @@ func FormatThinking(text string) string {
 // FormatDebug formats a debug-level line in red.
 func FormatDebug(text string) string {
 	return DebugStyle(text)
+}
+
+// FormatError formats an error line with the ❌ prefix and bold red styling.
+// The prefix is not duplicated if the text already carries one.
+func FormatError(text string) string {
+	if strings.HasPrefix(strings.TrimSpace(text), "❌") {
+		return ErrorStyle(text)
+	}
+	return ErrorStyle("❌ " + text)
 }
 
 // FormatDim formats text as dim/faint secondary content.

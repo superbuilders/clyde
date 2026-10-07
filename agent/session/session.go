@@ -10,7 +10,7 @@
 //
 // File naming: <timestamp>_<type>.md
 //   - Timestamp: ISO-8601 with milliseconds, hyphens for colons
-//   - Type: user, assistant, system, thinking, tool-use, tool-result, diagnostic, compaction
+//   - Type: user, assistant, system, thinking, tool-use, tool-result, diagnostic, compaction, error
 //
 // Design: see docs/sessions-history.md
 package session
@@ -39,6 +39,10 @@ const (
 	TypeToolResult MessageType = "tool-result"
 	TypeDiagnostic MessageType = "diagnostic"
 	TypeCompaction MessageType = "compaction"
+	// TypeError is a hard error surfaced during the session. Errors are a
+	// distinct record type — never debug notes — so no verbosity mode other
+	// than silent can hide them.
+	TypeError MessageType = "error"
 )
 
 // Session represents an active session with its directory and state.
