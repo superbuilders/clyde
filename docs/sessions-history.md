@@ -350,7 +350,8 @@ ls *.md | sort | sed -n '/compaction/,$p' | tail -n +2 | xargs cat
 
 **Message file name**: `<timestamp>_<type>.md`
 - `<timestamp>`: When this message was written. ISO-8601 with milliseconds, hyphens for colons (e.g., `2026-07-14T09-32-05.123`). Provides natural lexicographic sort order.
-- `<type>`: The message type. One of: `user`, `assistant`, `system`, `thinking`, `tool-use`, `tool-result`, `diagnostic`, `compaction`.
+- `<type>`: The message type. One of: `user`, `assistant`, `system`, `thinking`, `tool-use`, `tool-result`, `diagnostic`, `compaction`, `error`.
+- `error` records are hard errors, not debug notes. They are rendered in every verbosity mode except `silent`, and hiding debug output never hides them. Sessions written before this type existed stored errors as `diagnostic` files prefixed with `❌ Error:`; readers promote those to errors for backwards compatibility.
 
 No sequence numbers. The timestamp is the sole ordering mechanism. See [ITD-1](#itd-1-file-division--naming).
 
@@ -495,7 +496,7 @@ Use --resume <session-id> to resume, or --resume for your most recent.
 ```
 
 All info derived from files:
-- Message count: count `*.md` files in the directory (or count non-diagnostic/non-compaction files).
+- Message count: count `*.md` files in the directory (or count non-diagnostic/non-compaction/non-error files).
 - Summary: first `*_user.md` file content (truncated), or the heading from the latest `*_system.md` compaction summary.
 
 ### CLI → TUI transition
@@ -516,7 +517,7 @@ Your session history is stored in:
   <session-path>/
 
 Message files are named <timestamp>_<type>.md where type is one of:
-user, assistant, system, thinking, tool-use, tool-result, diagnostic, compaction.
+user, assistant, system, thinking, tool-use, tool-result, diagnostic, compaction, error.
 
 To search your current session:
   grep("pattern", "<session-path>/")

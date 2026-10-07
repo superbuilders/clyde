@@ -104,7 +104,7 @@ func MessageTypeFromFilename(filename string) string {
 //   - tool-result files → accumulate tool_result block on user message
 //   - assistant files → flush pending, new assistant message with text, flush
 //   - system files → flush pending, add system message
-//   - diagnostic/compaction files → skipped
+//   - diagnostic/compaction/error files → skipped
 //
 // If a compaction has occurred (*_system.md exists), reconstruction starts
 // from the latest *_system.md forward. Otherwise all files are loaded.
@@ -290,7 +290,7 @@ func ReconstructHistory(sessionDir string) ([]providers.Message, []string, error
 				Content: "I've reviewed the compaction summary and understand the context. I'll continue from where we left off.",
 			})
 
-		case TypeDiagnostic, TypeCompaction:
+		case TypeDiagnostic, TypeCompaction, TypeError:
 			// Skip — not conversation content
 			continue
 
@@ -591,7 +591,7 @@ func ListSessions(sessionsRoot string) ([]SessionInfo, error) {
 				continue
 			}
 			msgType := MessageTypeFromFilename(name)
-			if msgType != string(TypeDiagnostic) && msgType != string(TypeCompaction) {
+			if msgType != string(TypeDiagnostic) && msgType != string(TypeCompaction) && msgType != string(TypeError) {
 				messageCount++
 			}
 			// Get first user message for summary

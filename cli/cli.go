@@ -351,7 +351,14 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 	// Execute prompt
 	response, err := agentInstance.HandleMessage(userPrompt)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		// Errors are their own record type — never debug notes — so they
+		// survive any verbosity setting other than silent.
+		if sess != nil {
+			sess.WriteMessage(session.TypeError, fmt.Sprintf("❌ Error: %v\n", err))
+		}
+		if level.ShouldShow(loglevel.Quiet) {
+			fmt.Fprintln(os.Stderr, style.FormatError(fmt.Sprintf("Error: %v", err)))
+		}
 		os.Exit(1)
 	}
 
@@ -648,9 +655,15 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 		}
 
 		// Persist errors to session log so the full history is on disk
-		if handleErr != nil && sess != nil {
-			sess.WriteMessage(session.TypeDiagnostic,
-				fmt.Sprintf("❌ Error: %v\n", handleErr))
+		if handleErr != nil {
+			if sess != nil {
+				sess.WriteMessage(session.TypeError,
+					fmt.Sprintf("❌ Error: %v\n", handleErr))
+			}
+			// Errors are shown in every mode except silent.
+			if level.ShouldShow(loglevel.Quiet) {
+				fmt.Fprintln(os.Stderr, style.FormatError(fmt.Sprintf("Error: %v", handleErr)))
+			}
 		}
 
 		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
@@ -706,9 +719,15 @@ func runREPLBasicMode(level loglevel.Level, agentInstance *agent.Agent, sp *spin
 		}
 
 		// Persist errors to session log
-		if handleErr != nil && sess != nil {
-			sess.WriteMessage(session.TypeDiagnostic,
-				fmt.Sprintf("❌ Error: %v\n", handleErr))
+		if handleErr != nil {
+			if sess != nil {
+				sess.WriteMessage(session.TypeError,
+					fmt.Sprintf("❌ Error: %v\n", handleErr))
+			}
+			// Errors are shown in every mode except silent.
+			if level.ShouldShow(loglevel.Quiet) {
+				fmt.Fprintln(os.Stderr, style.FormatError(fmt.Sprintf("Error: %v", handleErr)))
+			}
 		}
 
 		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
@@ -1105,9 +1124,15 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 		}
 
 		// Persist errors to session log
-		if handleErr != nil && sess != nil {
-			sess.WriteMessage(session.TypeDiagnostic,
-				fmt.Sprintf("❌ Error: %v\n", handleErr))
+		if handleErr != nil {
+			if sess != nil {
+				sess.WriteMessage(session.TypeError,
+					fmt.Sprintf("❌ Error: %v\n", handleErr))
+			}
+			// Errors are shown in every mode except silent.
+			if level.ShouldShow(loglevel.Quiet) {
+				fmt.Fprintln(os.Stderr, style.FormatError(fmt.Sprintf("Error: %v", handleErr)))
+			}
 		}
 
 		fmt.Printf("\n%s%s\n", style.FormatAgentPrefix(), response)
