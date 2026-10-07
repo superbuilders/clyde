@@ -107,7 +107,23 @@ func ReplaySession(sessionDir string, level loglevel.Level) {
 			fmt.Println(StyleMessage(loglevel.Normal, displayed))
 			fmt.Println()
 
+		case session.TypeError:
+			// Errors are visible in every mode except silent.
+			if !level.ShouldShow(loglevel.Quiet) {
+				continue
+			}
+			fmt.Println(style.FormatError(text))
+
 		case session.TypeDiagnostic:
+			// Backwards compatibility: older sessions persisted errors as
+			// diagnostics. Recognize them by their ❌ marker and render them
+			// as errors so they are not hidden with debug output.
+			if session.IsLegacyErrorDiagnostic(text) {
+				if level.ShouldShow(loglevel.Quiet) {
+					fmt.Println(style.FormatError(text))
+				}
+				continue
+			}
 			// Cache lines at verbose+, everything else at debug
 			if strings.HasPrefix(text, "💾 Cache:") && !strings.Contains(text, "|") {
 				if !level.ShouldShow(loglevel.Verbose) {

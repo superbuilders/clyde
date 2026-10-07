@@ -682,3 +682,47 @@ func mustJSON(v interface{}) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+// TestE2E_GetMessages_ErrorsAlwaysIncluded verifies that error records are
+// returned even when the client's type filter omits them, so no verbosity
+// toggle in the viewer can hide an error. See issue #7.
+func TestE2E_GetMessages_ErrorsAlwaysIncluded(t *testing.T) {
+	homeDir := t.TempDir()
+	homeDir, _ = filepath.EvalSymlinks(homeDir)
+
+	projectDir := filepath.Join(homeDir, "test-project")
+	sessID := "2026-07-20T10-00-00_testuser"
+	sessDir := filepath.Join(projectDir, ".clyde", "sessions", sessID)
+	os.MkdirAll(sessDir, 0755)
+
+	os.WriteFile(filepath.Join(sessDir, "2026-07-20T10-00-01.000_user.md"), []byte("hello"), 0644)
+	os.WriteFile(filepath.Join(sessDir, "2026-07-20T10-00-02.000_diagnostic.md"), []byte("diag info"), 0644)
+	os.WriteFile(filepath.Join(sessDir, "2026-07-20T10-00-03.000_error.md"), []byte("❌ Error: boom"), 0644)
+
+	baseURL, cleanup := startTestServer(t, homeDir)
+	defer cleanup()
+
+	// Debug/diagnostic output deliberately excluded from the filter.
+	url := fmt.Sprintf("%s/api/sessions/%s/messages?cwd=%s&types=user,assistant",
+		baseURL, sessID, projectDir)
+	status, body := httpGet(t, url)
+	if status != 200 {
+		t.Fatalf("GET messages returned %d: %s", status, body)
+	}
+
+	var data struct {
+		Messages []MessageFile `json:"messages"`
+	}
+	json.Unmarshal(body, &data)
+
+	typeCount := map[string]int{}
+	for _, m := range data.Messages {
+		typeCount[m.Type]++
+	}
+	if typeCount["error"] != 1 {
+		t.Errorf("error message must always be returned, got types: %v", typeCount)
+	}
+	if typeCount["diagnostic"] != 0 {
+		t.Errorf("diagnostic should be filtered out, got types: %v", typeCount)
+	}
+}

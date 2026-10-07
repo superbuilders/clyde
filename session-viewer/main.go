@@ -1293,9 +1293,11 @@ func getSessionMessages(c echo.Context) error {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 
 	typesFilter := c.QueryParam("types")
-	allowed := map[string]bool{"user": true, "assistant": true, "thinking": true}
+	// Errors are always allowed: they are a distinct record type and no
+	// client-side type filter may suppress them.
+	allowed := map[string]bool{"user": true, "assistant": true, "thinking": true, "error": true}
 	if typesFilter != "" {
-		allowed = make(map[string]bool)
+		allowed = map[string]bool{"error": true}
 		for _, t := range strings.Split(typesFilter, ",") {
 			allowed[strings.TrimSpace(t)] = true
 		}

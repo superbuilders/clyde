@@ -45,6 +45,16 @@ const (
 	TypeError MessageType = "error"
 )
 
+// IsLegacyErrorDiagnostic reports whether a diagnostic record written by an
+// older version of Clyde is really an error message. Before the dedicated
+// error record type existed, errors were persisted as diagnostics prefixed
+// with "❌ Error:". Callers use this to render such records as errors so that
+// old sessions degrade gracefully instead of hiding their errors with debug
+// output.
+func IsLegacyErrorDiagnostic(content string) bool {
+	return strings.HasPrefix(strings.TrimSpace(content), "❌ Error:")
+}
+
 // Session represents an active session with its directory and state.
 type Session struct {
 	// Dir is the absolute path to the session directory.
