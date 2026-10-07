@@ -49,6 +49,10 @@ resource "aws_ssm_document" "bonnie_deploy" {
         inputs = {
           timeoutSeconds = "600"
           runCommand = [
+            # SSM pipes the script to /bin/sh, which on Ubuntu is dash, and
+            # dash has no `pipefail`. Without this shebang the document dies
+            # on its own first line with "Illegal option -o pipefail".
+            "#!/usr/bin/env bash",
             "set -euo pipefail",
             # Printed before anything moves so the rollback target is always
             # in the command output, even when a later step fails. This is the
@@ -92,6 +96,10 @@ resource "aws_ssm_document" "bonnie_rollback" {
           # verified when they were first staged. Rollback must work when the
           # network, the bucket, or CI itself is the thing that is broken.
           runCommand = [
+            # SSM pipes the script to /bin/sh, which on Ubuntu is dash, and
+            # dash has no `pipefail`. Without this shebang the document dies
+            # on its own first line with "Illegal option -o pipefail".
+            "#!/usr/bin/env bash",
             "set -euo pipefail",
             "/usr/local/sbin/bonnie-install --activate '{{ sha }}'",
           ]
@@ -158,25 +166,12 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = ["arn:${data.aws_partition.current.partition}:s3:::${var.release_bucket}/${var.release_prefix}/*"]
   }
 
-  # Refuse to overwrite an existing key. A sha names immutable content; if the
-  # object is already there, either it is the same bytes (so the upload is
-  # pointless) or someone is rewriting history under a name that is supposed to
-  # be a promise. Fail instead.
-  statement {
-    sid       = "ReleaseArtefactsAreImmutable"
-    effect    = "Deny"
-    actions   = ["s3:PutObject"]
-    resources = ["arn:${data.aws_partition.current.partition}:s3:::${var.release_bucket}/${var.release_prefix}/*"]
-    condition {
-      test     = "Null"
-      variable = "s3:x-amz-copy-source"
-      values   = ["true"]
-    }
-    # NOTE: true immutability wants either a bucket policy with
-    # s3:if-none-match or Object Lock in governance mode. The workflow also
-    # checks with HeadObject first; this statement is defence in depth and is
-    # intentionally the weakest of the three.
-  }
+  # There is deliberately no Deny here enforcing one-write-per-sha. The
+  # obvious spelling — Deny PutObject unless s3:x-amz-copy-source is set —
+  # denies the ordinary upload too, because an ordinary upload is not a copy.
+  # Immutability is enforced by the workflow's HeadObject precheck, and
+  # properly belongs in a bucket policy or Object Lock, which is a change to
+  # the bucket rather than to this role.
 
   statement {
     sid       = "CheckForExistingArtefact"
@@ -192,17 +187,56 @@ data "aws_iam_policy_document" "github_actions_deploy" {
 
   # The narrow part: SendCommand is allowed only when BOTH the document and the
   # instance match. SSM evaluates the document arn and the instance arn as
-  # separate resources on the same call, so listing both here means a call
-  # naming any other document, or any other instance, is denied.
+  # separate resources on the same call, so a call naming any other document,
+  # or any instance without the tag, is denied.
+  #
+  # The instance is matched by tag rather than by aws_instance.web.id on
+  # purpose, and it is worth being explicit about why, because the id would
+  # read as the tighter choice.
+  #
+  # Referencing the instance here makes this policy depend on the instance
+  # resource. That dependency is invisible until you try to apply anything in
+  # this file with -target, at which point Terraform pulls aws_instance.web
+  # into scope — and since ami_id is unpinned and Canonical has republished
+  # since the box was built, "into scope" means "replaced". Creating an IAM
+  # role should not be able to rebuild the box.
+  #
+  # The tag is also the more durable match: the box will be replaced one day,
+  # and a policy keyed to a literal id silently stops authorising deploys at
+  # exactly the moment someone needs to deploy. Scope is unchanged in
+  # practice — Name is terraform-managed and unique to this stack.
+  # Two statements, not one, and this is the part that is easy to get wrong.
+  #
+  # A condition applies to every resource in its statement. Putting the tag
+  # condition on a statement that also lists the document ARNs means that when
+  # IAM evaluates the document, ssm:resourceTag/Name is absent, the condition
+  # is unsatisfied, and SendCommand is denied — so the policy authorises
+  # nothing at all. Verify with `aws iam simulate-principal-policy` rather than
+  # by reading it; this failed silently and closed, which is the good
+  # direction to fail but still a broken deploy.
   statement {
-    sid     = "RunTheTwoDeployDocuments"
+    sid     = "RunOnlyTheTwoDeployDocuments"
     effect  = "Allow"
     actions = ["ssm:SendCommand"]
     resources = [
       aws_ssm_document.bonnie_deploy.arn,
       aws_ssm_document.bonnie_rollback.arn,
-      "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:instance/${aws_instance.web.id}",
     ]
+  }
+
+  # SendCommand authorises the document and the instance independently on the
+  # same call, so both statements must pass. This one is what stops the two
+  # documents being aimed at some other instance in the account.
+  statement {
+    sid       = "AndOnlyAtTheBonnieInstance"
+    effect    = "Allow"
+    actions   = ["ssm:SendCommand"]
+    resources = ["arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:instance/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/Name"
+      values   = [var.name]
+    }
   }
 
   # Reading back the result is what turns "the API accepted my request" into
@@ -229,9 +263,4 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
 output "github_actions_role_arn" {
   description = "Set as the AWS_DEPLOY_ROLE_ARN repository variable in GitHub."
   value       = aws_iam_role.github_actions_deploy.arn
-}
-
-output "bonnie_instance_id" {
-  description = "Set as the BONNIE_INSTANCE_ID repository variable in GitHub."
-  value       = aws_instance.web.id
 }

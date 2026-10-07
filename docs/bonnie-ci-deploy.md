@@ -70,8 +70,9 @@ checks nothing out.
 **2. CI can run exactly two SSM documents.** `bonnie-deploy` and
 `bonnie-rollback`, both defined in `deploy/terraform/ci-deploy.tf`, both
 taking a single `sha` parameter with `allowedPattern = ^[0-9a-f]{40}$`. The
-IAM policy names those two document ARNs and the one instance ARN, so a
-`SendCommand` naming any other document or instance is denied by IAM.
+IAM policy allows `SendCommand` only on those two document ARNs, and
+separately only at an instance tagged `Name = bonnie-dev`. SSM authorises the
+document and the instance independently on the same call, so both must pass.
 
 The command text lives in git and is reviewed. A workflow edit cannot change
 what runs on the box; it can only choose which of the two documents to invoke
@@ -138,39 +139,70 @@ GitHub's retention policy rather than ours. S3 is already the release channel �
 `scripts/bonnie-release.sh` writes the same layout to the same prefix, and the
 instance role already reads it. The CI path adds a producer, not a mechanism.
 
-Artefacts are immutable: the workflow refuses to publish a sha whose key already
-exists, since re-uploading under a name that is supposed to be a promise is
-either a no-op or a lie and there is no way to tell which from CI.
+Artefacts are write-once by convention: the workflow does a `HeadObject` first
+and refuses to publish a sha whose key already exists, since re-uploading under
+a name that is supposed to be a promise is either a no-op or a lie and there is
+no way to tell which from CI. This is a precheck, not an enforcement — the role
+can still overwrite. Making it real needs a bucket policy or Object Lock, which
+is a change to the bucket and not to this role.
+
+## Current state
+
+Everything below is already applied to `bonnie-dev`. The one thing that is not
+done is the merge — see "Remaining".
+
+| piece | state |
+|---|---|
+| `bonnie-dev-deploy`, `bonnie-dev-rollback` SSM documents | created |
+| `bonnie-dev-ci-deploy` IAM role + policy | created |
+| `bonnie-ci` account and `/usr/local/bin/bonnie-stage` on the box | bootstrapped |
+| GitHub environment `bonnie-dev`, branch policy `master` | created |
+| repository variables | set |
+| workflow registered and runnable | **no — needs the merge** |
 
 ## Setup
 
-Terraform (`deploy/terraform/ci-deploy.tf`) creates the two SSM documents, the
-`bonnie-ci-deploy` role and its policy, and outputs the values below. The GitHub
-OIDC provider already exists in the account and is looked up, not created.
+### Terraform
+
+`deploy/terraform/ci-deploy.tf` creates the two SSM documents and the
+`bonnie-ci-deploy` role and policy. The GitHub OIDC provider already exists in
+the account and is looked up, not created.
+
+**Do not run a bare `terraform apply` on this module.** `ami_id` is unset in
+`env/dev.tfvars`, so `ami.tf` resolves Canonical's current Ubuntu 24.04 image,
+which has been republished since the box was built. A full apply today plans
+`aws_instance.web must be replaced` — it rebuilds the dev box, destroying
+`/opt`, `/etc/bonnie` and every running tmux session, before anyone notices
+what they approved. That drift predates this document and is still unresolved;
+pinning `ami_id` is a separate decision.
+
+Apply only the CI resources:
 
 ```
 terraform init -backend-config=env/dev.backend.hcl
-terraform apply
+terraform apply -var-file=env/dev.tfvars \
+  -target=aws_ssm_document.bonnie_deploy \
+  -target=aws_ssm_document.bonnie_rollback \
+  -target=aws_iam_role.github_actions_deploy \
+  -target=aws_iam_role_policy.github_actions_deploy
 ```
 
-In GitHub, create environment `bonnie-dev` with AJ as a required reviewer, then
-set these repository variables (none are secrets — they are ARNs and ids, and
-holding them grants nothing):
+Check the plan says **0 to destroy** before approving. `-target` pulls in
+dependencies, so a single reference to `aws_instance.web` anywhere in this file
+drags the instance back into scope and the plan quietly becomes a rebuild. That
+is why the policy matches the instance by tag instead of by id — see the
+comment on the `AndOnlyAtTheBonnieInstance` statement.
 
-| variable | value |
-|---|---|
-| `AWS_DEPLOY_ROLE_ARN` | `terraform output github_actions_role_arn` |
-| `AWS_REGION` | `us-east-1` |
-| `BONNIE_INSTANCE_ID` | `terraform output bonnie_instance_id` |
-| `BONNIE_RELEASE_BUCKET` | `bonnie-releases-565944437804` |
-| `BONNIE_SSM_DOC_DEPLOY` | `bonnie-dev-deploy` |
-| `BONNIE_SSM_DOC_ROLLBACK` | `bonnie-dev-rollback` |
+The `cloud-init.yaml` and `main.tf` changes in this PR are **not** applied, and
+must not be: they alter `user_data`, which forces instance replacement. They
+exist so that a *future, deliberate* instance rebuild provisions `bonnie-ci`
+and `bonnie-stage` by itself. The running box was bootstrapped by hand instead.
 
-### Bootstrapping the existing box
+### The box
 
-`bonnie-setup` runs once, guarded by `ConditionPathExists=!/srv/bonnie/.setup-complete`,
-so the running instance will not pick up the new account or `bonnie-stage` from
-cloud-init. Apply them once, as root over SSM, on the current box:
+`bonnie-setup` runs once, guarded by
+`ConditionPathExists=!/srv/bonnie/.setup-complete`, so a running instance never
+picks up cloud-init changes. Applied once as root over SSM:
 
 ```bash
 useradd --system --home-dir /srv/bonnie/ci --shell /usr/sbin/nologin bonnie-ci
@@ -178,14 +210,84 @@ install -d -m 0750 -o bonnie-ci -g bonnie-ci /srv/bonnie/ci /srv/bonnie/ci/.ship
 install -m 0755 -o root -g root deploy/bonnie-stage /usr/local/bin/bonnie-stage
 ```
 
-Verify before trusting the path end to end:
+Verified afterwards: uid 997 (below the 1000 threshold the IMDS guard uses),
+`sudo -l -U bonnie-ci` reports no sudo at all, and
+`runuser -u bonnie-ci -- aws sts get-caller-identity` returns the instance role.
+
+### GitHub
+
+Environment `bonnie-dev`, deployment branch policy restricted to `master`, and
+these repository variables (none are secrets — they are ARNs and ids, and
+holding them grants nothing):
+
+| variable | value |
+|---|---|
+| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::565944437804:role/bonnie-dev-ci-deploy` |
+| `AWS_REGION` | `us-east-1` |
+| `BONNIE_INSTANCE_ID` | `i-023bf2e53984f1998` |
+| `BONNIE_RELEASE_BUCKET` | `bonnie-releases-565944437804` |
+| `BONNIE_SSM_DOC_DEPLOY` | `bonnie-dev-deploy` |
+| `BONNIE_SSM_DOC_ROLLBACK` | `bonnie-dev-rollback` |
+
+The branch policy restricts which branch the *workflow* runs from, not which
+commit it builds. Dispatch always happens from `master`; `ref` chooses what
+gets built. Those are deliberately separate.
+
+## Verification
+
+Worth repeating after any change to the documents or the policy, because three
+of these failed the first time.
 
 ```bash
-runuser -u bonnie-ci -- aws sts get-caller-identity   # must return the instance role
-runuser -u bonnie-ci -- bonnie-stage <a-known-sha>    # must stage without sudo
+# The injection boundary. Both must be rejected by the SSM service itself,
+# before the box is involved.
+aws ssm send-command --instance-ids "$I" --document-name bonnie-dev-deploy \
+  --parameters 'sha=f8f03bc41cb76731fe5b9dbad585e916eed7d954; touch /tmp/pwned'
+aws ssm send-command --instance-ids "$I" --document-name bonnie-dev-deploy \
+  --parameters 'sha=F8F03BC41CB76731FE5B9DBAD585E916EED7D954'   # uppercase
+
+# The staging guards, on the box.
+runuser -u bonnie-ci -- bonnie-stage 'abc; rm -rf /'   # rejected: not hex
+runuser -u bonnie-ci -- bonnie-stage deadbeef          # rejected: not 40 chars
+bonnie-stage <valid-sha>                               # rejected: running as root
+
+# The role. Read the decisions, do not infer them from the policy text.
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::565944437804:role/bonnie-dev-ci-deploy \
+  --action-names ssm:SendCommand --resource-arns <arn>
 ```
 
-A replacement instance gets all of this from cloud-init and needs no bootstrap.
+`simulate-principal-policy` is not optional. Two bugs in this policy were
+invisible by inspection and obvious in simulation:
+
+- A `Deny` intended to make release keys write-once denied the ordinary upload
+  too, because an ordinary `PutObject` is not a copy. Removed; the workflow's
+  `HeadObject` precheck carries that job, and real immutability belongs in a
+  bucket policy or Object Lock.
+- Putting the instance-tag condition on the same statement as the document
+  ARNs denied *everything*: a condition applies to every resource in its
+  statement, and a document has no `ssm:resourceTag/Name`. Split into two
+  statements.
+
+A third bug was only findable by running the thing: SSM feeds the document to
+`/bin/sh`, which is dash on Ubuntu, so `set -euo pipefail` aborted on line one
+with "Illegal option -o pipefail". Both documents now start with an explicit
+`#!/usr/bin/env bash`.
+
+## Remaining
+
+1. **Merge to `master`.** Needs AJ per BONNIE.md. `workflow_dispatch` workflows
+   are only registered from the default branch, so until this merges the
+   workflow does not exist as far as Actions is concerned — this is the single
+   thing standing between the current state and a working deploy button.
+2. **Fix the required reviewer.** The environment currently lists
+   `handlebauer` as a placeholder. `thisistheaj` was rejected: GitHub silently
+   drops reviewers without at least write access, and that account has read,
+   leaving an *empty* reviewer list — a gate nobody can open, which fails
+   closed but also fails permanently. Either grant AJ write and swap him in, or
+   confirm the intended approver.
+3. **Decide on `ami_id`.** Unrelated to CI, but a live hazard for anyone who
+   runs `terraform apply` in this module.
 
 ## What this deliberately does not do
 
