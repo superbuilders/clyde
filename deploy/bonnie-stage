@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Fetch a CI-built release onto the box and lay it out the way bonnie-install
+# expects. This is the unprivileged half of the CI ship path — the exact
+# counterpart of what `bonnie-ship.sh` does for a human on the box, except the
+# artefact is downloaded instead of compiled.
+#
+# It runs as the `bonnie-ci` system user, NOT as root. That is the whole point:
+# root must never download, unpack, or checksum anything. By the time
+# bonnie-install runs, the build directory is already just three files on disk,
+# indistinguishable from one a human produced.
+#
+# `bonnie-ci` is a system account (uid < 1000) with no shell and no sudo. The
+# uid matters: deploy/nftables/bonnie-imds.nft rejects IMDS for uid >= 1000, so
+# a regular Bonnie user cannot borrow the instance role, but this account can —
+# which is how it reads the release bucket without any stored credential.
+#
+# Usage:
+#   bonnie-stage <git-sha>
+#
+# On success the staged directory path is the last line of stdout.
+set -euo pipefail
+
+die() {
+	printf 'bonnie-stage: %s\n' "$*" >&2
+	exit 1
+}
+
+BUCKET="${BONNIE_RELEASE_BUCKET:-bonnie-releases-565944437804}"
+PREFIX=releases
+STAGE_ROOT=/srv/bonnie/ci/.ship
+
+[ $# -eq 1 ] || die "usage: bonnie-stage <git-sha>"
+SHA="$1"
+
+# Same validation bonnie-install applies, applied earlier. The sha becomes both
+# an S3 key and a directory name, so it must not be able to escape either.
+case "$SHA" in
+*[!0-9a-fA-F]* | "") die "sha must be hex: $SHA" ;;
+esac
+[ "${#SHA}" -eq 40 ] || die "sha must be a full 40-char commit id: $SHA"
+
+[ "$(id -un)" = "bonnie-ci" ] || die "must run as bonnie-ci, not $(id -un)"
+
+STAGE="$STAGE_ROOT/$SHA"
+TMP="$(mktemp -d /srv/bonnie/ci/.stage.XXXXXX)"
+trap 'rm -rf "$TMP"' EXIT
+
+echo "== fetching s3://$BUCKET/$PREFIX/$SHA.tar.gz =="
+aws s3 cp "s3://$BUCKET/$PREFIX/$SHA.tar.gz" "$TMP/release.tar.gz" --only-show-errors
+aws s3 cp "s3://$BUCKET/$PREFIX/$SHA.tar.gz.sha256" "$TMP/release.sha256" --only-show-errors
+
+# The checksum is the only thing tying these bytes to the build CI attested.
+# Verify before unpacking, not after: tar on untrusted input is the thing we
+# are trying to avoid doing blind.
+WANT="$(tr -d ' \n' <"$TMP/release.sha256")"
+GOT="$(sha256sum "$TMP/release.tar.gz" | awk '{print $1}')"
+[ -n "$WANT" ] || die "empty checksum file"
+[ "$WANT" = "$GOT" ] || die "checksum mismatch: want $WANT got $GOT"
+echo "sha256 ok: $GOT"
+
+# Refuse absolute paths and traversal rather than trusting the archive.
+if tar -tzf "$TMP/release.tar.gz" | grep -qE '^/|(^|/)\.\.(/|$)'; then
+	die "tarball contains absolute or traversing paths"
+fi
+
+mkdir -p "$TMP/x"
+tar -xzf "$TMP/release.tar.gz" -C "$TMP/x"
+
+for f in bonnie clyde; do
+	[ -f "$TMP/x/$f" ] || die "$f missing from tarball"
+	case "$(file -b "$TMP/x/$f")" in
+	*ELF*x86-64*) ;;
+	*) die "$f is not a linux/amd64 ELF binary" ;;
+	esac
+done
+[ -d "$TMP/x/skills" ] || die "skills/ missing from tarball"
+for d in "$TMP/x"/skills/*/; do
+	[ -f "$d/SKILL.md" ] || die "$(basename "$d") has no SKILL.md"
+done
+
+chmod 0755 "$TMP/x/bonnie" "$TMP/x/clyde"
+
+# Replace atomically-ish: build the new tree beside the old one and swap, so a
+# half-extracted directory is never visible under its final name.
+mkdir -p "$STAGE_ROOT"
+rm -rf "$STAGE.new" "$STAGE"
+mv "$TMP/x" "$STAGE.new"
+mv "$STAGE.new" "$STAGE"
+
+echo "staged:"
+ls -la "$STAGE"
+echo "$STAGE"

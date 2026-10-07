@@ -53,6 +53,16 @@ write_files:
     content: |
       ${bonnie_install}
 
+  # The unprivileged half of the CI ship path. Root-owned 0755 like
+  # bonnie-install: bonnie-ci must be able to run it and must not be able to
+  # rewrite it, or "root never executes anything from the build directory"
+  # would be true only in the letter.
+  - path: /usr/local/bin/bonnie-stage
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${bonnie_stage}
+
   # 0440 root:root, which sudo requires — it ignores a group- or
   # world-writable drop-in rather than failing loudly.
   - path: /etc/sudoers.d/bonnie-ship
@@ -272,6 +282,20 @@ write_files:
       # imply the right to ship, and membership is granted deliberately with
       # `usermod -aG bonnie-ship <user>`.
       getent group bonnie-ship >/dev/null || groupadd --system bonnie-ship
+
+      # 5.11 The CI staging account. Downloads and unpacks releases that
+      # GitHub Actions published, so that root does neither. Deliberately not
+      # in bonnie-ship: it has no sudo at all. CI's privilege comes from the
+      # SSM document it is allowed to run, not from anything this user holds.
+      #
+      # --system matters twice over. It keeps the uid below 1000, which is the
+      # boundary /etc/bonnie/imds.nft uses, so this account can assume the
+      # instance role and read the release bucket while human users still
+      # cannot. And --shell /usr/sbin/nologin means the account is not a way
+      # to get a shell if someone does manage to su to it.
+      getent passwd bonnie-ci >/dev/null || \
+        useradd --system --home-dir /srv/bonnie/ci --shell /usr/sbin/nologin bonnie-ci
+      install -d -m 0750 -o bonnie-ci -g bonnie-ci /srv/bonnie/ci /srv/bonnie/ci/.ship
 
       systemctl daemon-reload
       # Before bonnie-web, so the metadata hole is shut before any agent can

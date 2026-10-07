@@ -1,0 +1,298 @@
+# Build Bonnie, publish it, and activate it on the dev box.
+#
+# This is the CI equivalent of `scripts/bonnie-ship.sh`, which builds on the
+# box and calls `sudo bonnie-install` directly. The split is the same in both:
+# everything expensive and fallible happens unprivileged, and the only root
+# action is `bonnie-install`, which copies three files and flips a symlink.
+#
+# Why CI at all, when a human on the box can already ship? Because shipping
+# from the box requires a clyde session on the box, which requires the box to
+# be up and serving — the one condition that does not hold when you most need
+# to deploy. And because `.ship/<sha>` in somebody's home is not an artefact
+# anyone else can audit, whereas a checksummed object in S3 built from a named
+# commit by a named workflow is.
+#
+# Read docs/bonnie-ci-deploy.md before changing anything here.
+
+name: bonnie deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or sha to build and deploy."
+        required: true
+        default: master
+      allow_unmerged:
+        description: >-
+          Deploy a commit that is not an ancestor of master. The next deploy
+          from master will silently revert it. Only for testing a branch on the
+          box on purpose.
+        type: boolean
+        default: false
+      rollback_to:
+        description: >-
+          If set, skip build and publish entirely and just re-activate this
+          already-installed 40-char sha.
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  # One deploy at a time. Two overlapping runs would race on the `current`
+  # symlink, and the loser would leave /opt/bonnie/current pointing at a
+  # version nobody chose. Deploys are not cancel-in-progress: aborting between
+  # the S3 upload and the symlink flip is survivable, aborting during
+  # bonnie-install is not.
+  group: bonnie-deploy
+  cancel-in-progress: false
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Build is a separate job with no cloud credentials at all. It is the only
+  # job that runs code from the ref being deployed (go build runs the repo's
+  # own generators and go.mod's toolchain directive), so it is the job most
+  # exposed to a malicious commit. Keeping it credential-free means that
+  # exposure cannot turn into AWS access.
+  # -------------------------------------------------------------------------
+  build:
+    if: inputs.rollback_to == ''
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      digest: ${{ steps.package.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          # Full history: the merge check below needs master and the candidate
+          # in the same object store to ask whether one contains the other.
+          fetch-depth: 0
+
+      - id: resolve
+        name: Resolve ref to a full sha
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "building $SHA"
+
+      - name: Refuse to deploy a commit master does not contain
+        # The failure mode this prevents is the quiet one. A branch deploy
+        # works, everyone moves on, and then an unrelated deploy from master
+        # weeks later reverts it with no error anywhere. Making it a deliberate
+        # checkbox means the revert is at least expected.
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin master:refs/remotes/origin/master
+          if git merge-base --is-ancestor HEAD origin/master; then
+            echo "✓ $(git rev-parse --short HEAD) is contained in master"
+            exit 0
+          fi
+          if [ "${{ inputs.allow_unmerged }}" = "true" ]; then
+            echo "::warning title=Unmerged deploy::This commit is not in master. \
+          The next deploy built from master will revert it. Merge \
+          ${{ inputs.ref }} to make it stick."
+            exit 0
+          fi
+          echo "::error title=Not in master::${{ inputs.ref }} is not an ancestor of master." >&2
+          echo "Merge it, or re-run with allow_unmerged=true if you mean to deploy a branch." >&2
+          exit 1
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - run: go vet ./...
+      - run: go test ./...
+
+      - name: Build
+        # Matches scripts/bonnie-ship.sh exactly, except for the explicit
+        # GOOS/GOARCH that a native build on the box gets for free. CGO_ENABLED=0
+        # so the artefact does not pick up the runner's glibc version, which is
+        # newer than the box's and would fail to exec there.
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          (cd session-viewer && go build -trimpath -o ../dist/bonnie .)
+          go build -trimpath -o dist/clyde .
+          cp -R deploy/skills dist/skills
+          for d in dist/skills/*/; do
+            [ -f "$d/SKILL.md" ] || { echo "ERROR: $d has no SKILL.md" >&2; exit 1; }
+          done
+          file dist/bonnie dist/clyde
+
+      - id: package
+        name: Package and checksum
+        # Layout must match what scripts/bonnie-release.sh produces, because
+        # bonnie-stage and bonnie-install are shared by both paths: three
+        # entries at the archive root, no leading directory.
+        run: |
+          set -euo pipefail
+          SHA='${{ steps.resolve.outputs.sha }}'
+          tar -czf "$SHA.tar.gz" -C dist bonnie clyde skills
+          DIGEST="$(sha256sum "$SHA.tar.gz" | awk '{print $1}')"
+          printf '%s' "$DIGEST" > "$SHA.tar.gz.sha256"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "sha256: $DIGEST"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            ${{ steps.resolve.outputs.sha }}.tar.gz
+            ${{ steps.resolve.outputs.sha }}.tar.gz.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # Deploy holds the credentials and runs no repo code. It does not check the
+  # repo out at all — it downloads the artefact the build job produced and
+  # talks to two AWS APIs. Everything it executes is either this file or a
+  # script already on the box.
+  #
+  # `environment: bonnie-dev` is what gates it. The environment carries a
+  # required reviewer (AJ), and the OIDC trust policy in
+  # deploy/terraform/ci-deploy.tf only accepts a token whose `sub` names this
+  # environment — so deleting this line does not bypass the approval, it just
+  # makes the AWS credential request fail.
+  # -------------------------------------------------------------------------
+  deploy:
+    needs: [build]
+    # always() so a rollback run, where `build` is skipped, still proceeds.
+    if: always() && (inputs.rollback_to != '' || needs.build.result == 'success')
+    runs-on: ubuntu-24.04
+    environment:
+      name: bonnie-dev
+      url: https://bonnie-dev.developer.timeback.com
+    permissions:
+      contents: read
+      id-token: write # required to mint the OIDC token
+    steps:
+      - name: Determine target sha
+        id: target
+        run: |
+          set -euo pipefail
+          if [ -n '${{ inputs.rollback_to }}' ]; then
+            SHA='${{ inputs.rollback_to }}'
+            MODE=rollback
+          else
+            SHA='${{ needs.build.outputs.sha }}'
+            MODE=deploy
+          fi
+          # Re-validated here because this value becomes an SSM parameter. The
+          # document's allowedPattern rejects a bad one too; this just produces
+          # a legible error instead of an API exception.
+          case "$SHA" in
+            *[!0-9a-f]*|"") echo "sha must be lowercase hex: $SHA" >&2; exit 1 ;;
+          esac
+          [ "${#SHA}" -eq 40 ] || { echo "sha must be 40 chars: $SHA" >&2; exit 1; }
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Target::$MODE $SHA"
+
+      - uses: actions/download-artifact@v4
+        if: steps.target.outputs.mode == 'deploy'
+        with:
+          name: release
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: bonnie-deploy-${{ github.run_id }}
+
+      - name: Publish artefact
+        if: steps.target.outputs.mode == 'deploy'
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+          BUCKET: ${{ vars.BONNIE_RELEASE_BUCKET }}
+        run: |
+          set -euo pipefail
+          KEY="releases/$SHA.tar.gz"
+          # A sha names immutable content. If the key exists, re-uploading can
+          # only either be a no-op or a lie, and there is no way from here to
+          # tell which. Refuse and let a human look.
+          if aws s3api head-object --bucket "$BUCKET" --key "$KEY" >/dev/null 2>&1; then
+            echo "::error title=Already published::s3://$BUCKET/$KEY exists." >&2
+            echo "That sha was released before. To re-activate it, re-run with rollback_to=$SHA." >&2
+            exit 1
+          fi
+          aws s3 cp "$SHA.tar.gz" "s3://$BUCKET/$KEY"
+          aws s3 cp "$SHA.tar.gz.sha256" "s3://$BUCKET/$KEY.sha256"
+          echo "published s3://$BUCKET/$KEY"
+
+      - name: Activate
+        id: activate
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+          MODE: ${{ steps.target.outputs.mode }}
+          INSTANCE: ${{ vars.BONNIE_INSTANCE_ID }}
+          DOC_DEPLOY: ${{ vars.BONNIE_SSM_DOC_DEPLOY }}
+          DOC_ROLLBACK: ${{ vars.BONNIE_SSM_DOC_ROLLBACK }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "rollback" ]; then DOC="$DOC_ROLLBACK"; else DOC="$DOC_DEPLOY"; fi
+
+          CID="$(aws ssm send-command \
+            --instance-ids "$INSTANCE" \
+            --document-name "$DOC" \
+            --comment "gha ${{ github.run_id }} $MODE $SHA" \
+            --parameters "sha=$SHA" \
+            --query Command.CommandId --output text)"
+          echo "command: $CID"
+
+          # SSM has no blocking invoke. aws ssm wait command-executed polls for
+          # us and, importantly, exits non-zero on Failed/TimedOut, so the step
+          # fails without us having to parse status ourselves.
+          set +e
+          aws ssm wait command-executed --command-id "$CID" --instance-id "$INSTANCE"
+          WAIT_RC=$?
+          set -e
+
+          STATUS="$(aws ssm get-command-invocation --command-id "$CID" \
+            --instance-id "$INSTANCE" --query Status --output text)"
+          {
+            echo "### \`$MODE\` → \`$SHA\`"
+            echo
+            echo "status: **$STATUS**"
+            echo
+            echo '```'
+            aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE" \
+              --query StandardOutputContent --output text
+            aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE" \
+              --query StandardErrorContent --output text
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [ "$WAIT_RC" -eq 0 ] && [ "$STATUS" = "Success" ] || {
+            echo "::error title=Activation failed::status=$STATUS — see job summary." >&2
+            echo "Roll back by re-running this workflow with rollback_to=<previous sha>." >&2
+            exit 1
+          }
+
+      - name: Verify
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # bonnie-install already asserted healthz=200 on the box before
+          # returning, and it dies if the unit does not come back — so a
+          # successful activation is itself the unit check. What it cannot
+          # check is the path users actually take, through the ALB. A 302 to
+          # the IdP is the correct unauthenticated answer; anything 5xx is not.
+          CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+            https://bonnie-dev.developer.timeback.com/ || echo 000)"
+          echo "edge GET / -> $CODE"
+          case "$CODE" in
+            200|302|303) echo "✓ edge healthy" ;;
+            *) echo "::error title=Edge check failed::GET / returned $CODE" >&2; exit 1 ;;
+          esac
+          echo "::notice title=Deployed::$SHA is live"
