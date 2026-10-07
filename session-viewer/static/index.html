@@ -1134,12 +1134,15 @@ function sessionViewer() {
         try {
           const r = await fetch('/api/upload', { method: 'POST', body: fd });
           const data = await r.json();
-          if (r.ok && data.filename) {
-            const inc = 'include ./' + data.filename + '\n';
+          // The server writes the bytes into the project/worktree and tells us
+          // the path relative to it — reference that, not the local filename,
+          // because the agent's filesystem is not the browser's.
+          if (r.ok && (data.path || data.filename)) {
+            const inc = 'include ./' + (data.path || data.filename) + '\n';
             this.replyText = inc + this.replyText;
             this.saveDraft();
           } else {
-            this.sendError = data.error || 'Upload failed';
+            this.sendError = (data && data.error) || (r.status === 413 ? 'File too large' : 'Upload failed');
           }
         } catch(e) { this.sendError = 'Upload error: ' + e.message; }
       }

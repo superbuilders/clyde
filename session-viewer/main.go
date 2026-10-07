@@ -1405,13 +1405,21 @@ func postSessionMessage(c echo.Context) error {
 		CWD     string `json:"cwd"`
 		Content string `json:"content"`
 		Force   bool   `json:"force"`
+		// Attachments travel with the message so a remote browser can hand the
+		// agent real bytes: they are written into the project tree before the
+		// message is delivered, and the message is rewritten to point at them.
+		Attachments []struct {
+			Filename      string `json:"filename"`
+			ContentBase64 string `json:"content_base64"`
+		} `json:"attachments"`
 	}
 	if err := c.Bind(&body); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
 	}
-	if body.CWD == "" || body.Content == "" || sid == "" {
+	if body.CWD == "" || sid == "" || (body.Content == "" && len(body.Attachments) == 0) {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd, content, and id required"})
 	}
+
 	// A shared conversation is read-only, so ownership — not access — is the
 	// test. The kernel would refuse the write anyway (the agent runs as the
 	// caller), but an explicit 403 beats an EACCES surfacing as a mysteriously
@@ -1425,6 +1433,22 @@ func postSessionMessage(c echo.Context) error {
 	sessPath := filepath.Join(body.CWD, ".clyde", "sessions", sid)
 	if _, err := os.Stat(sessPath); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+	}
+
+	// Land the attachments first. Doing it before we start/wake the agent
+	// means a rejected upload (too big, unwritable) fails the request cleanly
+	// instead of leaving the agent staring at a path that does not exist.
+	if len(body.Attachments) > 0 {
+		saved := make([]*savedAttachment, 0, len(body.Attachments))
+		for _, a := range body.Attachments {
+			s, err := saveBase64Attachment(pr, body.CWD, a.Filename, a.ContentBase64)
+			if err != nil {
+				return attachmentError(c, err)
+			}
+			fmt.Printf("📎 Uploaded file: %s → %s\n", a.Filename, s.AbsPath)
+			saved = append(saved, s)
+		}
+		body.Content = attachmentNote(saved) + body.Content
 	}
 	if isTmuxBusy(pr, sid) {
 		return c.JSON(http.StatusConflict, map[string]string{"error": "agent is busy processing"})
@@ -1807,17 +1831,46 @@ func createWorktree(c echo.Context) error {
 	})
 }
 
-// uploadFile saves an uploaded file to the project root (session CWD) and returns the filename.
+// uploadFile receives attachment bytes from the browser and writes them as a
+// real file inside the session's project/worktree, so the agent — which may be
+// on a completely different machine from the viewer — can open it with normal
+// file tools. Accepts multipart/form-data (file, cwd) or JSON
+// {cwd, filename, content_base64}.
 func uploadFile(c echo.Context) error {
-	cwd := c.FormValue("cwd")
-	if cwd == "" {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd required"})
-	}
 	// Upload writes into the project, so it needs ownership. Without this an
 	// authenticated user could drop a file anywhere another user's tree.
 	pr, err := principalFor(c)
 	if err != nil {
 		return c.JSON(http.StatusForbidden, map[string]string{"error": "no unix identity: " + err.Error()})
+	}
+
+	ct := c.Request().Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "application/json") {
+		var body struct {
+			CWD           string `json:"cwd"`
+			Filename      string `json:"filename"`
+			ContentBase64 string `json:"content_base64"`
+		}
+		if err := c.Bind(&body); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		}
+		if body.CWD == "" {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd required"})
+		}
+		if !pr.Owns(body.CWD) {
+			return c.JSON(http.StatusForbidden, map[string]string{"error": "not your project"})
+		}
+		saved, err := saveBase64Attachment(pr, body.CWD, body.Filename, body.ContentBase64)
+		if err != nil {
+			return attachmentError(c, err)
+		}
+		fmt.Printf("📎 Uploaded file: %s → %s\n", body.Filename, saved.AbsPath)
+		return c.JSON(http.StatusOK, saved)
+	}
+
+	cwd := c.FormValue("cwd")
+	if cwd == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "cwd required"})
 	}
 	if !pr.Owns(cwd) {
 		return c.JSON(http.StatusForbidden, map[string]string{"error": "not your project"})
@@ -1826,41 +1879,36 @@ func uploadFile(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "file required"})
 	}
+	if file.Size > maxAttachmentBytes {
+		return attachmentError(c, errAttachmentTooLarge{Limit: maxAttachmentBytes})
+	}
 	src, err := file.Open()
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to open uploaded file"})
 	}
 	defer src.Close()
 
-	// Sanitize filename — keep original name but make it safe
-	safeName := filepath.Base(file.Filename)
-	safeName = strings.ReplaceAll(safeName, " ", "-")
-	dstPath := filepath.Join(cwd, safeName)
-
-	// If file already exists, add a numeric suffix
-	if _, err := os.Stat(dstPath); err == nil {
-		ext := filepath.Ext(safeName)
-		base := strings.TrimSuffix(safeName, ext)
-		for i := 1; ; i++ {
-			candidate := fmt.Sprintf("%s-%d%s", base, i, ext)
-			dstPath = filepath.Join(cwd, candidate)
-			if _, err := os.Stat(dstPath); os.IsNotExist(err) {
-				safeName = candidate
-				break
-			}
-		}
-	}
-
 	// Written by a child running as the user, not by the service. The service
 	// has no CAP_DAC_OVERRIDE, so os.Create here fails with EACCES — and a
 	// root-owned file in the user's project would be useless to the agent
 	// anyway, which is the half that has to read it back.
-	if err := pr.WriteFrom(dstPath, src); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to write file: " + err.Error()})
+	saved, err := saveAttachment(pr, cwd, file.Filename, src, file.Size)
+	if err != nil {
+		return attachmentError(c, err)
 	}
 
-	fmt.Printf("📎 Uploaded file: %s → %s\n", file.Filename, dstPath)
-	return c.JSON(http.StatusOK, map[string]string{"filename": safeName})
+	fmt.Printf("📎 Uploaded file: %s → %s\n", file.Filename, saved.AbsPath)
+	return c.JSON(http.StatusOK, saved)
+}
+
+// attachmentError maps an attachment failure onto a status code, so the UI can
+// tell "too big" (user fixable) apart from "write failed" (not).
+func attachmentError(c echo.Context, err error) error {
+	var tooLarge errAttachmentTooLarge
+	if errors.As(err, &tooLarge) {
+		return c.JSON(http.StatusRequestEntityTooLarge, map[string]string{"error": tooLarge.Error()})
+	}
+	return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to write file: " + err.Error()})
 }
 
 func createSession(c echo.Context) error {
