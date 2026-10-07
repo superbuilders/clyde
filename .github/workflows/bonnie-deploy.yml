@@ -41,12 +41,19 @@ permissions:
   contents: read
 
 concurrency:
-  # One deploy at a time. Two overlapping runs would race on the `current`
-  # symlink, and the loser would leave /opt/bonnie/current pointing at a
-  # version nobody chose. Deploys are not cancel-in-progress: aborting between
-  # the S3 upload and the symlink flip is survivable, aborting during
-  # bonnie-install is not.
-  group: bonnie-deploy
+  # One deploy at a time: two overlapping runs would race on the `current`
+  # symlink and the loser would leave /opt/bonnie/current pointing at a
+  # version nobody chose. Not cancel-in-progress — aborting between the S3
+  # upload and the symlink flip is survivable, aborting during bonnie-install
+  # is not.
+  #
+  # Rollbacks get their own group, and that separation is not cosmetic. A run
+  # parked at the approval gate holds its concurrency group for as long as it
+  # waits, which is indefinitely. With a single shared group, a deploy waiting
+  # on a reviewer silently queues every later run behind it — including the
+  # rollback you are trying to fire because that deploy is the problem. The
+  # emergency path must never be blocked by the thing it is there to undo.
+  group: bonnie-${{ inputs.rollback_to != '' && 'rollback' || 'deploy' }}
   cancel-in-progress: false
 
 jobs:
