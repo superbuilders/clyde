@@ -138,7 +138,6 @@ func loadAgentConfig(configPath string, noThink bool) (agent.Config, error) {
 		reserveTokens = reserve
 	}
 
-
 	// Allow optional overrides for API URL and model ID.
 	// This lets users point at a compatible proxy (e.g. Cloudflare AI Gateway)
 	// without any code changes — just set the env vars in the config file.
@@ -298,7 +297,13 @@ func runCLIMode(args []string, hasStdinInput bool, level loglevel.Level, noThink
 			}
 		}),
 		agent.WithDiagnosticCallback(func(msg string) {
-			if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
+			if strings.HasPrefix(msg, agent.RetryNoticePrefix) {
+				// Retry notices are user-facing: a stalled turn with no
+				// explanation is indistinguishable from a hang.
+				if level.ShouldShow(loglevel.Normal) {
+					fmt.Fprintln(os.Stderr, msg)
+				}
+			} else if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
 				// Verbose cache format
 				if level.ShouldShow(loglevel.Verbose) {
 					fmt.Fprintln(os.Stderr, msg)
@@ -493,7 +498,12 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 			if sess != nil {
 				sess.WriteMessage(session.TypeDiagnostic, msg+"\n")
 			}
-			if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
+			if strings.HasPrefix(msg, agent.RetryNoticePrefix) {
+				// Retry notices are user-facing (see above).
+				if !level.ShouldShow(loglevel.Normal) {
+					return
+				}
+			} else if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
 				// Verbose cache format
 				if !level.ShouldShow(loglevel.Verbose) {
 					return
@@ -517,7 +527,11 @@ func runREPLMode(level loglevel.Level, noThink bool) {
 					lastProgressMsg = ""
 				}
 			}
-			fmt.Println(StyleMessage(loglevel.Debug, msg))
+			if strings.HasPrefix(msg, agent.RetryNoticePrefix) {
+				fmt.Println(StyleMessage(loglevel.Normal, msg))
+			} else {
+				fmt.Println(StyleMessage(loglevel.Debug, msg))
+			}
 		}),
 		agent.WithUserMessageCallback(func(text string) {
 			if sess != nil {
@@ -940,7 +954,12 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 			if sess != nil {
 				sess.WriteMessage(session.TypeDiagnostic, msg+"\n")
 			}
-			if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
+			if strings.HasPrefix(msg, agent.RetryNoticePrefix) {
+				// Retry notices are user-facing (see above).
+				if !level.ShouldShow(loglevel.Normal) {
+					return
+				}
+			} else if strings.HasPrefix(msg, "💾 Cache:") && !strings.Contains(msg, "|") {
 				if !level.ShouldShow(loglevel.Verbose) {
 					return
 				}
@@ -960,7 +979,11 @@ func runREPLModeWithSession(level loglevel.Level, noThink bool, cfg agent.Config
 					lastProgressMsg = ""
 				}
 			}
-			fmt.Println(StyleMessage(loglevel.Debug, msg))
+			if strings.HasPrefix(msg, agent.RetryNoticePrefix) {
+				fmt.Println(StyleMessage(loglevel.Normal, msg))
+			} else {
+				fmt.Println(StyleMessage(loglevel.Debug, msg))
+			}
 		}),
 		agent.WithUserMessageCallback(func(text string) {
 			if sess != nil {

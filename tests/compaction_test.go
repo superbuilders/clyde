@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/superbuilders/clyde/agent"
 	"github.com/superbuilders/clyde/agent/config"
@@ -563,10 +564,10 @@ func TestCompact_RecentKeepCount(t *testing.T) {
 	a := agent.NewAgent(client, "test")
 
 	subtests := []struct {
-		name         string
-		historyLen   int
-		wantKeepMin  int // minimum kept messages
-		wantKeepMax  int // maximum kept messages
+		name        string
+		historyLen  int
+		wantKeepMin int // minimum kept messages
+		wantKeepMax int // maximum kept messages
 	}{
 		{"10_messages", 10, 2, 4},
 		{"8_messages", 8, 2, 4},
@@ -927,7 +928,6 @@ func TestCompact_Integration(t *testing.T) {
 	}
 }
 
-
 // --- V3: 3-Call Compaction Architecture ---
 
 // TestV3_GitStateCapture verifies that git state is captured correctly.
@@ -1185,7 +1185,10 @@ Database integration with PostgreSQL is complete.`
 	})
 	defer ts.Close()
 
-	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	// Pin a trivial retry budget: these fakes are meant to fail fast, and the
+	// client's real transient-failure backoff would otherwise stall the test.
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096).
+		WithRetryPolicy(1, time.Millisecond)
 
 	var compactionSummary string
 	a := agent.NewAgent(client, "test",
@@ -1292,7 +1295,10 @@ func TestV3_ConstantCallCount(t *testing.T) {
 	})
 	defer ts.Close()
 
-	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	// Pin a trivial retry budget: these fakes are meant to fail fast, and the
+	// client's real transient-failure backoff would otherwise stall the test.
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096).
+		WithRetryPolicy(1, time.Millisecond)
 	a := agent.NewAgent(client, "test",
 		agent.WithContextWindowSize(200000),
 	)
@@ -1356,20 +1362,23 @@ func TestV3_PreservedMessagesInHistory(t *testing.T) {
 	})
 	defer ts.Close()
 
-	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	// Pin a trivial retry budget: these fakes are meant to fail fast, and the
+	// client's real transient-failure backoff would otherwise stall the test.
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096).
+		WithRetryPolicy(1, time.Millisecond)
 	a := agent.NewAgent(client, "test",
 		agent.WithContextWindowSize(200000),
 	)
 
 	history := []providers.Message{
-		{Role: "user", Content: "Build a REST API."},                          // 0 (first user, pinned)
-		{Role: "assistant", Content: "Project created."},                       // 1
-		{Role: "user", Content: "Actually, fix the auth bug first."},           // 2 (preserved by call 1)
+		{Role: "user", Content: "Build a REST API."},                            // 0 (first user, pinned)
+		{Role: "assistant", Content: "Project created."},                        // 1
+		{Role: "user", Content: "Actually, fix the auth bug first."},            // 2 (preserved by call 1)
 		{Role: "assistant", Content: "Auth test output: FAIL middleware.go:42"}, // 3 (preserved by call 2)
-		{Role: "user", Content: "Good, now fix it."},                           // 4
+		{Role: "user", Content: "Good, now fix it."},                            // 4
 		{Role: "assistant", Content: "Fixed the auth middleware."},              // 5
-		{Role: "user", Content: "Run the tests again."},                        // 6 (kept as recent)
-		{Role: "assistant", Content: "All tests pass."},                        // 7 (kept as recent)
+		{Role: "user", Content: "Run the tests again."},                         // 6 (kept as recent)
+		{Role: "assistant", Content: "All tests pass."},                         // 7 (kept as recent)
 	}
 	a.SetHistory(history)
 
@@ -1436,7 +1445,10 @@ func TestV3_Call2DependsOnCall1(t *testing.T) {
 	})
 	defer ts.Close()
 
-	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	// Pin a trivial retry budget: these fakes are meant to fail fast, and the
+	// client's real transient-failure backoff would otherwise stall the test.
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096).
+		WithRetryPolicy(1, time.Millisecond)
 	a := agent.NewAgent(client, "test",
 		agent.WithContextWindowSize(200000),
 	)
@@ -1505,7 +1517,10 @@ func TestV3_CurrentObjectiveInSummary(t *testing.T) {
 	})
 	defer ts.Close()
 
-	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	// Pin a trivial retry budget: these fakes are meant to fail fast, and the
+	// client's real transient-failure backoff would otherwise stall the test.
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096).
+		WithRetryPolicy(1, time.Millisecond)
 
 	var compactionSummary string
 	a := agent.NewAgent(client, "test",
@@ -1564,20 +1579,23 @@ func TestV3_AppendPreservedMessages_Alternation(t *testing.T) {
 	})
 	defer ts.Close()
 
-	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	// Pin a trivial retry budget: these fakes are meant to fail fast, and the
+	// client's real transient-failure backoff would otherwise stall the test.
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096).
+		WithRetryPolicy(1, time.Millisecond)
 	a := agent.NewAgent(client, "test",
 		agent.WithContextWindowSize(200000),
 	)
 
 	history := []providers.Message{
-		{Role: "user", Content: "First user pivot message."},    // 0 - preserved
-		{Role: "assistant", Content: "Ack first."},               // 1 - not preserved
-		{Role: "user", Content: "Second user pivot message."},    // 2 - preserved
-		{Role: "assistant", Content: "Ack second."},              // 3 - not preserved
-		{Role: "user", Content: "Recent message."},               // kept
-		{Role: "assistant", Content: "Recent response."},          // kept
-		{Role: "user", Content: "Latest message."},               // kept
-		{Role: "assistant", Content: "Latest response."},          // kept
+		{Role: "user", Content: "First user pivot message."},  // 0 - preserved
+		{Role: "assistant", Content: "Ack first."},            // 1 - not preserved
+		{Role: "user", Content: "Second user pivot message."}, // 2 - preserved
+		{Role: "assistant", Content: "Ack second."},           // 3 - not preserved
+		{Role: "user", Content: "Recent message."},            // kept
+		{Role: "assistant", Content: "Recent response."},      // kept
+		{Role: "user", Content: "Latest message."},            // kept
+		{Role: "assistant", Content: "Latest response."},      // kept
 	}
 	a.SetHistory(history)
 
@@ -2115,7 +2133,10 @@ func TestIssue1_ThinkingStrippedFromPreservedMessages(t *testing.T) {
 	ts := thinkingCompactionServer(t, "1")
 	defer ts.Close()
 
-	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	// Pin a trivial retry budget: these fakes are meant to fail fast, and the
+	// client's real transient-failure backoff would otherwise stall the test.
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096).
+		WithRetryPolicy(1, time.Millisecond)
 	a := agent.NewAgent(client, "test", agent.WithContextWindowSize(200000))
 	a.SetHistory(historyWithThinking())
 
@@ -2131,7 +2152,10 @@ func TestIssue1_ThinkingStrippedFromKeptMessages(t *testing.T) {
 	ts := thinkingCompactionServer(t, "0")
 	defer ts.Close()
 
-	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	// Pin a trivial retry budget: these fakes are meant to fail fast, and the
+	// client's real transient-failure backoff would otherwise stall the test.
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096).
+		WithRetryPolicy(1, time.Millisecond)
 	a := agent.NewAgent(client, "test", agent.WithContextWindowSize(200000))
 	a.SetHistory(historyWithThinking())
 
@@ -2344,7 +2368,11 @@ func TestIssue1_CompactedHistoryIsValid(t *testing.T) {
 			ts := thinkingCompactionServer(t, preserve)
 			defer ts.Close()
 
-			client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+			// Pin a trivial retry budget: the 500 here is deliberate, and the client's
+			// real transient-failure backoff would otherwise stall the test for
+			// minutes waiting on a server that will never recover.
+			client := providers.NewClient("fake-key", ts.URL, "m", 4096).
+				WithRetryPolicy(1, time.Millisecond)
 			a := agent.NewAgent(client, "test", agent.WithContextWindowSize(200000))
 			a.SetHistory(historyWithThinking())
 
@@ -2367,7 +2395,10 @@ func TestIssue1_CompactionFailureDegradesGracefully(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	// Pin a trivial retry budget: these fakes are meant to fail fast, and the
+	// client's real transient-failure backoff would otherwise stall the test.
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096).
+		WithRetryPolicy(1, time.Millisecond)
 	var markers []string
 	a := agent.NewAgent(client, "test",
 		agent.WithContextWindowSize(200000),
@@ -2414,7 +2445,10 @@ func TestIssue1_DegradedFallbackKeepsMissionOnly(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := providers.NewClient("fake-key", ts.URL, "m", 4096)
+	// Pin a trivial retry budget: these fakes are meant to fail fast, and the
+	// client's real transient-failure backoff would otherwise stall the test.
+	client := providers.NewClient("fake-key", ts.URL, "m", 4096).
+		WithRetryPolicy(1, time.Millisecond)
 	a := agent.NewAgent(client, "test", agent.WithContextWindowSize(200000))
 	a.SetHistory([]providers.Message{
 		{Role: "user", Content: "mission"},

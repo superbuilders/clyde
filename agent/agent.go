@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/superbuilders/clyde/agent/mcp"
 	"github.com/superbuilders/clyde/agent/prompts"
@@ -52,7 +53,6 @@ type Config struct {
 	// Compaction triggers when input exceeds (ContextWindowSize - ReserveTokens).
 	// 0 uses DefaultReserveTokens (16000).
 	ReserveTokens int
-
 }
 
 // ProgressCallback receives tool progress lines (the → lines).
@@ -100,25 +100,25 @@ type ToolUseCallback func(displayMsg string, toolName string, toolUseID string, 
 
 // Agent handles conversation and tool execution
 type Agent struct {
-	apiClient          *providers.Client
-	systemPrompt       string
-	history            []providers.Message
-	progressCallback   ProgressCallback
-	outputCallback     OutputCallback
-	thinkingCallback   ThinkingCallback
-	diagnosticCallback DiagnosticCallback
-	spinnerCallback    SpinnerCallback
-	errorCallback      ErrorCallback
-	userMsgCallback    UserMessageCallback
+	apiClient            *providers.Client
+	systemPrompt         string
+	history              []providers.Message
+	progressCallback     ProgressCallback
+	outputCallback       OutputCallback
+	thinkingCallback     ThinkingCallback
+	diagnosticCallback   DiagnosticCallback
+	spinnerCallback      SpinnerCallback
+	errorCallback        ErrorCallback
+	userMsgCallback      UserMessageCallback
 	assistantMsgCallback AssistantMessageCallback
 	toolUseCallback      ToolUseCallback
-	compactionCallback CompactionCallback
-	lastUsage          providers.Usage // Token usage from the most recent API response
-	contextWindowSize  int             // Model context window size in tokens (for diagnostic display)
-	reserveTokens      int             // Tokens to reserve for response; triggers compaction when exceeded
+	compactionCallback   CompactionCallback
+	lastUsage            providers.Usage // Token usage from the most recent API response
+	contextWindowSize    int             // Model context window size in tokens (for diagnostic display)
+	reserveTokens        int             // Tokens to reserve for response; triggers compaction when exceeded
 
-	mcpServer          *mcp.PlaywrightServer // MCP server (nil if not enabled)
-	skillsRegistry     *skills.Registry      // Agent Skills registry (nil if no skills found)
+	mcpServer      *mcp.PlaywrightServer // MCP server (nil if not enabled)
+	skillsRegistry *skills.Registry      // Agent Skills registry (nil if no skills found)
 }
 
 // AgentOption is a functional option for configuring an Agent
@@ -251,14 +251,12 @@ func New(cfg Config, opts ...AgentOption) *Agent {
 	// Tool registration is handled by the blank import of agent/tools above,
 	// which triggers init() functions in each tool file. No action needed here.
 
-
 	a := &Agent{
-		apiClient:                  client,
-		systemPrompt:               prompts.SystemPrompt,
-		history:                    []providers.Message{},
-		contextWindowSize:          cfg.ContextWindowSize,
-		reserveTokens:              cfg.ReserveTokens,
-
+		apiClient:         client,
+		systemPrompt:      prompts.SystemPrompt,
+		history:           []providers.Message{},
+		contextWindowSize: cfg.ContextWindowSize,
+		reserveTokens:     cfg.ReserveTokens,
 	}
 
 	// Apply functional options
@@ -292,7 +290,35 @@ func New(cfg Config, opts ...AgentOption) *Agent {
 		}
 	}
 
+	a.attachRetryNotifier()
+
 	return a
+}
+
+// RetryNoticePrefix marks transient-failure retry notices. The CLI keys off
+// this prefix to show them at normal verbosity: a silent multi-second stall
+// looks like a hang, so the user has to be told why the turn is waiting.
+const RetryNoticePrefix = "⏳"
+
+// attachRetryNotifier makes the API client report each transient-failure retry
+// through the agent's diagnostic channel.
+func (a *Agent) attachRetryNotifier() {
+	if a.apiClient == nil {
+		return
+	}
+	a.apiClient = a.apiClient.WithRetryNotifier(func(attempt, maxAttempts, status int, delay time.Duration) {
+		if a.diagnosticCallback == nil {
+			return
+		}
+		what := fmt.Sprintf("HTTP %d", status)
+		if status == 0 {
+			what = "network error"
+		}
+		a.diagnosticCallback(fmt.Sprintf(
+			"%s Transient API failure (%s) — retrying in %s (attempt %d/%d)",
+			RetryNoticePrefix, what, delay.Round(time.Second), attempt, maxAttempts,
+		))
+	})
 }
 
 // NewAgent creates a new agent with an explicit API client and system prompt.
@@ -310,6 +336,8 @@ func NewAgent(apiClient *providers.Client, systemPrompt string, opts ...AgentOpt
 	for _, opt := range opts {
 		opt(agent)
 	}
+
+	agent.attachRetryNotifier()
 
 	return agent
 }
