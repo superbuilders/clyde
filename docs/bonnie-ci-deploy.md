@@ -131,6 +131,12 @@ Every deploy prints `previous: /opt/bonnie/versions/<sha>` as the first line of
 its SSM output, so the rollback target is in the job summary of the run that
 needs rolling back.
 
+Rollback runs use a separate concurrency group from deploys. A run parked at
+the approval gate holds its group indefinitely, so with one shared group a
+deploy waiting on a reviewer queues every later run behind it — including the
+rollback you are firing *because of* that deploy. Found by hitting it: a
+cancelled-but-still-waiting run left the next dispatch pending forever.
+
 ## Why the S3 hop
 
 The box could pull the artefact straight from the Actions run. It should not:
@@ -280,13 +286,18 @@ with "Illegal option -o pipefail". Both documents now start with an explicit
    are only registered from the default branch, so until this merges the
    workflow does not exist as far as Actions is concerned — this is the single
    thing standing between the current state and a working deploy button.
-2. **Fix the required reviewer.** The environment currently lists
+2. **Fix the test gate.** `go test ./...` is advisory, not blocking, because
+   master's suite is red — `./tests` is the only package with tests and it is
+   an integration suite wanting a live Playwright server and network. It fails
+   in CI (`TestExecuteBrowse` overflows its stack) and locally
+   (`TestPlaywrightToolsMatchLiveServer`). Make it blocking once green.
+3. **Fix the required reviewer.** The environment currently lists
    `handlebauer` as a placeholder. `thisistheaj` was rejected: GitHub silently
    drops reviewers without at least write access, and that account has read,
    leaving an *empty* reviewer list — a gate nobody can open, which fails
    closed but also fails permanently. Either grant AJ write and swap him in, or
    confirm the intended approver.
-3. **Decide on `ami_id`.** Unrelated to CI, but a live hazard for anyone who
+4. **Decide on `ami_id`.** Unrelated to CI, but a live hazard for anyone who
    runs `terraform apply` in this module.
 
 ## What this deliberately does not do
